@@ -14,10 +14,19 @@ server:
 
   # TLS 設定（選填；不設定則使用純 HTTP）
   tls:
-    # 方案一：自動產生自簽憑證（測試用，瀏覽器需手動信任）
+    # 方案一：自動產生自簽憑證（測試用，瀏覽器仍會顯示不受信任警告）
     # self_signed: true
-    # ip: "1.2.3.4"            # 伺服器公開 IP，填入憑證 SAN
-    # （同時將 addr 改為 ":443"、base_url 改為 "https://1.2.3.4:443"）
+    #
+    # ip：額外要寫進憑證 SAN 的位址，逗號分隔，IP 與 DNS 名稱皆可。
+    #   ip: "1.2.3.4, gw.example.com"
+    #
+    # 這是「追加」而非「唯一來源」：localhost、127.0.0.1、::1 一律包含，
+    # 本機各網卡位址也會自動加入，所以本機測試不需要填任何東西。
+    #
+    # 容器內請務必填：容器看到的網卡是 bridge 位址（172.x），不是手機要連的
+    # 那個 LAN IP，自動列舉在容器裡幫不上忙。
+    #
+    # 註：base_url 不需要跟著改，輸出預設是相對 URL（見上方 base_url 說明）。
 
     # 方案二：提供現有憑證（正式環境）
     # cert_file: "/etc/letsencrypt/live/example.com/fullchain.pem"

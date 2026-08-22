@@ -15,19 +15,79 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/a840817a/sluice/internal/config"
 )
 
-// selfSignedCert generates an in-memory self-signed TLS certificate.
-// ip should be the server's public IP address (used as Subject Alternative Name).
-func selfSignedCert(ip string) (tls.Certificate, error) {
+// sanEntries builds the Subject Alternative Name set for the self-signed
+// certificate.
+//
+// Loopback is always present, so a self-signed cert is usable on the machine
+// that generated it without configuring anything.
+//
+// configured is a comma-separated list of IP addresses and DNS names, and is
+// *additive* — it used to be the only source, which meant one entry per
+// certificate and a config edit plus a restart for every new test address. A
+// comma-separated string rather than a YAML sequence because the same value has
+// to arrive through SLUICE_TLS_IP, and environment variables have no lists.
+//
+// Interface addresses are a fallback, not the mechanism. Inside a container the
+// interfaces are the container's: the bridge address (172.x), never the host's
+// LAN address that a phone would actually connect to. Anything reachable from
+// another machine has to come from configured — see docs/plans for why
+// detection belongs on the host.
+func sanEntries(configured string) (ips []net.IP, dnsNames []string) {
+	ips = []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}
+	dnsNames = []string{"localhost"}
+
+	seen := map[string]bool{}
+	addIP := func(ip net.IP) {
+		if ip == nil || seen[ip.String()] {
+			return
+		}
+		seen[ip.String()] = true
+		ips = append(ips, ip)
+	}
+
+	for _, entry := range strings.Split(configured, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if ip := net.ParseIP(entry); ip != nil {
+			addIP(ip)
+		} else {
+			dnsNames = append(dnsNames, entry)
+		}
+	}
+
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ips, dnsNames
+	}
+	for _, a := range addrs {
+		ipNet, ok := a.(*net.IPNet)
+		if !ok || ipNet.IP.IsLoopback() || ipNet.IP.IsLinkLocalUnicast() {
+			continue
+		}
+		addIP(ipNet.IP)
+	}
+	return ips, dnsNames
+}
+
+// selfSignedCert generates an in-memory self-signed TLS certificate covering
+// every name in sanEntries. The browser still shows a trust warning — that is
+// inherent to self-signing — but a name mismatch, which cannot be clicked
+// through, no longer happens for an address that was configured.
+func selfSignedCert(configured string) (tls.Certificate, error) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
+	ips, dnsNames := sanEntries(configured)
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{Organization: []string{"DASH Gateway"}},
@@ -35,9 +95,8 @@ func selfSignedCert(ip string) (tls.Certificate, error) {
 		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	if parsed := net.ParseIP(ip); parsed != nil {
-		tmpl.IPAddresses = []net.IP{parsed}
+		IPAddresses:  ips,
+		DNSNames:     dnsNames,
 	}
 	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
@@ -112,7 +171,9 @@ func main() {
 				return
 			}
 			httpServer.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
-			slog.Info("TLS: using self-signed certificate", "ip", tlsCfg.IP)
+			ips, dnsNames := sanEntries(tlsCfg.IP)
+			slog.Info("TLS: using self-signed certificate",
+				"san_ips", ips, "san_dns", dnsNames, "base_url", cfg.Server.BaseURL)
 			serveErr = httpServer.ListenAndServeTLS("", "")
 		case tlsCfg.CertFile != "" && tlsCfg.KeyFile != "":
 			slog.Info("TLS: using provided certificate", "cert", tlsCfg.CertFile)
