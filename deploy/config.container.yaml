@@ -1,0 +1,22 @@
+# Baseline config baked into the container image.
+#
+# It carries only what actually differs inside a container. Everything else is
+# left empty on purpose so config.applyDefaults supplies it — duplicating those
+# values here would create a second place to update when a default changes.
+#
+# Precedence at runtime: this file, then SLUICE_* environment variables, then
+# applyDefaults. Mounting a file over /etc/sluice/config.yaml replaces it
+# entirely.
+#
+# Not a copy of config.yaml.example: that file is written for a human choosing
+# values on a host, and the two would drift.
+
+store:
+  # Matches the /data volume declared by the image. On a host this defaults to
+  # ./data, which would put segments inside the read-only root filesystem.
+  data_dir: /data
+
+server:
+  # Container-internal port. Publish it wherever you like; the gateway emits
+  # relative URLs, so it does not need to know its external address.
+  addr: ":8080"

@@ -1,0 +1,30 @@
+# Build context hygiene. Everything the image needs is Go source, go.mod/sum,
+# the embedded web assets and deploy/.
+
+.git
+.gitignore
+.github
+.idea
+.claude
+
+# Runtime state and local scratch — never belongs in an image.
+data/
+tmp/
+.env
+
+# The real config carries credentials; the image ships deploy/config.container.yaml.
+config.yaml
+config.yml
+
+docs/
+coverage*
+*.out
+*.test
+/sluice
+/gateway
+.DS_Store
+
+# A future front-end build would install here; its *output* goes to
+# internal/web/static, which is deliberately NOT excluded — //go:embed can only
+# see files present in the context at compile time.
+node_modules/
