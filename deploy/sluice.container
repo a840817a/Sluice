@@ -1,0 +1,93 @@
+# Quadlet unit for running Sluice under Podman + systemd.
+#
+# NOT TESTED. Written from the documented behaviour of Podman and Quadlet; no
+# Podman host was available. Every line marked "verify" below is an assumption
+# until the checklist in docs/plans/2026-08-22-containerised-build-design.md
+# (§12, "Manual — Podman path") has been run. Treat this as a starting point to
+# check, not as a working configuration.
+#
+# Install (rootless):
+#   mkdir -p ~/.config/containers/systemd
+#   cp deploy/sluice.container ~/.config/containers/systemd/
+#   systemctl --user daemon-reload && systemctl --user start sluice
+#
+# Rootful instead: copy to /etc/containers/systemd/, drop the UserNS= line
+# below, use systemctl without --user, and replace %h with a real path.
+#
+# Why Quadlet and not podman-compose: podman-compose is a third-party
+# reimplementation whose coverage is thinnest in exactly the features this
+# deployment uses — secrets, read-only roots, healthchecks. Quadlet is the
+# engine's own path and gives Restart=, ordering and journald for free.
+
+[Unit]
+Description=Sluice DASH/HLS gateway
+Documentation=https://github.com/a840817a/Sluice
+# Pulling an image needs a usable network, not merely a configured one.
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+# Pin a version. Rolling back is then a one-line edit and a restart rather than
+# a rebuild. ":0.1" would follow patch releases; ":latest" follows every release
+# and is a poor fit for a host you want to be predictable.
+Image=ghcr.io/a840817a/sluice:0.1.0
+ContainerName=sluice
+
+# The package inherits the repository's visibility. If it is private, Podman
+# needs the credential as a file — the same config-file delivery problem as
+# every other input, solved the same way.
+#   podman login ghcr.io          (writes this file)
+# Use a token with read:packages only: it sits on a deployment host and a
+# pull-only token cannot publish. Comment out if the package is public.
+#AuthFile=%h/.config/containers/auth.json
+
+PublishPort=8080:8080
+#PublishPort=8443:8443
+
+# verify: rootless Podman maps container uids into a subuid range, so the
+# image's 65532 does not correspond to any local user and a bind mount of a
+# directory you own is not writable. keep-id maps *you* onto that uid instead,
+# which leaves the directory owned by you on the host — still readable and
+# deletable without sudo, which `:U` would take away by chowning it.
+#
+# Rootful Podman rejects keep-id (it is rootless-only) and does not need it.
+# Delete this line there.
+UserNS=keep-id:uid=65532,gid=65532
+
+# Segments live here. Bind mount rather than a named volume on purpose:
+# store.cleanup defaults to "disabled", so this directory only grows, and
+# growth you cannot see is what fills a host's disk. Watch it.
+#
+# :Z relabels for SELinux, which Fedora and RHEL need and others ignore.
+# The directory also holds AES-128 content keys, so it is not a scratch cache —
+# back it up and protect it accordingly.
+Volume=%h/sluice/data:/data:Z
+
+# Per-host values: the admin password, and the address for a self-signed
+# certificate if TLS is enabled here. The same file compose reads, so there is
+# one configuration contract rather than two.
+EnvironmentFile=%h/sluice/.env
+
+# Preferred over putting the password in the environment file: a Podman secret
+# arrives as a file, and the gateway reads any secret from a path given a _FILE
+# suffix, so no wrapper script is needed.
+#   podman secret create sluice-admin-password -
+#Secret=sluice-admin-password,type=mount,target=/run/secrets/admin-password
+#Environment=SLUICE_ADMIN_PASSWORD_FILE=/run/secrets/admin-password
+
+# Nothing writes outside /data — no code in this repo touches /tmp — so the root
+# filesystem can stay read-only.
+# verify: whether Podman needs any additional tmpfs that Docker did not.
+ReadOnly=true
+
+# verify: the image carries a HEALTHCHECK that runs the gateway's own
+# -healthcheck flag, because the distroless image has no curl. Podman is
+# expected to honour it; confirm with `podman healthcheck run sluice`.
+
+[Service]
+Restart=always
+# First start on a slow link includes pulling a multi-arch image.
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

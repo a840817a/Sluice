@@ -171,6 +171,10 @@ environment: { SSL_CERT_FILE: /etc/sluice/ca.pem }
 
 ### Podman
 
+A Quadlet unit is provided at [`deploy/sluice.container`](deploy/sluice.container),
+with setup steps and the checklist that must pass before it can be trusted in
+[`deploy/README.md`](deploy/README.md).
+
 Supported by design, but **not yet tested on a Podman host** — treat the
 following as instructions to verify, not as verified behaviour.
 
