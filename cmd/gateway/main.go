@@ -116,6 +116,8 @@ func main() {
 		defaultCfg = v
 	}
 	cfgPath := flag.String("config", defaultCfg, "path to config file (env: SLUICE_CONFIG)")
+	healthcheck := flag.Bool("healthcheck", false,
+		"probe this gateway's /healthz and exit 0 or 1; used by the container HEALTHCHECK")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
@@ -126,6 +128,16 @@ func main() {
 	if err != nil {
 		slog.Error("config load failed", "err", err)
 		os.Exit(1)
+	}
+
+	// Before the password policy: a health probe reports whether the listener
+	// answers, and must not fail for a reason the running process does not have.
+	if *healthcheck {
+		if err := runHealthcheck(cfg); err != nil {
+			slog.Error("healthcheck failed", "err", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	// The image ships a config so it runs with nothing mounted, which means

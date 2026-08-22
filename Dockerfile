@@ -57,6 +57,10 @@ COPY --from=builder --chown=65532:0 --chmod=0775 /out/data /data
 COPY deploy/config.container.yaml /etc/sluice/config.yaml
 USER 65532:0
 EXPOSE 8080 8443
+# The runtime image has no curl or wget, so the gateway probes itself. See
+# cmd/gateway/healthcheck.go.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD ["/sluice", "-config", "/etc/sluice/config.yaml", "-healthcheck"]
 ENTRYPOINT ["/sluice"]
 CMD ["-config", "/etc/sluice/config.yaml"]
 
@@ -70,5 +74,9 @@ COPY --from=builder /out/sluice /sluice
 COPY --from=builder --chown=65532:0 --chmod=0775 /out/data /data
 COPY deploy/config.container.yaml /etc/sluice/config.yaml
 EXPOSE 8080 8443
+# The runtime image has no curl or wget, so the gateway probes itself. See
+# cmd/gateway/healthcheck.go.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD ["/sluice", "-config", "/etc/sluice/config.yaml", "-healthcheck"]
 ENTRYPOINT ["/sluice"]
 CMD ["-config", "/etc/sluice/config.yaml"]
