@@ -1,8 +1,16 @@
 server:
   # Gateway 監聽位址
   addr: ":8080"
-  # 對外公開的 base URL（用於改寫 MPD 中的 segment/init/license URL）
-  base_url: "http://localhost:8080"
+  # 對外公開的 base URL，用於改寫 MPD / m3u8 中的 segment、init、key、license URL。
+  #
+  # 留空（預設）＝輸出根相對 URL（`/v1/channels/...`）。播放器會以「manifest 自己
+  # 的網址」為基準解析，所以同一份設定同時適用 http://localhost:8080、
+  # https://<LAN-IP>:8443、以及擺在反向代理後面，不必因為換位址而改設定或重啟。
+  #
+  # 只有兩種情況需要填：
+  #   1. 反向代理把 gateway 掛在子路徑下（例如 /sluice/），此時根相對會跳出前綴
+  #   2. DRM license URL 若播放器不支援相對解析（未驗證，見 docs/plans）
+  base_url: ""
 
   # TLS 設定（選填；不設定則使用純 HTTP）
   tls:
