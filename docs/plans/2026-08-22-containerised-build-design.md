@@ -387,10 +387,20 @@ which is what a Podman host often is.
 
 | Engine | Requirement for the bind mount |
 |---|---|
-| Docker (rootful) | none — uids match numerically |
-| Podman (rootful) | none — same |
+| Docker Desktop (macOS) | none — the file sharing layer maps ownership to the host user. **Verified 2026-08-22** |
+| Docker (Linux) | `SLUICE_UID=$(id -u)` — see below. **UNVERIFIED**: no Linux Docker host available |
+| Podman (rootful) | none — uids match numerically |
 | Podman (rootless) | `UserNS=keep-id:uid=65532,gid=65532` (Quadlet) — host ownership stays yours |
 | SELinux hosts (Fedora/RHEL) | `:Z` on the mount, or the container cannot read it |
+
+**Docker on Linux was a gap in earlier revisions.** They claimed uids "match
+numerically" for Docker generally, which is only true because Docker Desktop on
+macOS ignores the numbers entirely — the machine this was designed on. On Linux
+`./data` belongs to the invoking user, the container runs as 65532, and writes
+fail. compose therefore takes `user: "${SLUICE_UID:-65532}:${SLUICE_GID:-0}"`
+and the Makefile passes the host uid unconditionally; it is a no-op on macOS and
+the fix on Linux. Verified working on macOS in both modes; the Linux case cannot
+be tested here and is listed as unverified rather than assumed.
 
 `keep-id` is the important one: it maps the invoking user to the container's
 uid, so `./data` stays owned by you on the host *and* is writable inside. Two
@@ -622,7 +632,12 @@ channel:
 - Non-root write to the data volume actually succeeds.
 - `read_only: true` rootfs starts and serves.
 - Playback via `http://localhost:8080`.
-- Playback via `https://<LAN-IP>:8443` from another device.
+- Playback via `https://<LAN-IP>:8443` from another device. **`make up-tls`
+  verified 2026-08-22**: `/healthz` answered over TLS at the LAN address, and
+  the certificate's SAN held `localhost, 127.0.0.1, ::1, 192.168.188.134,
+  172.19.0.2`. The container's own enumeration contributed only `172.19.0.2` —
+  without the host-side injection the LAN address would have been absent, which
+  is the failure §7 exists to prevent.
 - **The `base_url`-empty license URL question (§3)** — the one item that decides
   whether relative output is complete or needs a narrow exception.
 

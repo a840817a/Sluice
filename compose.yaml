@@ -1,0 +1,61 @@
+# Docker-side launcher. The Podman equivalent is a Quadlet unit; both consume
+# this image and the same .env, so there is one configuration contract.
+name: sluice
+
+services:
+  gateway:
+    image: ${SLUICE_IMAGE:-sluice:dev}
+    build:
+      context: .
+      target: ${SLUICE_TARGET:-runtime}
+
+    # .env is per-machine and gitignored: it holds the admin password and, when
+    # TLS is on, this host's address. Optional so a plain `up` still works.
+    env_file:
+      - path: .env
+        required: false
+
+    environment:
+      # No default on purpose. The gateway refuses the built-in password on a
+      # non-loopback address, so failing here with a readable message beats
+      # failing at startup with a less obvious one.
+      SLUICE_ADMIN_PASSWORD: ${SLUICE_ADMIN_PASSWORD:?set SLUICE_ADMIN_PASSWORD in .env (see .env.example)}
+      # Empty means relative URLs, which work at every address at once. Only set
+      # this for a sub-path reverse proxy.
+      SLUICE_SERVER_BASE_URL: ${SLUICE_SERVER_BASE_URL:-}
+      # There is one listener, so TLS is served on whatever address it binds.
+      # `make up-tls` moves it to :8443 to match the published port; publishing
+      # 8443 while the process still listens on 8080 is the failure this
+      # prevents, and it looks like a network problem rather than a config one.
+      SLUICE_SERVER_ADDR: ${SLUICE_SERVER_ADDR:-:8080}
+      SLUICE_TLS_SELF_SIGNED: ${SLUICE_TLS_SELF_SIGNED:-false}
+      SLUICE_TLS_IP: ${SLUICE_TLS_IP:-}
+
+    ports:
+      - "${SLUICE_HTTP_PORT:-8080}:8080"
+      - "${SLUICE_HTTPS_PORT:-8443}:8443"
+
+    # Who the process runs as. The image default (65532) is right on Docker
+    # Desktop for macOS, where the file sharing layer maps ownership to the host
+    # user and a bind mount is writable whatever the numbers say.
+    #
+    # On Docker for *Linux* that is not true: ./data belongs to your uid, the
+    # container runs as 65532, and writes fail. Set SLUICE_UID=$(id -u) there —
+    # `make up` does it for you — so the process runs as the directory's owner.
+    # Group 0 matches the image's /data, which is 65532:0 with g+rwX.
+    user: "${SLUICE_UID:-65532}:${SLUICE_GID:-0}"
+
+    volumes:
+      # Bind mount by default so unbounded growth stays visible: store.cleanup
+      # defaults to "disabled", and segments in a named volume accumulate
+      # unseen until the host disk fills. DATA_MOUNT switches to a named volume
+      # for anyone who wants the engine to own the lifecycle.
+      - ${DATA_MOUNT:-./data}:/data
+      # The image ships /etc/sluice/config.yaml, so no config file is required.
+      # Uncomment to override it wholesale; env vars cover the common cases.
+      # - ./config.yaml:/etc/sluice/config.yaml:ro
+
+    # Nothing writes outside /data — no /tmp use anywhere in the codebase — so
+    # the root filesystem stays read-only.
+    read_only: true
+    restart: unless-stopped
