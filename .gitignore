@@ -1,0 +1,25 @@
+# Runtime segment cache and channel state (created by the gateway at startup).
+/data/
+
+# Local scratch: built binaries, ad-hoc configs, capture dumps.
+/tmp/
+
+# Real config carries admin credentials and upstream URLs; only the example
+# belongs in the repo.
+/config.yaml
+/config.yml
+
+# Compiled binaries
+/gateway
+/sluice
+*.exe
+*.test
+
+# Test and profiling output
+*.out
+/coverage*
+
+# Editor / OS noise
+.DS_Store
+.claude/settings.local.json
+/.idea/

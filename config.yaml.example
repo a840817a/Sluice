@@ -1,0 +1,68 @@
+server:
+  # Gateway 監聽位址
+  addr: ":8080"
+  # 對外公開的 base URL（用於改寫 MPD 中的 segment/init/license URL）
+  base_url: "http://localhost:8080"
+
+  # TLS 設定（選填；不設定則使用純 HTTP）
+  tls:
+    # 方案一：自動產生自簽憑證（測試用，瀏覽器需手動信任）
+    # self_signed: true
+    # ip: "1.2.3.4"            # 伺服器公開 IP，填入憑證 SAN
+    # （同時將 addr 改為 ":443"、base_url 改為 "https://1.2.3.4:443"）
+
+    # 方案二：提供現有憑證（正式環境）
+    # cert_file: "/etc/letsencrypt/live/example.com/fullchain.pem"
+    # key_file:  "/etc/letsencrypt/live/example.com/privkey.pem"
+
+admin:
+  # 後台管理介面的登入帳號密碼（HTTP Basic Auth）
+  username: "admin"
+  password: "changeme"
+
+upstream:
+  # 上游輪詢間隔（dynamic MPD / HLS live playlist；static 來源忽略）
+  poll_interval: "2s"
+  # 送往上游 MPD / playlist / segment 請求的認證 header（選填）
+  # auth_header: "Authorization"
+  # auth_value: "Bearer <token>"
+  #
+  # 註：來源 URL 是 per-channel 設定（建立 channel 時的 mpd_url），
+  #     不在這裡設定。
+
+worker:
+  # 每個 channel 的並行下載 worker 數量
+  fetch_workers: 4
+  # 分段下載失敗後的最大重試次數（live 與 static 來源皆適用）
+  max_retries_static: 5
+  # 保留欄位：目前 live 分段會依上游 DVR window 盡量抓取
+  live_usefulness_ttl: "30s"
+  # 單一分段的最大位元組數。這是防止異常 origin 撐爆記憶體的上限，不是調校參數：
+  # 正常情況由回應自己的 Content-Length 決定。留空/0 = 128 MiB。
+  # 若合法分段被擋，log 會出現 "exceeds the size limit"，屆時再調高即可。
+  # max_segment_bytes: 134217728
+  #
+  # 單一分段下載的逾時。涵蓋整個請求「包含讀完 body」，不是閒置逾時——一個持續
+  # 在下載、只是比較慢的大分段，時間到一樣會被中斷。留空/0 = 30s。
+  #
+  # 這個值必須容納「最大分段 ÷ 最慢可用頻寬」，所以會隨部署環境不同。撞到時的
+  # log 長這樣：
+  #   segment https://.../xxx.ts: context deadline exceeded
+  #   (Client.Timeout or context cancellation while reading body)
+  # 換算範例：20 Mbps 來源的 6 秒分段約 15 MB，頻寬低於 4 Mbps 必定超時。
+  # segment_timeout: "30s"
+
+store:
+  # 分段快取根目錄
+  # 結構：{data_dir}/channels.json
+  #       {data_dir}/{channelID}/periods/{periodID}/{mediaType}_{asID}/{repID}/{segNo}.m4s
+  #       HLS 來源的分段副檔名為 .ts / .m4s / .vtt
+  data_dir: "./data"
+  # 過期分段的刪除時機：disabled（預設，不刪）| on_expire（滑出視窗即刪）
+  cleanup: "disabled"
+
+window:
+  # 滑動視窗深度（timeShiftBufferDepth），live MPD 保留的時間長度
+  depth: "120s"
+  # 距離 live edge 的安全緩衝，避免播放器超前請求尚未備妥的分段
+  safe_edge_buffer: "6s"

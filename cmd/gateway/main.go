@@ -1,0 +1,126 @@
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"flag"
+	"log/slog"
+	"math/big"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/a840817a/sluice/internal/config"
+)
+
+// selfSignedCert generates an in-memory self-signed TLS certificate.
+// ip should be the server's public IP address (used as Subject Alternative Name).
+func selfSignedCert(ip string) (tls.Certificate, error) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{Organization: []string{"DASH Gateway"}},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	if parsed := net.ParseIP(ip); parsed != nil {
+		tmpl.IPAddresses = []net.IP{parsed}
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	return tls.X509KeyPair(certPEM, keyPEM)
+}
+
+func main() {
+	cfgPath := flag.String("config", "config.yaml", "path to config file")
+	flag.Parse()
+
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})))
+
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		slog.Error("config load failed", "err", err)
+		os.Exit(1)
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	// Everything the gateway is made of — store, manager, callbacks, restored
+	// channels, router — is composed in newGateway (gateway.go), which is where
+	// the tests can reach it.
+	gw, err := newGateway(ctx, *cfg)
+	if err != nil {
+		slog.Error("gateway init failed", "err", err)
+		os.Exit(1)
+	}
+
+	// --- HTTP server ---
+	httpServer := &http.Server{
+		Addr:         cfg.Server.Addr,
+		Handler:      gw.handler,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	go func() {
+		slog.Info("listening", "addr", cfg.Server.Addr)
+		var serveErr error
+		tlsCfg := cfg.Server.TLS
+		switch {
+		case tlsCfg.SelfSigned:
+			cert, err := selfSignedCert(tlsCfg.IP)
+			if err != nil {
+				slog.Error("self-signed cert generation failed", "err", err)
+				cancel()
+				return
+			}
+			httpServer.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+			slog.Info("TLS: using self-signed certificate", "ip", tlsCfg.IP)
+			serveErr = httpServer.ListenAndServeTLS("", "")
+		case tlsCfg.CertFile != "" && tlsCfg.KeyFile != "":
+			slog.Info("TLS: using provided certificate", "cert", tlsCfg.CertFile)
+			serveErr = httpServer.ListenAndServeTLS(tlsCfg.CertFile, tlsCfg.KeyFile)
+		default:
+			serveErr = httpServer.ListenAndServe()
+		}
+		if serveErr != nil && serveErr != http.ErrServerClosed {
+			slog.Error("http server error", "err", serveErr)
+			cancel()
+		}
+	}()
+
+	<-ctx.Done()
+	slog.Info("shutting down")
+
+	// Drain in-flight HTTP requests first, then stop ingest workers.
+	// This order prevents handlers from referencing channels that are already
+	// cancelled: HTTP requests finish against live state, then ingest stops.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		slog.Error("http shutdown error", "err", err)
+	}
+
+	gw.manager.StopAll()
+}

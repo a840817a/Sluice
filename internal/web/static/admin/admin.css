@@ -1,0 +1,413 @@
+/* Admin UI styles.
+ *
+ * Every colour, radius and spacing step is a custom property declared once in
+ * :root. The payoff is the dark-mode block near the bottom: it overrides only the
+ * token values, so there is no second copy of any rule to keep in sync.
+ */
+
+:root {
+  /* Surfaces and text */
+  --bg: #f5f5f5;
+  --surface: #fff;
+  --surface-2: #fafafa;
+  --border: #ddd;
+  --border-subtle: #f0f0f0;
+  --text: #222;
+  --text-muted: #555;
+  --text-faint: #888;
+  --text-ghost: #bbb;
+
+  /* Brand and accents */
+  --brand: #1a1a2e;
+  --brand-text: #fff;
+  --accent: #0ea5e9;
+  --live: #ef4444;
+  --danger: #ef4444;
+  --edit: #f59e0b;
+  --vod: #7c3aed;
+
+  /* Badge pairs */
+  --ok-bg: #d1fae5;      --ok-fg: #065f46;
+  --err-bg: #fee2e2;     --err-fg: #991b1b;
+  --info-bg: #dbeafe;    --info-fg: #1d4ed8;
+  --vod-bg: #ede9fe;     --vod-fg: #5b21b6;
+  --warn-bg: #fff7ed;    --warn-fg: #c2410c;
+  --pending-bg: #fef9c3; --pending-fg: #854d0e;
+  --dash-bg: #e2e8f0;    --dash-fg: #334155;
+  --hls-bg: #cffafe;     --hls-fg: #155e75;
+  --note-bg: #fffbeb;    --note-border: #fde68a; --note-fg: #92400e;
+
+  /* Progress track */
+  --track: #e5e7eb;
+  --track-fill: #0ea5e9;
+  --track-fill-done: #059669;
+
+  /* Geometry */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-pill: 999px;
+  --shadow-1: 0 1px 4px rgba(0, 0, 0, .1);
+  --shadow-2: 0 8px 32px rgba(0, 0, 0, .2);
+
+  --space-1: .25rem;
+  --space-2: .4rem;
+  --space-3: .65rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+
+  --font-xs: .72rem;
+  --font-sm: .8rem;
+  --font-md: .88rem;
+  --font-lg: 1rem;
+
+  /* Narrow enough that two cards fit a laptop window, wide enough that a
+   * progress line with an ETA does not wrap. */
+  --card-min-width: 340px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* The `hidden` attribute is how this page shows and hides parts of a card, and
+ * any author rule that sets `display` silently defeats it: the UA stylesheet's
+ * `[hidden] { display: none }` loses to every author declaration regardless of
+ * specificity. Without this, hidden progress bars and buttons stay visible. */
+[hidden] { display: none !important; }
+
+body {
+  font-family: system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ── Header ── */
+header {
+  background: var(--brand);
+  color: var(--brand-text);
+  padding: var(--space-4) var(--space-6);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+header h1 { font-size: 1.2rem; font-weight: 600; letter-spacing: .5px; }
+
+/* ── Layout ── */
+main { max-width: 1200px; margin: var(--space-6) auto; padding: 0 var(--space-4); }
+
+/* .panel is a page section (the add form, the channel list). Named distinctly
+ * from .ch-card, the per-channel card, so the two never get confused. */
+.panel {
+  background: var(--surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+  padding: var(--space-5);
+  margin-bottom: var(--space-5);
+}
+.panel h2 { font-size: var(--font-lg); font-weight: 600; margin-bottom: 1.25rem; color: var(--brand); }
+
+/* ── Form rows ── */
+.form-row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: flex-end; }
+.field { display: flex; flex-direction: column; gap: .3rem; }
+.field label { font-size: var(--font-sm); color: var(--text-muted); font-weight: 500; }
+.field input, .field select {
+  padding: .45rem var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: .9rem;
+  width: 100%;
+  background: var(--surface);
+  color: var(--text);
+}
+.field input:focus { outline: none; border-color: var(--accent); }
+.f-title  { flex: 1 1 200px; }
+.f-source { flex: 0 1 150px; }
+.f-url    { flex: 3 1 260px; }
+
+/* ── Buttons ── */
+.btn {
+  display: inline-block;
+  padding: .45rem .95rem;
+  border-radius: var(--radius-sm);
+  border: none;
+  cursor: pointer;
+  font-size: .85rem;
+  font-weight: 500;
+  transition: opacity .15s;
+  white-space: nowrap;
+  background: var(--track);
+  color: var(--text);
+  text-decoration: none;
+}
+.btn:hover { opacity: .85; }
+.btn-primary { background: var(--brand); color: var(--brand-text); }
+.btn-danger  { background: var(--danger); color: #fff; }
+.btn-sm      { padding: .28rem var(--space-3); font-size: var(--font-sm); }
+.btn-play    { background: var(--accent); color: #fff; }
+.btn-edit    { background: var(--edit); color: #fff; }
+.btn-vod     { background: var(--vod); color: #fff; }
+.btn-align-end { align-self: flex-end; flex-shrink: 0; }
+
+/* ── Badges ── */
+.badge {
+  display: inline-block;
+  padding: .18rem .55rem;
+  border-radius: var(--radius-pill);
+  font-size: var(--font-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.badge.running    { background: var(--ok-bg);      color: var(--ok-fg); }
+.badge.stopped    { background: var(--err-bg);     color: var(--err-fg); }
+.badge.live       { background: var(--info-bg);    color: var(--info-fg); }
+.badge.vod        { background: var(--vod-bg);     color: var(--vod-fg); }
+.badge.ingesting  { background: var(--warn-bg);    color: var(--warn-fg); }
+.badge.transition { background: var(--pending-bg); color: var(--pending-fg); }
+.badge.src        { font-size: .66rem; vertical-align: middle; }
+.badge.src-dash   { background: var(--dash-bg); color: var(--dash-fg); }
+.badge.src-hls    { background: var(--hls-bg);  color: var(--hls-fg); }
+
+/* A degraded channel is still "running", so the run badge carries the warning
+ * rather than being replaced by it. */
+.badge.degraded { background: var(--err-bg); color: var(--err-fg); }
+
+.badge.restart { background: #fef3c7; color: var(--note-fg); margin-left: .35rem; font-size: .66rem; font-weight: 500; }
+.restart-note {
+  display: none; grid-column: 1/-1; margin: 0; padding: .5rem .7rem;
+  border-radius: var(--radius-sm); background: var(--note-bg);
+  border: 1px solid var(--note-border); color: var(--note-fg); font-size: var(--font-sm);
+}
+.restart-note.on { display: block; }
+
+/* ── Channel cards ── */
+#channelList {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--card-min-width), 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+/* The empty/loading message is not a card and must not be squeezed into one
+ * grid cell. */
+#channelList > .empty { grid-column: 1 / -1; }
+
+.ch-card {
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.ch-head { display: flex; flex-direction: column; gap: .2rem; min-width: 0; }
+.ch-title-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.ch-title {
+  font-weight: 600; font-size: .95rem; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ch-url {
+  font-size: .75rem; color: var(--text-faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ch-id { font-size: .7rem; color: var(--text-ghost); font-family: ui-monospace, monospace; }
+.ch-badges { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+
+/* ── Progress block ── */
+.ch-progress { display: flex; flex-direction: column; gap: var(--space-2); }
+
+/* The headline number. For a live channel this is the whole story: a cumulative
+ * count with deliberately no denominator. */
+.prog-primary {
+  font-size: 1.05rem; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  display: flex; align-items: baseline; gap: var(--space-2); flex-wrap: wrap;
+}
+.prog-primary .unit { font-size: var(--font-sm); font-weight: 500; color: var(--text-muted); }
+.prog-done { color: var(--track-fill-done); }
+
+.prog-bar { width: 100%; height: 8px; border-radius: var(--radius-pill); overflow: hidden; }
+progress.prog-bar { appearance: none; border: none; background: var(--track); display: block; }
+progress.prog-bar::-webkit-progress-bar { background: var(--track); border-radius: var(--radius-pill); }
+progress.prog-bar::-webkit-progress-value { background: var(--track-fill); border-radius: var(--radius-pill); }
+progress.prog-bar::-moz-progress-bar { background: var(--track-fill); border-radius: var(--radius-pill); }
+progress.prog-bar.done::-webkit-progress-value { background: var(--track-fill-done); }
+progress.prog-bar.done::-moz-progress-bar { background: var(--track-fill-done); }
+
+/* An indeterminate <progress> (no value attribute) animates on its own. */
+.prog-meta {
+  display: flex; flex-wrap: wrap; gap: .2rem var(--space-3);
+  font-size: var(--font-sm); color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.prog-meta > span:empty { display: none; }
+
+/* ── Errors ── */
+.ch-source-err {
+  padding: .45rem var(--space-3); border-radius: var(--radius-sm);
+  background: var(--err-bg); color: var(--err-fg);
+  font-size: var(--font-sm); overflow-wrap: anywhere;
+}
+.ch-seg-err { font-size: var(--font-xs); color: var(--text-faint); overflow-wrap: anywhere; }
+
+/* ── Live pulse ── */
+.dot {
+  display: inline-block; width: .5rem; height: .5rem; border-radius: 50%;
+  background: var(--live); margin-right: .3rem; vertical-align: middle;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+
+/* ── Track table ── */
+.ch-tracks summary { cursor: pointer; font-size: var(--font-sm); color: var(--accent); user-select: none; }
+.ch-tracks summary:hover { text-decoration: underline; }
+.tracks-scroll { overflow-x: auto; margin-top: var(--space-2); }
+table.tracks { width: 100%; border-collapse: collapse; font-size: var(--font-xs); }
+table.tracks th {
+  text-align: left; padding: .3rem .4rem; border-bottom: 1px solid var(--border);
+  color: var(--text-muted); font-weight: 500; white-space: nowrap;
+}
+table.tracks td {
+  padding: .3rem .4rem; border-bottom: 1px solid var(--border-subtle);
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+table.tracks tr:last-child td { border-bottom: none; }
+
+.ch-actions { display: flex; gap: .3rem; flex-wrap: wrap; padding-top: var(--space-1); }
+
+/* ── Advanced details (add form) ── */
+details.advanced { margin-top: var(--space-4); }
+details.advanced summary { cursor: pointer; font-size: .82rem; color: var(--accent); user-select: none; }
+details.advanced summary:hover { text-decoration: underline; }
+.extra { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); margin-top: .85rem; }
+
+/* ── Header rows ── */
+.headers-section { grid-column: 1 / -1; }
+.section-label { font-size: var(--font-sm); color: var(--text-muted); font-weight: 500; margin-bottom: .35rem; }
+.header-row { display: flex; gap: var(--space-2); align-items: center; margin-bottom: .35rem; }
+.header-row input {
+  flex: 1; padding: .35rem .5rem; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); font-size: .85rem;
+  background: var(--surface); color: var(--text);
+}
+.header-row input::placeholder { color: var(--text-ghost); }
+.btn-remove {
+  background: none; border: none; color: var(--danger); cursor: pointer;
+  font-size: 1.1rem; padding: 0 var(--space-1); line-height: 1; flex-shrink: 0;
+}
+.btn-remove:hover { opacity: .7; }
+.btn-add-header {
+  background: none; border: 1px dashed var(--border); color: var(--accent);
+  border-radius: var(--radius-sm); padding: .3rem .7rem; font-size: var(--font-sm);
+  cursor: pointer; margin-top: .1rem;
+}
+.btn-add-header:hover { border-color: var(--accent); }
+
+/* ── Modal ── */
+.modal-overlay {
+  display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, .45);
+  z-index: 100; align-items: center; justify-content: center;
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  background: var(--surface); border-radius: var(--radius-lg); padding: 1.75rem;
+  width: min(640px, 95vw); max-height: 90vh; overflow-y: auto; box-shadow: var(--shadow-2);
+}
+.modal h3 { margin-bottom: 1.25rem; color: var(--brand); font-size: var(--font-lg); }
+.modal .grid { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
+.modal .full { grid-column: 1 / -1; }
+.modal-actions {
+  display: flex; gap: .5rem; justify-content: flex-end;
+  margin-top: 1.25rem; padding-top: var(--space-4); border-top: 1px solid var(--border-subtle);
+}
+
+/* ── Misc ── */
+#msg { padding: .6rem var(--space-4); border-radius: var(--radius-sm); font-size: .85rem; margin-bottom: var(--space-4); display: none; }
+#msg.ok  { background: var(--ok-bg);  color: var(--ok-fg);  display: block; }
+#msg.err { background: var(--err-bg); color: var(--err-fg); display: block; }
+.empty { color: var(--text-ghost); font-size: .9rem; padding: .5rem 0; }
+.inline-checkbox { flex-direction: row; align-items: center; gap: .45rem; cursor: pointer; }
+.inline-checkbox input { width: auto; margin: 0; }
+
+/* ── Narrow screens ── */
+@media (max-width: 560px) {
+  :root { --card-min-width: 100%; }
+  header { padding: var(--space-4); }
+  main { margin: var(--space-4) auto; }
+  .panel { padding: var(--space-4); }
+  .extra, .modal .grid { grid-template-columns: 1fr; }
+}
+
+/* ── Dark mode ──
+ * Only token values are redefined here. Every rule above is reused as-is.
+ * The explicit [data-theme] selectors let a host page force a theme and win
+ * over the OS preference in both directions. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14141b;
+    --surface: #1d1d27;
+    --surface-2: #24242f;
+    --border: #3a3a47;
+    --border-subtle: #2a2a35;
+    --text: #e6e6ea;
+    --text-muted: #a9a9b6;
+    --text-faint: #858594;
+    --text-ghost: #63636f;
+
+    --brand: #10101a;
+    --accent: #38bdf8;
+
+    --ok-bg: #05372a;      --ok-fg: #6ee7b7;
+    --err-bg: #45161a;     --err-fg: #fca5a5;
+    --info-bg: #17284d;    --info-fg: #93c5fd;
+    --vod-bg: #2c2150;     --vod-fg: #c4b5fd;
+    --warn-bg: #45280f;    --warn-fg: #fdba74;
+    --pending-bg: #3d330d; --pending-fg: #fde047;
+    --dash-bg: #2b3446;    --dash-fg: #cbd5e1;
+    --hls-bg: #0d3b45;     --hls-fg: #a5f3fc;
+    --note-bg: #33280c;    --note-border: #5c4813; --note-fg: #fcd34d;
+
+    --track: #33333f;
+    --track-fill: #38bdf8;
+    --track-fill-done: #34d399;
+
+    --shadow-1: 0 1px 4px rgba(0, 0, 0, .5);
+    --shadow-2: 0 8px 32px rgba(0, 0, 0, .6);
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14141b;
+  --surface: #1d1d27;
+  --surface-2: #24242f;
+  --border: #3a3a47;
+  --border-subtle: #2a2a35;
+  --text: #e6e6ea;
+  --text-muted: #a9a9b6;
+  --text-faint: #858594;
+  --text-ghost: #63636f;
+  --brand: #10101a;
+  --accent: #38bdf8;
+  --ok-bg: #05372a;      --ok-fg: #6ee7b7;
+  --err-bg: #45161a;     --err-fg: #fca5a5;
+  --info-bg: #17284d;    --info-fg: #93c5fd;
+  --vod-bg: #2c2150;     --vod-fg: #c4b5fd;
+  --warn-bg: #45280f;    --warn-fg: #fdba74;
+  --pending-bg: #3d330d; --pending-fg: #fde047;
+  --dash-bg: #2b3446;    --dash-fg: #cbd5e1;
+  --hls-bg: #0d3b45;     --hls-fg: #a5f3fc;
+  --note-bg: #33280c;    --note-border: #5c4813; --note-fg: #fcd34d;
+  --track: #33333f;
+  --track-fill: #38bdf8;
+  --track-fill-done: #34d399;
+  --shadow-1: 0 1px 4px rgba(0, 0, 0, .5);
+  --shadow-2: 0 8px 32px rgba(0, 0, 0, .6);
+}
+
+/* ── Reduced motion ──
+ * The live pulse is decoration; the LIVE label carries the same information. */
+@media (prefers-reduced-motion: reduce) {
+  .dot { animation: none; }
+  .btn { transition: none; }
+}

@@ -1,0 +1,1902 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sluice — 播放器</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #000;
+  font-family: system-ui, -apple-system, sans-serif;
+  color: #fff;
+}
+
+#wrap {
+  position: relative;
+  width: 100%; height: 100dvh;
+  background: #000;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#video {
+  width: 100%; height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* ── Overlay ── */
+#overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  transition: opacity .25s;
+}
+#overlay.hidden { opacity: 0; pointer-events: none; }
+
+/* ── Top bar ── */
+#top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: .75rem 1rem;
+  background: linear-gradient(to bottom, rgba(0,0,0,.72) 0%, transparent 100%);
+  gap: .75rem;
+}
+
+#channel-title {
+  font-size: .95rem;
+  font-weight: 600;
+  text-shadow: 0 1px 3px rgba(0,0,0,.9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+#live-badge {
+  display: none;
+  align-items: center;
+  gap: .35rem;
+  background: #dc2626;
+  color: #fff;
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .06em;
+  padding: .22rem .6rem;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+#live-badge.show { display: flex; }
+#live-badge .dot {
+  width: 6px; height: 6px;
+  background: #fff;
+  border-radius: 50%;
+  animation: blink 1.4s ease-in-out infinite;
+}
+@keyframes blink {
+  0%,100% { opacity: 1; }
+  50%      { opacity: .25; }
+}
+
+/* ── Center click zone ── */
+#center {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Seek feedback toast */
+#seek-toast {
+  position: absolute;
+  background: rgba(0,0,0,.6);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border-radius: 10px;
+  padding: .45rem 1.1rem;
+  font-size: 1rem;
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity .15s;
+  pointer-events: none;
+}
+#seek-toast.show { opacity: 1; }
+#seek-toast.icon {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#seek-toast.icon svg {
+  width: 36px;
+  height: 36px;
+  fill: #fff;
+}
+
+#start-overlay {
+  position: absolute;
+  width: 86px;
+  height: 86px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,.48);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 10px 36px rgba(0,0,0,.45);
+  opacity: 0;
+  transform: scale(.96);
+  transition: opacity .18s, transform .18s;
+  pointer-events: none;
+}
+#start-overlay.show { opacity: 1; transform: scale(1); }
+#start-overlay svg {
+  width: 46px;
+  height: 46px;
+  fill: #fff;
+}
+
+/* ── Spinner ── */
+#spinner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .2s;
+}
+#spinner.show { opacity: 1; }
+#spinner svg { width: 48px; height: 48px; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Error overlay ── */
+#error-box {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: .75rem;
+  background: rgba(0,0,0,.55);
+  padding: 2rem;
+  text-align: center;
+}
+#error-box.show { display: flex; }
+#error-msg { color: #fca5a5; font-size: .9rem; max-width: 480px; }
+
+/* ── Bottom bar ── */
+#bottom-bar {
+  padding: 0 .75rem .65rem;
+  background: linear-gradient(to top, rgba(0,0,0,.75) 0%, transparent 100%);
+}
+
+/* Progress track */
+#prog-wrap {
+  height: 20px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  touch-action: none;
+}
+#prog-track {
+  width: 100%;
+  height: 4px;
+  background: rgba(255,255,255,.22);
+  border-radius: 2px;
+  position: relative;
+  transition: height .12s;
+}
+#prog-wrap:hover #prog-track,
+#prog-wrap.dragging #prog-track { height: 6px; }
+#prog-buf {
+  position: absolute; height: 100%;
+  background: rgba(255,255,255,.32);
+  border-radius: 2px;
+}
+#prog-fill {
+  position: absolute; height: 100%;
+  background: #dc2626;
+  border-radius: 2px;
+}
+#prog-thumb {
+  position: absolute;
+  width: 13px; height: 13px;
+  background: #fff;
+  border-radius: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  transition: opacity .12s;
+  box-shadow: 0 1px 4px rgba(0,0,0,.5);
+}
+#prog-wrap:hover #prog-thumb,
+#prog-wrap.dragging #prog-thumb { opacity: 1; }
+#prog-tip {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 0;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,.78);
+  color: #fff;
+  border-radius: 6px;
+  padding: .28rem .48rem;
+  font-size: .72rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .1s;
+  box-shadow: 0 4px 16px rgba(0,0,0,.35);
+}
+#prog-tip.show { opacity: 1; }
+#prog-tip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: rgba(0,0,0,.78);
+}
+
+/* Controls row */
+#ctrl-row {
+  display: flex;
+  align-items: center;
+  gap: .1rem;
+  margin-top: .05rem;
+}
+
+/* Icon button */
+.ibtn {
+  background: none;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px; min-height: 36px;
+  padding: 0 6px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  transition: background .12s;
+  -webkit-tap-highlight-color: transparent;
+}
+.ibtn:hover { background: rgba(255,255,255,.13); }
+.ibtn svg { width: 20px; height: 20px; fill: currentColor; pointer-events: none; }
+.ibtn.seek svg { width: 26px; height: 26px; }
+
+
+/* Time display */
+#time-disp {
+  font-size: .78rem;
+  color: rgba(255,255,255,.82);
+  white-space: nowrap;
+  margin: 0 .2rem;
+  font-variant-numeric: tabular-nums;
+}
+#time-disp .ldot {
+  display: inline-block;
+  width: 6px; height: 6px;
+  background: #dc2626;
+  border-radius: 50%;
+  margin-right: .3rem;
+  vertical-align: middle;
+  animation: blink 1.4s ease-in-out infinite;
+}
+
+.spacer { flex: 1; }
+
+#btn-live { gap: .25rem; padding: 0 .5rem; }
+#btn-live .live-label {
+  font-size: .72rem; font-weight: 700; letter-spacing: .06em;
+  color: #dc2626;
+}
+#btn-live svg { width: 14px; height: 14px; fill: #dc2626; }
+
+/* Volume */
+#vol-wrap { display: flex; align-items: center; gap: .1rem; position: relative; }
+#vol-slider {
+  width: 64px;
+  accent-color: #fff;
+  cursor: pointer;
+  height: 4px;
+}
+@media (max-width: 500px) {
+  #vol-slider {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%) rotate(-90deg);
+    transform-origin: center;
+    width: 96px;
+    background: rgba(12,12,12,.96);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    padding: .55rem .35rem;
+    border-radius: 8px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.55);
+  }
+  #vol-wrap.popup #vol-slider { display: block; }
+}
+
+/* Quality */
+#qual-wrap { position: relative; }
+#qual-btn {
+  font-size: .75rem;
+  font-weight: 700;
+  min-width: 54px;
+  letter-spacing: .02em;
+}
+#qual-btn[aria-expanded="true"] { background: rgba(255,255,255,.13); }
+#qual-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  background: rgba(12,12,12,.96);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 10px;
+  min-width: 120px;
+  padding: .3rem 0;
+  display: none;
+  flex-direction: column;
+  z-index: 20;
+  box-shadow: 0 6px 24px rgba(0,0,0,.55);
+}
+#qual-menu.open { display: flex; }
+.qi {
+  width: 100%;
+  background: none;
+  border: none;
+  padding: .5rem .9rem;
+  font-size: .82rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+  color: rgba(255,255,255,.8);
+  transition: background .1s;
+  text-align: left;
+}
+.qi:hover,
+.qi:focus-visible { background: rgba(255,255,255,.1); color: #fff; outline: none; }
+.qi.active { color: #fff; font-weight: 700; }
+.qi .ck { opacity: 0; font-size: .8rem; }
+.qi.active .ck { opacity: 1; }
+
+/* Mobile: bigger touch areas */
+@media (max-width: 600px) {
+  .ibtn { min-height: 44px; }
+  #channel-title { font-size: .85rem; }
+  #qual-btn { min-width: 44px; }
+}
+</style>
+<script src="/player-assets/vendor/shaka-player.5.0.12.compiled.js"></script>
+</head>
+<body>
+<div id="wrap">
+  <video id="video" playsinline></video>
+
+  <!-- Spinner (outside overlay — always visible) -->
+  <div id="spinner">
+    <svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.9)" stroke-width="2.5" stroke-linecap="round">
+      <path d="M12 2a10 10 0 1 0 10 10"/>
+    </svg>
+  </div>
+
+  <!-- Error -->
+  <div id="error-box">
+    <svg width="36" height="36" viewBox="0 0 24 24" fill="#fca5a5">
+      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+    </svg>
+    <div id="error-msg"></div>
+  </div>
+
+  <!-- Controls overlay -->
+  <div id="overlay">
+
+    <!-- Top bar -->
+    <div id="top-bar">
+      <span id="channel-title">載入中…</span>
+      <span id="live-badge"><span class="dot"></span>LIVE</span>
+    </div>
+
+    <!-- Center: click / double-click zone -->
+    <div id="center">
+      <div id="start-overlay" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+      </div>
+      <div id="seek-toast"></div>
+    </div>
+
+    <!-- Bottom bar -->
+    <div id="bottom-bar">
+
+      <!-- Progress -->
+      <div id="prog-wrap">
+        <div id="prog-track">
+          <div id="prog-buf"></div>
+          <div id="prog-fill"></div>
+          <div id="prog-thumb"></div>
+          <div id="prog-tip"></div>
+        </div>
+      </div>
+
+      <!-- Controls row -->
+      <div id="ctrl-row">
+
+        <!-- Play / Pause -->
+        <button class="ibtn" id="btn-play" title="播放 / 暫停 (Space / K)">
+          <svg id="ico-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+          <svg id="ico-pause" viewBox="0 0 24 24" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+        </button>
+
+        <!-- -10s / +10s -->
+        <button class="ibtn seek" id="btn-back" title="-10 秒 (← / J)">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/>
+            <text x="12" y="16.5" text-anchor="middle" font-size="6.5" font-family="sans-serif" font-weight="700">10</text>
+          </svg>
+        </button>
+        <button class="ibtn seek" id="btn-fwd"  title="+10 秒 (→ / L)">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path transform="scale(-1,1) translate(-24,0)" d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/>
+            <text x="12" y="16.5" text-anchor="middle" font-size="6.5" font-family="sans-serif" font-weight="700">10</text>
+          </svg>
+        </button>
+
+        <!-- Time -->
+        <div id="time-disp">0:00</div>
+
+        <!-- Go Live -->
+        <button class="ibtn" id="btn-live" title="回到直播" style="display:none">
+          <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+          <span class="live-label">LIVE</span>
+        </button>
+
+        <div class="spacer"></div>
+
+        <!-- Volume -->
+        <div id="vol-wrap">
+          <button class="ibtn" id="btn-mute" title="靜音 (M)">
+            <svg id="ico-vol" viewBox="0 0 24 24">
+              <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
+            </svg>
+            <svg id="ico-muted" viewBox="0 0 24 24" style="display:none">
+              <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>
+            </svg>
+          </button>
+          <input type="range" id="vol-slider" min="0" max="1" step="0.02" value="1">
+        </div>
+
+        <!-- Quality -->
+        <div id="qual-wrap">
+          <button class="ibtn" id="qual-btn" title="畫質" aria-label="畫質選單" aria-haspopup="menu" aria-expanded="false">Auto</button>
+          <div id="qual-menu" role="menu" aria-label="畫質選單" aria-hidden="true"></div>
+        </div>
+
+        <!-- Fullscreen -->
+        <button class="ibtn" id="btn-fs" title="全螢幕 (F)">
+          <svg id="ico-expand" viewBox="0 0 24 24">
+            <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
+          </svg>
+          <svg id="ico-shrink" viewBox="0 0 24 24" style="display:none">
+            <path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/>
+          </svg>
+        </button>
+
+      </div><!-- /ctrl-row -->
+    </div><!-- /bottom-bar -->
+  </div><!-- /overlay -->
+</div><!-- /wrap -->
+
+<script>
+const channelID   = location.pathname.split('/').filter(Boolean).pop();
+// Used only if the gateway does not tell us which URL to play (see
+// resolveManifestURL); DASH is the historical default.
+const fallbackManifestURL = `/v1/channels/${channelID}/manifest.mpd`;
+const prLicURL    = `/v1/channels/${channelID}/license/playready`;
+const wvLicURL    = `/v1/channels/${channelID}/license/widevine`;
+
+// DOM
+const wrap       = document.getElementById('wrap');
+const video      = document.getElementById('video');
+const overlay    = document.getElementById('overlay');
+const spinner    = document.getElementById('spinner');
+const errorBox   = document.getElementById('error-box');
+const errorMsg   = document.getElementById('error-msg');
+const liveBadge  = document.getElementById('live-badge');
+const chanTitle  = document.getElementById('channel-title');
+const startOverlay = document.getElementById('start-overlay');
+const seekToast  = document.getElementById('seek-toast');
+const progWrap   = document.getElementById('prog-wrap');
+const progFill   = document.getElementById('prog-fill');
+const progBuf    = document.getElementById('prog-buf');
+const progThumb  = document.getElementById('prog-thumb');
+const progTip    = document.getElementById('prog-tip');
+const btnPlay    = document.getElementById('btn-play');
+const icoPlay    = document.getElementById('ico-play');
+const icoPause   = document.getElementById('ico-pause');
+const btnBack    = document.getElementById('btn-back');
+const btnFwd     = document.getElementById('btn-fwd');
+const timeDisp   = document.getElementById('time-disp');
+const btnLive    = document.getElementById('btn-live');
+const btnMute    = document.getElementById('btn-mute');
+const icoVol     = document.getElementById('ico-vol');
+const icoMuted   = document.getElementById('ico-muted');
+const volSlider  = document.getElementById('vol-slider');
+const volWrap    = document.getElementById('vol-wrap');
+const qualBtn    = document.getElementById('qual-btn');
+const qualMenu   = document.getElementById('qual-menu');
+const btnFs      = document.getElementById('btn-fs');
+const icoExpand  = document.getElementById('ico-expand');
+const icoShrink  = document.getElementById('ico-shrink');
+const center     = document.getElementById('center');
+
+let player         = null;
+let isLive         = false;
+let abrEnabled     = true;
+let pinnedHeight   = null;  // null = ABR; persists across reconnect/reload
+let hideTimer      = null;
+let toastTimer     = null;
+let clickTimer     = null;
+let dragging       = false;
+let reconnecting   = false;
+let modeWatchTimer = null;
+let liveProgressTimer = null;
+let avResyncTimer  = null;
+let avResyncNudgeTimer = null;
+let avResyncPending = false;
+let stallWatchTimer = null;
+let waitingSince    = 0;
+let mediaWaiting    = false;
+let shakaBuffering  = false;
+let lastPlaybackTime = 0;
+let stallRecovering = false;
+let recoveryTimer   = null;
+let recoveryAttempts = 0;
+let activePointerId  = null;
+let initialResyncCleanup = null;
+let progressHoverX = null;
+let progressHovering = false;
+
+const STALL_RECOVERY_MSG   = '播放卡住，正在嘗試恢復…';
+const STALL_WAIT_MS        = 8000;
+const STALL_WATCH_MS       = 2000;
+const RECOVERY_BASE_DELAY_MS = 1000;
+const RECOVERY_MAX_DELAY_MS  = 30000;
+const RECOVERY_MAX_ATTEMPTS  = 6;
+const LIVE_PROGRESS_REFRESH_MS = 1000;
+const AV_RESYNC_INTERVAL_MS  = 5 * 60 * 1000;
+const AV_RESYNC_DEFER_MS     = 400;
+// Keep nearby buffered media when manually switching quality, but drop farther
+// future buffer so the new quality takes effect without a full rebuffer.
+const QUALITY_SWITCH_SAFE_MARGIN = 3;
+
+// ── Channel info ──────────────────────────────────────────────────────────
+let channelInfo = { drm: { playready: true, widevine: true } };
+const channelInfoPromise = fetch(`/v1/channels/${channelID}/health`)
+  .then(r => r.json())
+  .then(d => {
+    channelInfo = d;
+    const t = d.title || channelID;
+    chanTitle.textContent = t;
+    document.title = `${t} — Sluice`;
+    return d;
+  })
+  .catch(() => {
+    chanTitle.textContent = channelID;
+    document.title = `${channelID} — Sluice`;
+    return channelInfo;
+  });
+
+async function loadDRMServers() {
+  const info = await channelInfoPromise;
+  const drm = info.drm || {};
+  const servers = {};
+  if (drm.widevine !== false) servers['com.widevine.alpha'] = wvLicURL;
+  if (drm.playready !== false) servers['com.microsoft.playready'] = prLicURL;
+  return servers;
+}
+
+// ── Shaka init ────────────────────────────────────────────────────────────
+const LIVE_BEHIND_THRESHOLD = 10;
+const LIVE_STREAMING_CFG = {
+  bufferingGoal:    90,
+  rebufferingGoal:  2,
+  bufferBehind:     90,
+  stallEnabled:     true,
+  stallThreshold:   1,
+  stallSkip:        0.1,
+  liveSync: {
+    enabled:                true,
+    targetLatency:          5,
+    targetLatencyTolerance: 1,
+    maxPlaybackRate:        1.1,
+    minPlaybackRate:        0.9,
+  },
+};
+const VOD_STREAMING_CFG = {
+  bufferingGoal:   30,
+  rebufferingGoal: 10,
+  liveSync:        { enabled: false },
+};
+
+// resolveManifestURL asks the gateway which URL this channel serves. A channel
+// backed by an HLS source is published as master.m3u8 rather than manifest.mpd,
+// and Shaka plays either, so the protocol never has to be assumed here.
+let resolvedManifestURL = null;
+async function resolveManifestURL() {
+  if (resolvedManifestURL) return resolvedManifestURL;
+  const info = await channelInfoPromise;
+  resolvedManifestURL = info.manifest_url || fallbackManifestURL;
+  return resolvedManifestURL;
+}
+
+async function loadWithRetry(max = 5) {
+  const manifestURL = await resolveManifestURL();
+  let delay = 1000;
+  for (let i = 0; i < max; i++) {
+    try {
+      await player.load(manifestURL);
+      return;
+    } catch (e) {
+      if (i === max - 1) throw e;
+      console.warn(`[shaka load retry ${i + 1}/${max}]`, e.message || e);
+      await new Promise(r => setTimeout(r, delay));
+      delay = Math.min(delay * 2, 15000);
+    }
+  }
+}
+
+function primeStartTime(startTime) {
+  if (!player || startTime === null || !isFinite(startTime)) return;
+  if (typeof player.updateStartTime === 'function') {
+    player.updateStartTime(Math.max(0, startTime));
+  }
+}
+
+function hideError() {
+  errorBox.classList.remove('show');
+  errorMsg.textContent = '';
+}
+
+function applyModeConfig() {
+  if (!player) return;
+  if (isLive) {
+    liveBadge.classList.add('show');
+    player.configure({ streaming: LIVE_STREAMING_CFG });
+    startLiveProgressTicker();
+    startAVResyncWatchdog();
+  } else {
+    liveBadge.classList.remove('show');
+    btnLive.style.display = 'none';
+    player.configure({ streaming: VOD_STREAMING_CFG });
+    stopLiveProgressTicker();
+    stopAVResyncWatchdog();
+  }
+}
+
+// Toggle liveSync rate adjustment so the user can pause at a past time
+// without Shaka silently speeding playback to drag them back to live.
+function applyLiveSyncRate(active) {
+  if (!player || !isLive) return;
+  player.configure({
+    streaming: {
+      liveSync: active
+        ? { maxPlaybackRate: 1.1, minPlaybackRate: 0.9 }
+        : { maxPlaybackRate: 1.0, minPlaybackRate: 1.0 },
+    },
+  });
+}
+
+function syncLiveRateToPosition() {
+  if (!isLive || !player) return;
+  try {
+    const sr = player.seekRange();
+    const behind = sr.end - video.currentTime;
+    applyLiveSyncRate(behind <= LIVE_BEHIND_THRESHOLD);
+  } catch (_) {}
+}
+
+function shouldResumeAfterRecovery() {
+  return !video.paused && !video.ended;
+}
+
+function playerIsLive() {
+  if (player && typeof player.isLive === 'function') {
+    try {
+      return player.isLive();
+    } catch (_) {}
+  }
+  return isLive;
+}
+
+function liveRecoveryOptions() {
+  const base = { showAutoplayHint: true, resumePlayback: shouldResumeAfterRecovery() };
+  if (!player) return { ...base, seekToLiveEdge: true };
+  try {
+    const sr = player.seekRange();
+    const behind = sr.end - video.currentTime;
+    const inWindow = video.currentTime >= sr.start && video.currentTime <= sr.end;
+    if (inWindow && behind > LIVE_BEHIND_THRESHOLD) {
+      return { ...base, preserveTime: video.currentTime };
+    }
+  } catch (_) {}
+  return { ...base, seekToLiveEdge: true };
+}
+
+function currentRecoveryOptions() {
+  return playerIsLive()
+    ? liveRecoveryOptions()
+    : {
+        preserveTime: video.currentTime,
+        showAutoplayHint: true,
+        resumePlayback: shouldResumeAfterRecovery(),
+      };
+}
+
+function clearRecoveryTimer() {
+  if (recoveryTimer) {
+    clearTimeout(recoveryTimer);
+    recoveryTimer = null;
+  }
+}
+
+function resetRecoveryState() {
+  clearRecoveryTimer();
+  recoveryAttempts = 0;
+}
+
+function recoveryDelay(attempt, immediate) {
+  if (immediate && attempt === 1) return 0;
+  return Math.min(RECOVERY_BASE_DELAY_MS * 2 ** (attempt - 1), RECOVERY_MAX_DELAY_MS);
+}
+
+function restorePlaybackPosition(preserveTime) {
+  if (preserveTime === null || !isFinite(preserveTime)) return;
+  try {
+    if (isLive) {
+      video.currentTime = liveSeekTarget(preserveTime);
+      syncLiveRateToPosition();
+    } else {
+      const duration = Number.isFinite(video.duration) ? video.duration : preserveTime;
+      video.currentTime = Math.max(0, Math.min(duration, preserveTime));
+    }
+  } catch (err) {
+    console.warn('[restore position failed]', err);
+  }
+}
+
+function scheduleRecovery(opts = {}, message = STALL_RECOVERY_MSG, immediate = false) {
+  if (!player || reconnecting || recoveryTimer) return;
+  const attempt = recoveryAttempts + 1;
+  if (attempt > RECOVERY_MAX_ATTEMPTS) {
+    showError('播放器多次恢復失敗，請稍後重新整理頁面。');
+    return;
+  }
+  recoveryAttempts = attempt;
+  const delay = recoveryDelay(attempt, immediate);
+  if (message) {
+    const toast = delay > 0 ? `${message} ${Math.ceil(delay / 1000)} 秒後重試…` : message;
+    showToast(toast, Math.max(1600, Math.min(delay, 2800)));
+  }
+  recoveryTimer = setTimeout(async () => {
+    recoveryTimer = null;
+    const ok = await reconnect(opts);
+    if (!ok) scheduleRecovery(opts, message, false);
+  }, delay);
+}
+
+async function reconnect(opts = {}) {
+  if (reconnecting || !player) return;
+  const {
+    preserveTime = null,
+    seekToLiveEdge = false,
+    showAutoplayHint = false,
+    resumePlayback = true,
+  } = opts;
+  reconnecting = true;
+  try {
+    hideError();
+    setQualityMenuOpen(false);
+    volWrap.classList.remove('popup');
+    try { await player.unload(); } catch (_) {}
+    primeStartTime(preserveTime);
+    await loadWithRetry();
+    isLive = player.isLive();
+    applyModeConfig();
+    restoreQualityPreference();
+    buildQualityMenu();
+    if (isLive && seekToLiveEdge) {
+      if (typeof player.goToLive === 'function') {
+        player.goToLive();
+      } else {
+        video.currentTime = liveSeekTarget(player.seekRange().end);
+      }
+      syncLiveRateToPosition();
+    } else {
+      restorePlaybackPosition(preserveTime);
+    }
+    if (isLive) scheduleInitialResync();
+    clearWaitingState();
+    if (resumePlayback) {
+      const autoplay = await attemptAutoplay(showAutoplayHint);
+      if (!autoplay.ok && !autoplay.blocked) {
+        return false;
+      }
+    } else {
+      spinner.classList.remove('show');
+      refreshPlayIcon();
+      showControls(true);
+    }
+    resetRecoveryState();
+    return true;
+  } catch (e) {
+    console.error('[reconnect failed]', e);
+    return false;
+  } finally {
+    reconnecting = false;
+  }
+}
+
+function handleShakaError(detail) {
+  const isCritical = !shaka.util.Error.Severity ||
+    detail.severity === shaka.util.Error.Severity.CRITICAL;
+  if (!isCritical) {
+    console.warn('[shaka recoverable]', detail);
+    return;
+  }
+  console.error('[shaka critical]', detail);
+  scheduleRecovery(currentRecoveryOptions(), '播放發生錯誤，正在重試…', false);
+}
+
+function startModeWatcher() {
+  stopModeWatcher();
+  modeWatchTimer = setInterval(() => {
+    if (!player) return;
+    const nowLive = player.isLive();
+    if (nowLive !== isLive) {
+      isLive = nowLive;
+      applyModeConfig();
+    }
+  }, 5000);
+}
+function stopModeWatcher() {
+  if (modeWatchTimer) { clearInterval(modeWatchTimer); modeWatchTimer = null; }
+}
+
+function startLiveProgressTicker() {
+  stopLiveProgressTicker();
+  liveProgressTimer = setInterval(() => {
+    if (!isLive) return;
+    refreshProgress();
+    refreshProgressTooltip();
+  }, LIVE_PROGRESS_REFRESH_MS);
+}
+
+function stopLiveProgressTicker() {
+  if (liveProgressTimer) {
+    clearInterval(liveProgressTimer);
+    liveProgressTimer = null;
+  }
+}
+
+function startAVResyncWatchdog() {
+  stopAVResyncWatchdog();
+  avResyncTimer = setInterval(() => {
+    avResyncPending = true;
+    if (document.hidden) scheduleAVResyncNudge(0);
+  }, AV_RESYNC_INTERVAL_MS);
+}
+function stopAVResyncWatchdog() {
+  if (avResyncTimer) { clearInterval(avResyncTimer); avResyncTimer = null; }
+  clearPendingAVResync();
+}
+
+function clearPendingAVResync() {
+  avResyncPending = false;
+  if (avResyncNudgeTimer) {
+    clearTimeout(avResyncNudgeTimer);
+    avResyncNudgeTimer = null;
+  }
+}
+
+function scheduleAVResyncNudge(delay = AV_RESYNC_DEFER_MS, force = false) {
+  if (!force && !avResyncPending) return;
+  if (avResyncNudgeTimer) clearTimeout(avResyncNudgeTimer);
+  avResyncNudgeTimer = setTimeout(() => {
+    avResyncNudgeTimer = null;
+    if (!force && !avResyncPending) return;
+    if (nudgePlaybackForResync()) avResyncPending = false;
+  }, delay);
+}
+
+function handlePlaybackReady() {
+  clearPlaybackBusyState();
+  scheduleAVResyncNudge();
+}
+
+function nudgePlaybackForResync() {
+  if (!isLive || !player || video.paused || video.seeking) return false;
+  if (dragging || reconnecting || stallRecovering || waitingSince) return false;
+  if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) return false;
+  try {
+    const sr = player.seekRange();
+    if (video.currentTime < sr.start || video.currentTime > sr.end) return false;
+    const safeEnd = Math.max(sr.start, sr.end - 0.1);
+    const target = Math.max(sr.start, Math.min(safeEnd, video.currentTime + 0.001));
+    if (target <= video.currentTime) return false;
+    video.currentTime = target;
+    return true;
+  } catch (err) {
+    console.warn('[av resync nudge failed]', err);
+    return false;
+  }
+}
+
+function clearInitialResync() {
+  if (!initialResyncCleanup) return;
+  initialResyncCleanup();
+  initialResyncCleanup = null;
+}
+
+// Force a one-shot micro-seek on the first `playing` event after a load.
+// After that, periodic resyncs are deferred until a natural playback-ready point
+// or background tab so smooth playback is not interrupted every 5 minutes.
+function scheduleInitialResync() {
+  clearInitialResync();
+  let timeoutId = null;
+  const onPlaying = () => {
+    timeoutId = setTimeout(() => {
+      initialResyncCleanup = null;
+      scheduleAVResyncNudge(0, true);
+    }, AV_RESYNC_DEFER_MS);
+    initialResyncCleanup = () => {
+      if (timeoutId !== null) clearTimeout(timeoutId);
+    };
+  };
+  video.addEventListener('playing', onPlaying, { once: true });
+  initialResyncCleanup = () => {
+    video.removeEventListener('playing', onPlaying);
+  };
+}
+
+function clearWaitingState() {
+  waitingSince = 0;
+  mediaWaiting = false;
+  refreshSpinner();
+}
+
+function clearPlaybackBusyState() {
+  shakaBuffering = false;
+  clearWaitingState();
+}
+
+function markWaiting() {
+  if (video.paused || dragging || reconnecting || stallRecovering) {
+    refreshSpinner();
+    return;
+  }
+  if (!waitingSince) waitingSince = Date.now();
+  refreshSpinner();
+}
+
+function refreshSpinner() {
+  const busy = mediaWaiting || shakaBuffering || waitingSince;
+  const visible = !!busy && !video.paused && !video.ended && !dragging && !errorBox.classList.contains('show');
+  spinner.classList.toggle('show', visible);
+}
+
+function setMediaWaiting(active) {
+  mediaWaiting = active;
+  if (active) {
+    markWaiting();
+  } else {
+    clearWaitingState();
+  }
+}
+
+function setShakaBuffering(active) {
+  shakaBuffering = active;
+  if (active) {
+    markWaiting();
+  } else {
+    if (!mediaWaiting) waitingSince = 0;
+    refreshSpinner();
+  }
+}
+
+function handleShakaBuffering(e) {
+  setShakaBuffering(!!(e.buffering ?? e.detail?.buffering));
+}
+
+function handleTimeUpdate() {
+  if (!video.paused && !video.seeking && video.currentTime > lastPlaybackTime + 0.05) {
+    clearPlaybackBusyState();
+  }
+  lastPlaybackTime = video.currentTime;
+  refreshProgress();
+}
+
+function startStallWatchdog() {
+  stopStallWatchdog();
+  stallWatchTimer = setInterval(() => {
+    if (!waitingSince || !player || reconnecting || stallRecovering) return;
+    if (video.paused || video.seeking || dragging) return;
+    if (Date.now() - waitingSince < STALL_WAIT_MS) return;
+    recoverPlaybackStall();
+  }, STALL_WATCH_MS);
+}
+
+function stopStallWatchdog() {
+  if (stallWatchTimer) {
+    clearInterval(stallWatchTimer);
+    stallWatchTimer = null;
+  }
+  clearWaitingState();
+  stallRecovering = false;
+}
+
+async function recoverPlaybackStall() {
+  if (stallRecovering || reconnecting || !player) return;
+  stallRecovering = true;
+  try {
+    isLive = playerIsLive();
+    if (isLive) {
+      const opts = liveRecoveryOptions();
+      if (opts.seekToLiveEdge) {
+        let target;
+        try {
+          target = liveSeekTarget(player.seekRange().end);
+        } catch (err) {
+          console.warn('[stall live edge lookup failed]', err);
+          scheduleRecovery(opts, STALL_RECOVERY_MSG, true);
+          return;
+        }
+        if (Math.abs(video.currentTime - target) > 0.25) {
+          video.currentTime = target;
+          syncLiveRateToPosition();
+          waitingSince = Date.now();
+        } else {
+          scheduleRecovery(opts, STALL_RECOVERY_MSG, true);
+        }
+      } else {
+        clearWaitingState();
+        scheduleRecovery(opts, STALL_RECOVERY_MSG, true);
+      }
+    } else {
+      scheduleRecovery(currentRecoveryOptions(), STALL_RECOVERY_MSG, true);
+    }
+  } finally {
+    stallRecovering = false;
+  }
+}
+
+async function init() {
+  shaka.polyfill.installAll();
+  if (!shaka.Player.isBrowserSupported()) {
+    showError('此瀏覽器不支援 Shaka Player，請改用 Chrome 或 Edge。');
+    return;
+  }
+
+  player = new shaka.Player();
+  await player.attach(video);
+  const drmServers = await loadDRMServers();
+  player.configure({
+    drm: {
+      servers: drmServers,
+    },
+    streaming: { bufferingGoal: 30, rebufferingGoal: 10 },
+  });
+
+  player.addEventListener('error',         e => handleShakaError(e.detail));
+  player.addEventListener('trackschanged',  handleTracksChanged);
+  player.addEventListener('adaptation',     refreshQualityActive);
+  player.addEventListener('variantchanged', refreshQualityActive);
+  player.addEventListener('buffering',      handleShakaBuffering);
+
+  video.addEventListener('waiting',     () => {
+    setMediaWaiting(true);
+  });
+  video.addEventListener('stalled',     () => setMediaWaiting(true));
+  video.addEventListener('playing',     handlePlaybackReady);
+  video.addEventListener('canplay',     handlePlaybackReady);
+  video.addEventListener('play',        refreshPlayIcon);
+  video.addEventListener('pause',       () => { clearPlaybackBusyState(); refreshPlayIcon(); showControls(true); });
+  video.addEventListener('timeupdate',  handleTimeUpdate);
+  video.addEventListener('seeked',      handlePlaybackReady);
+  video.addEventListener('ended',       clearPlaybackBusyState);
+  video.addEventListener('volumechange', refreshVolumeUI);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) scheduleAVResyncNudge(0);
+  });
+
+  try {
+    await loadWithRetry();
+    isLive = player.isLive();
+    applyModeConfig();
+    restoreQualityPreference();
+    buildQualityMenu();
+    if (isLive) scheduleInitialResync();
+    hideError();
+    startModeWatcher();
+    startStallWatchdog();
+    const autoplay = await attemptAutoplay(true);
+    if (!autoplay.ok && !autoplay.blocked) {
+      scheduleRecovery(currentRecoveryOptions(), '播放啟動失敗，正在重試…', false);
+      return;
+    }
+    resetRecoveryState();
+  } catch (e) {
+    showError(`載入失敗: ${e.message || e}`);
+  }
+}
+
+// ── Auto-hide controls + cursor ───────────────────────────────────────────
+function showControls(lock) {
+  overlay.classList.remove('hidden');
+  wrap.style.cursor = '';
+  clearTimeout(hideTimer);
+  if (!lock && !video.paused) {
+    hideTimer = setTimeout(hideControls, 3000);
+  }
+}
+
+function hideControls() {
+  if (video.paused) return;
+  overlay.classList.add('hidden');
+  wrap.style.cursor = 'none';
+}
+
+wrap.addEventListener('mousemove', () => showControls(false));
+wrap.addEventListener('mouseleave', () => { if (!video.paused) hideControls(); });
+wrap.addEventListener('touchstart', () => showControls(false), { passive: true });
+
+// ── Play / Pause ──────────────────────────────────────────────────────────
+async function togglePlay() {
+  if (video.paused) {
+    const result = await attemptAutoplay(true);
+    if (result.ok) showCenterIcon('play');
+  } else {
+    video.pause();
+    showCenterIcon('pause');
+  }
+}
+
+function refreshPlayIcon() {
+  icoPlay.style.display  = video.paused ? '' : 'none';
+  icoPause.style.display = video.paused ? 'none' : '';
+  if (!video.paused) setStartOverlayVisible(false);
+}
+
+btnPlay.addEventListener('click', togglePlay);
+
+function isInteractiveTarget(target) {
+  return !!(target && target.closest('#top-bar, #bottom-bar, #error-box, button, input, select, textarea, a'));
+}
+
+function handleSurfaceClick(e) {
+  const target = e.target instanceof Element ? e.target : null;
+  if (isInteractiveTarget(target)) return;
+  if (qualMenu.classList.contains('open')) {
+    setQualityMenuOpen(false);
+    return;
+  }
+  if (volWrap.classList.contains('popup')) {
+    volWrap.classList.remove('popup');
+    return;
+  }
+  if (clickTimer) {
+    clearTimeout(clickTimer);
+    clickTimer = null;
+    // Double-click: seek based on which half
+    seek(e.clientX < wrap.clientWidth / 2 ? -10 : 10);
+  } else {
+    clickTimer = setTimeout(() => {
+      clickTimer = null;
+      togglePlay();
+      showControls(false);
+    }, 250);
+  }
+}
+
+wrap.addEventListener('click', handleSurfaceClick);
+
+// ── Seek ──────────────────────────────────────────────────────────────────
+function liveSeekTarget(target) {
+  const sr = player.seekRange();
+  const edgeGuard = Math.min(0.5, Math.max(0.1, sr.end - sr.start));
+  const liveEnd = Math.max(sr.start, sr.end - edgeGuard);
+  return Math.max(sr.start, Math.min(liveEnd, target));
+}
+
+function seek(delta) {
+  try {
+    clearWaitingState();
+    if (isLive) {
+      if (!player) return;
+      video.currentTime = liveSeekTarget(video.currentTime + delta);
+    } else {
+      const duration = Number.isFinite(video.duration) ? video.duration : 0;
+      video.currentTime = Math.max(0, Math.min(duration, video.currentTime + delta));
+    }
+    syncLiveRateToPosition();
+    showToast(delta < 0 ? `◀ ${Math.abs(delta)}s` : `${delta}s ▶`);
+  } catch (err) {
+    console.warn('[seek failed]', err);
+    refreshProgress();
+  }
+}
+
+function showToast(msg, duration = 800) {
+  seekToast.classList.remove('icon');
+  seekToast.textContent = msg;
+  seekToast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => seekToast.classList.remove('show'), duration);
+}
+
+const CENTER_ICONS = {
+  play: '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>',
+  pause: '<svg viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>',
+};
+
+function showCenterIcon(kind, duration = 520) {
+  const icon = CENTER_ICONS[kind];
+  if (!icon) return;
+  seekToast.classList.add('icon');
+  seekToast.innerHTML = icon;
+  seekToast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => seekToast.classList.remove('show'), duration);
+}
+
+function setStartOverlayVisible(visible) {
+  startOverlay.classList.toggle('show', visible);
+  startOverlay.setAttribute('aria-hidden', String(!visible));
+}
+
+btnBack.addEventListener('click', () => seek(-10));
+btnFwd.addEventListener('click',  () => seek(+10));
+
+btnLive.addEventListener('click', () => {
+  if (!isLive || !player) return;
+  try {
+    const sr = player.seekRange();
+    video.currentTime = liveSeekTarget(sr.end);
+    syncLiveRateToPosition();
+    showControls(false);
+  } catch (_) {}
+});
+
+// ── Progress ──────────────────────────────────────────────────────────────
+function refreshProgress() {
+  if (dragging) return;
+  let state;
+  try {
+    state = progressState();
+  } catch (_) {
+    return;
+  }
+  const { pos, total } = state;
+  const pct = total > 0 ? Math.max(0, Math.min(1, pos / total)) : 0;
+  progFill.style.width  = `${pct * 100}%`;
+  progThumb.style.left  = `${pct * 100}%`;
+
+  // Buffer
+  const buf = video.buffered;
+  let bufPct = 0;
+  if (buf.length > 0 && total > 0) {
+    try {
+      const start = isLive && player ? player.seekRange().start : 0;
+      bufPct = Math.max(0, Math.min(1, (buf.end(buf.length - 1) - start) / total));
+    } catch (_) {
+      bufPct = 0;
+    }
+  }
+  progBuf.style.width = `${bufPct * 100}%`;
+  refreshTimeDisplay(pos, total);
+}
+
+function progressPoint(clientX) {
+  const rect = progWrap.getBoundingClientRect();
+  if (rect.width <= 0) return null;
+  const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+  return { pct, rect };
+}
+
+function progressLabelAt(pct) {
+  if (isLive) {
+    if (!player) return '';
+    const sr = player.seekRange();
+    const target = sr.start + pct * (sr.end - sr.start);
+    const behind = Math.max(0, sr.end - target);
+    return behind < 8 ? 'LIVE' : `-${fmt(Math.round(behind))}`;
+  }
+  const duration = Number.isFinite(video.duration) ? video.duration : 0;
+  return fmt(pct * duration);
+}
+
+function updateProgressTooltip(clientX) {
+  const point = progressPoint(clientX);
+  if (!point) return;
+  try {
+    const label = progressLabelAt(point.pct);
+    if (!label) return;
+    progressHoverX = clientX;
+    progTip.textContent = label;
+    progTip.style.left = `${point.pct * 100}%`;
+    progTip.classList.add('show');
+  } catch (_) {}
+}
+
+function refreshProgressTooltip() {
+  if (progressHoverX !== null) updateProgressTooltip(progressHoverX);
+}
+
+function hideProgressTooltip() {
+  progressHoverX = null;
+  progTip.classList.remove('show');
+}
+
+function progressState() {
+  if (isLive) {
+    if (!player) return { pos: 0, total: 0 };
+    const sr = player.seekRange();
+    const total = Math.max(0, sr.end - sr.start);
+    const pos = Math.max(0, Math.min(total, video.currentTime - sr.start));
+    return { pos, total };
+  }
+  return { pos: video.currentTime, total: video.duration || 0 };
+}
+
+function refreshTimeDisplay(pos, total) {
+  if (isLive) {
+    let behind;
+    try {
+      behind = Math.max(0, player.seekRange().end - video.currentTime);
+    } catch (_) {
+      return;
+    }
+    timeDisp.innerHTML = behind < 8
+      ? `<span class="ldot"></span>LIVE`
+      : `-${fmt(Math.round(behind))}`;
+    btnLive.style.display = behind >= 8 ? '' : 'none';
+    return;
+  }
+  btnLive.style.display = 'none';
+  timeDisp.textContent = `${fmt(pos)} / ${fmt(total)}`;
+}
+
+function fmt(s) {
+  if (!isFinite(s) || isNaN(s)) return '0:00';
+  s = Math.floor(s);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`
+    : `${m}:${String(sec).padStart(2,'0')}`;
+}
+
+function seekFromPointer(clientX) {
+  const point = progressPoint(clientX);
+  if (!point) return;
+  clearWaitingState();
+  const { pct } = point;
+  if (isLive) {
+    if (!player) return;
+    try {
+      const sr = player.seekRange();
+      video.currentTime = liveSeekTarget(sr.start + pct * (sr.end - sr.start));
+    } catch (err) {
+      console.warn('[progress seek failed]', err);
+      return;
+    }
+  } else {
+    const duration = Number.isFinite(video.duration) ? video.duration : 0;
+    video.currentTime = pct * duration;
+  }
+  progFill.style.width = `${pct * 100}%`;
+  progThumb.style.left = `${pct * 100}%`;
+  updateProgressTooltip(clientX);
+  syncLiveRateToPosition();
+}
+
+// rAF-throttled seek during drag to avoid setting currentTime per mousemove
+let pendingSeekX = null, rafSeekPending = false;
+function scheduleSeek(x) {
+  pendingSeekX = x;
+  if (rafSeekPending) return;
+  rafSeekPending = true;
+  requestAnimationFrame(() => {
+    rafSeekPending = false;
+    if (pendingSeekX !== null) {
+      seekFromPointer(pendingSeekX);
+      pendingSeekX = null;
+    }
+  });
+}
+
+function beginProgressDrag(pointerId, clientX) {
+  dragging = true;
+  clearWaitingState();
+  activePointerId = pointerId;
+  progWrap.classList.add('dragging');
+  updateProgressTooltip(clientX);
+  if (typeof progWrap.setPointerCapture === 'function') {
+    try { progWrap.setPointerCapture(pointerId); } catch (_) {}
+  }
+  seekFromPointer(clientX);
+}
+
+function endProgressDrag(pointerId) {
+  if (!dragging) return;
+  if (pointerId !== null && activePointerId !== null && pointerId !== activePointerId) return;
+  if (activePointerId !== null && typeof progWrap.releasePointerCapture === 'function') {
+    try { progWrap.releasePointerCapture(activePointerId); } catch (_) {}
+  }
+  if (!dragging) return;
+  dragging = false;
+  activePointerId = null;
+  pendingSeekX = null;
+  progWrap.classList.remove('dragging');
+  if (!progressHovering) hideProgressTooltip();
+  refreshProgress();
+}
+
+progWrap.addEventListener('pointerenter', e => {
+  if (e.pointerType === 'touch') return;
+  progressHovering = true;
+  updateProgressTooltip(e.clientX);
+});
+progWrap.addEventListener('pointerdown', e => {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  e.preventDefault();
+  beginProgressDrag(e.pointerId, e.clientX);
+});
+progWrap.addEventListener('pointermove', e => {
+  if (dragging && e.pointerId === activePointerId) {
+    updateProgressTooltip(e.clientX);
+    scheduleSeek(e.clientX);
+    return;
+  }
+  if (progressHovering) updateProgressTooltip(e.clientX);
+});
+progWrap.addEventListener('pointerleave', () => {
+  progressHovering = false;
+  if (!dragging) hideProgressTooltip();
+});
+progWrap.addEventListener('pointerup', e => endProgressDrag(e.pointerId));
+progWrap.addEventListener('pointercancel', e => endProgressDrag(e.pointerId));
+progWrap.addEventListener('lostpointercapture', () => endProgressDrag(null));
+window.addEventListener('pointerup', e => endProgressDrag(e.pointerId));
+
+// ── Volume ────────────────────────────────────────────────────────────────
+function refreshVolumeUI() {
+  const muted = video.muted || video.volume === 0;
+  icoVol.style.display   = muted ? 'none' : '';
+  icoMuted.style.display = muted ? '' : 'none';
+  if (!video.muted) volSlider.value = video.volume;
+}
+
+btnMute.addEventListener('click', () => { video.muted = !video.muted; });
+volSlider.addEventListener('input', () => {
+  video.volume = parseFloat(volSlider.value);
+  video.muted  = video.volume === 0;
+});
+
+// Mobile: long-press mute button to reveal volume slider popup
+let volPressTimer = null, volLongPressed = false;
+btnMute.addEventListener('touchstart', () => {
+  volLongPressed = false;
+  volPressTimer = setTimeout(() => {
+    volLongPressed = true;
+    volWrap.classList.add('popup');
+    showControls(true);
+  }, 500);
+}, { passive: true });
+btnMute.addEventListener('touchend', e => {
+  if (volPressTimer) { clearTimeout(volPressTimer); volPressTimer = null; }
+  if (volLongPressed) e.preventDefault();
+});
+btnMute.addEventListener('touchcancel', () => {
+  if (volPressTimer) { clearTimeout(volPressTimer); volPressTimer = null; }
+});
+document.addEventListener('click', e => {
+  if (!volWrap.contains(e.target)) volWrap.classList.remove('popup');
+});
+
+async function attemptAutoplay(showHint) {
+  try {
+    await video.play();
+    setStartOverlayVisible(false);
+    return { ok: true, blocked: false, err: null };
+  } catch (err) {
+    const blocked = err && err.name === 'NotAllowedError';
+    clearWaitingState();
+    if (blocked && showHint) {
+      showControls(true);
+      setStartOverlayVisible(true);
+    }
+    console.warn('[autoplay failed]', err);
+    refreshPlayIcon();
+    return { ok: false, blocked, err };
+  }
+}
+
+function listKey(value) {
+  return Array.isArray(value) ? value.slice().sort().join(',') : (value || '');
+}
+
+function trackAudioKey(track) {
+  if (!track) return '';
+  return [
+    track.language || '',
+    track.label || '',
+    listKey(track.audioRoles || track.roles),
+    track.channelsCount || '',
+  ].join('|');
+}
+
+function chooseHighestBandwidth(tracks) {
+  return tracks.reduce((best, t) => {
+    if (!best) return t;
+    return (t.bandwidth || 0) > (best.bandwidth || 0) ? t : best;
+  }, null);
+}
+
+function bestTrackForHeight(tracks, height, reference = null) {
+  const candidates = tracks.filter(t => (t.height || 0) === height);
+  if (!candidates.length) return null;
+
+  const ref = reference || tracks.find(t => t.active) || null;
+  const refAudio = trackAudioKey(ref);
+  if (refAudio) {
+    const sameAudio = candidates.filter(t => trackAudioKey(t) === refAudio);
+    if (sameAudio.length) return chooseHighestBandwidth(sameAudio);
+  }
+  return chooseHighestBandwidth(candidates);
+}
+
+function qualityTracksByHeight(tracks) {
+  const heights = [...new Set(tracks.map(t => t.height || 0).filter(h => h > 0))]
+    .sort((a, b) => b - a);
+  return heights
+    .map(h => bestTrackForHeight(tracks, h))
+    .filter(Boolean);
+}
+
+// Re-apply the user's quality preference after a fresh Shaka load or manifest
+// track update. Keep the preference if the height temporarily disappears so a
+// live Period change does not silently drop back to Auto.
+function restoreQualityPreference() {
+  if (!player) return;
+  if (abrEnabled || pinnedHeight === null) {
+    try {
+      player.configure({ abr: { enabled: true } });
+    } catch (err) {
+      console.warn('[quality restore auto failed]', err);
+    }
+    return;
+  }
+  let tracks = [];
+  try {
+    tracks = player.getVariantTracks();
+  } catch (err) {
+    console.warn('[quality restore tracks failed]', err);
+    return;
+  }
+  const target = bestTrackForHeight(tracks, pinnedHeight);
+  try {
+    player.configure({ abr: { enabled: false } });
+  } catch (err) {
+    console.warn('[quality restore fixed-mode failed]', err);
+  }
+  if (target) {
+    try {
+      player.selectVariantTrack(target, false);
+    } catch (err) {
+      console.warn('[quality restore select failed]', err);
+    }
+  }
+  refreshQualityActive();
+}
+
+function handleTracksChanged() {
+  restoreQualityPreference();
+  buildQualityMenu();
+}
+
+// ── Quality selector ──────────────────────────────────────────────────────
+function buildQualityMenu() {
+  if (!player) return;
+  let tracks = [];
+  try {
+    tracks = player.getVariantTracks();
+  } catch (err) {
+    console.warn('[quality menu tracks failed]', err);
+    return;
+  }
+
+  // One visible option per height; internally prefer the variant that preserves
+  // the currently selected audio language / role / channel layout.
+  const sorted = qualityTracksByHeight(tracks);
+
+  qualMenu.innerHTML = '';
+
+  // Auto
+  const autoEl = makeQI('Auto', null);
+  autoEl.addEventListener('click', () => {
+    abrEnabled = true;
+    pinnedHeight = null;
+    if (player && !reconnecting) {
+      try {
+        player.configure({ abr: { enabled: true } });
+      } catch (err) {
+        console.warn('[quality auto failed]', err);
+      }
+    }
+    qualBtn.textContent = 'Auto';
+    refreshQualityActive();
+    setQualityMenuOpen(false, { restoreFocus: true });
+  });
+  qualMenu.appendChild(autoEl);
+
+  for (const t of sorted) {
+    const label = `${t.height}p`;
+    const el = makeQI(label, t.id, t.height);
+    el.addEventListener('click', () => {
+      abrEnabled = false;
+      pinnedHeight = t.height;
+      if (player && !reconnecting) {
+        try {
+          const currentTracks = player.getVariantTracks();
+          const target = bestTrackForHeight(currentTracks, t.height) || t;
+          player.configure({ abr: { enabled: false } });
+          player.selectVariantTrack(target, true, QUALITY_SWITCH_SAFE_MARGIN);
+        } catch (err) {
+          console.warn('[quality select failed]', err);
+        }
+      }
+      qualBtn.textContent = label;
+      refreshQualityActive();
+      setQualityMenuOpen(false, { restoreFocus: true });
+    });
+    qualMenu.appendChild(el);
+  }
+  refreshQualityActive();
+}
+
+function makeQI(label, trackId, height = null) {
+  const el = document.createElement('button');
+  el.type = 'button';
+  el.className = 'qi';
+  el.setAttribute('role', 'menuitemradio');
+  el.setAttribute('aria-checked', 'false');
+  if (trackId !== null) el.dataset.tid = trackId;
+  if (height !== null) el.dataset.height = String(height);
+  el.innerHTML = `<span>${label}</span><span class="ck">✓</span>`;
+  el.addEventListener('keydown', handleQualityMenuKeydown);
+  return el;
+}
+
+function refreshQualityActive() {
+  if (!player) return;
+  let active = null;
+  try {
+    active = player.getVariantTracks().find(t => t.active);
+  } catch (err) {
+    console.warn('[quality active failed]', err);
+    return;
+  }
+  if (abrEnabled) {
+    qualBtn.textContent = active && active.height ? `Auto (${active.height}p)` : 'Auto';
+  } else if (pinnedHeight !== null) {
+    qualBtn.textContent = `${pinnedHeight}p`;
+  }
+  qualMenu.querySelectorAll('.qi').forEach((el, i) => {
+    const selected = i === 0
+      ? abrEnabled
+      : (!abrEnabled && (
+          (pinnedHeight !== null && String(pinnedHeight) === el.dataset.height) ||
+          (pinnedHeight === null && active && String(active.id) === el.dataset.tid)
+        ));
+    el.classList.toggle('active', selected);
+    el.setAttribute('aria-checked', selected ? 'true' : 'false');
+    el.tabIndex = selected ? 0 : -1;
+  });
+}
+
+function qualityItems() {
+  return Array.from(qualMenu.querySelectorAll('.qi'));
+}
+
+function activeQualityItem() {
+  return qualityItems().find(el => el.classList.contains('active')) || qualityItems()[0] || null;
+}
+
+function setQualityMenuOpen(open, opts = {}) {
+  const { focusActive = false, restoreFocus = false } = opts;
+  qualMenu.classList.toggle('open', open);
+  qualBtn.setAttribute('aria-expanded', String(open));
+  qualMenu.setAttribute('aria-hidden', String(!open));
+  if (open && focusActive) {
+    requestAnimationFrame(() => {
+      const target = activeQualityItem();
+      if (target) target.focus();
+    });
+  } else if (!open && restoreFocus) {
+    qualBtn.focus();
+  }
+}
+
+function moveQualityFocus(delta) {
+  const items = qualityItems();
+  if (!items.length) return;
+  const current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const index = Math.max(0, items.indexOf(current));
+  items[(index + delta + items.length) % items.length].focus();
+}
+
+function handleQualityMenuKeydown(e) {
+  switch (e.key) {
+    case 'ArrowDown':
+      e.preventDefault();
+      moveQualityFocus(1);
+      break;
+    case 'ArrowUp':
+      e.preventDefault();
+      moveQualityFocus(-1);
+      break;
+    case 'Home':
+      e.preventDefault();
+      qualityItems()[0]?.focus();
+      break;
+    case 'End': {
+      e.preventDefault();
+      const items = qualityItems();
+      items[items.length - 1]?.focus();
+      break;
+    }
+    case 'Escape':
+      e.preventDefault();
+      setQualityMenuOpen(false, { restoreFocus: true });
+      break;
+    case 'Tab':
+      setQualityMenuOpen(false);
+      break;
+  }
+}
+
+qualBtn.addEventListener('click', e => {
+  e.stopPropagation();
+  setQualityMenuOpen(!qualMenu.classList.contains('open'), { focusActive: true });
+});
+qualBtn.addEventListener('keydown', e => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    setQualityMenuOpen(true, { focusActive: true });
+  } else if (e.key === 'Escape') {
+    setQualityMenuOpen(false);
+  }
+});
+document.addEventListener('click', () => setQualityMenuOpen(false));
+qualMenu.addEventListener('click', e => e.stopPropagation());
+
+// ── Fullscreen ────────────────────────────────────────────────────────────
+function fullscreenElement() {
+  return document.fullscreenElement || document.webkitFullscreenElement || null;
+}
+
+function toggleFullscreen() {
+  if (fullscreenElement()) {
+    if (document.exitFullscreen) {
+      document.exitFullscreen().catch(() => {});
+    } else if (document.webkitExitFullscreen) {
+      document.webkitExitFullscreen();
+    }
+  } else if (wrap.requestFullscreen) {
+    wrap.requestFullscreen().catch(() => {});
+  } else if (wrap.webkitRequestFullscreen) {
+    wrap.webkitRequestFullscreen();
+  } else if (video.webkitEnterFullscreen) {
+    video.webkitEnterFullscreen();
+  }
+}
+
+function refreshFullscreenIcon() {
+  const fs = !!fullscreenElement();
+  icoExpand.style.display = fs ? 'none' : '';
+  icoShrink.style.display = fs ? '' : 'none';
+}
+
+document.addEventListener('fullscreenchange', refreshFullscreenIcon);
+document.addEventListener('webkitfullscreenchange', refreshFullscreenIcon);
+video.addEventListener('webkitbeginfullscreen', refreshFullscreenIcon);
+video.addEventListener('webkitendfullscreen', refreshFullscreenIcon);
+
+btnFs.addEventListener('click', toggleFullscreen);
+
+// ── Keyboard shortcuts ────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  const target = e.target instanceof HTMLElement ? e.target : null;
+  if (target && (['INPUT','TEXTAREA','SELECT','BUTTON'].includes(target.tagName) || target.isContentEditable)) return;
+  switch (e.key) {
+    case ' ': case 'k': case 'K':
+      e.preventDefault(); togglePlay(); showControls(false); break;
+    case 'ArrowLeft': case 'j': case 'J':
+      e.preventDefault(); seek(-10); showControls(false); break;
+    case 'ArrowRight': case 'l': case 'L':
+      e.preventDefault(); seek(+10); showControls(false); break;
+    case 'ArrowUp':
+      e.preventDefault();
+      video.muted = false;
+      video.volume = Math.min(1, video.volume + 0.05);
+      showControls(false); break;
+    case 'ArrowDown':
+      e.preventDefault();
+      video.volume = Math.max(0, video.volume - 0.05);
+      showControls(false); break;
+    case 'm': case 'M':
+      video.muted = !video.muted; showControls(false); break;
+    case 'f': case 'F':
+      toggleFullscreen(); break;
+    case 'Escape':
+      setQualityMenuOpen(false); break;
+    default:
+      if (!isLive && e.key >= '0' && e.key <= '9') {
+        video.currentTime = (video.duration || 0) * (parseInt(e.key) / 10);
+        showControls(false);
+      }
+  }
+});
+
+// ── Error ─────────────────────────────────────────────────────────────────
+function showError(msg) {
+  errorMsg.textContent = msg;
+  errorBox.classList.add('show');
+  shakaBuffering = false;
+  setStartOverlayVisible(false);
+  clearWaitingState();
+  resetRecoveryState();
+  stallRecovering = false;
+}
+
+document.addEventListener('DOMContentLoaded', init);
+
+// ── Cleanup on page unload (mobile-Safari friendly) ──────────────────────
+window.addEventListener('pagehide', () => {
+  stopModeWatcher();
+  stopLiveProgressTicker();
+  stopAVResyncWatchdog();
+  stopStallWatchdog();
+  clearInitialResync();
+  clearRecoveryTimer();
+  if (player) player.destroy().catch(() => {});
+});
+</script>
+</body>
+</html>
