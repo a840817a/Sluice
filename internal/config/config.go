@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"io"
 	"os"
 	"time"
 
@@ -115,7 +117,16 @@ func Load(path string) (*Config, error) {
 	defer f.Close()
 
 	cfg := &Config{}
-	if err := yaml.NewDecoder(f).Decode(cfg); err != nil {
+	// An empty file is a valid config, not a parse error: a mounted but empty
+	// ConfigMap or a placeholder file means "override nothing", and the
+	// environment and applyDefaults still have to run. The YAML decoder reports
+	// an empty document as io.EOF, which is the only error that means this.
+	if err := yaml.NewDecoder(f).Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	// YAML, then environment, then defaults. Defaults run last and only fill
+	// values that are still empty, so an override is never clobbered.
+	if err := cfg.applyEnv(); err != nil {
 		return nil, err
 	}
 	cfg.applyDefaults()
@@ -130,7 +141,7 @@ func (c *Config) applyDefaults() {
 		c.Admin.Username = "admin"
 	}
 	if c.Admin.Password == "" {
-		c.Admin.Password = "admin"
+		c.Admin.Password = DefaultAdminPassword
 	}
 	if c.Worker.FetchWorkers <= 0 {
 		c.Worker.FetchWorkers = 4

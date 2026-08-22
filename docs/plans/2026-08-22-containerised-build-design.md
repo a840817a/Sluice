@@ -523,8 +523,15 @@ checklist has been run on such a host.
 ## 10. Distribution: GHCR
 
 This is the reason the project is being containerised. A host running Sluice
-needs a registry credential and a tag — no source, no Go toolchain, no build
-step, no config file to prepare, and a rollback that is one tag away.
+needs a registry credential, a tag, and an admin password — no source, no Go
+toolchain, no build step, no config file to prepare, and a rollback that is one
+tag away.
+
+The password is not an oversight in that list. The image listens on `:8080`,
+which is not loopback, so §5's guard requires `SLUICE_ADMIN_PASSWORD` before it
+will start. Binding the image to loopback instead would satisfy "run with
+nothing" literally while making the published port unreachable, which is worse
+than one required variable.
 
 **Resolved:** the earlier "config file is mandatory for the operator to supply"
 rule is dropped in favour of pull-and-run convenience. The image ships its own
@@ -621,11 +628,12 @@ channel:
 
 Pull-and-run (§5, §10):
 
-- A container started from the image with **no config mounted and no env set**
-  serves on loopback.
-- The same container with a non-loopback listener and the default password
-  **refuses to start**, and names `SLUICE_ADMIN_PASSWORD` in the message.
-- Setting `SLUICE_ADMIN_PASSWORD` lets it start and the admin API accepts it.
+- A container started with **no config mounted and only `SLUICE_ADMIN_PASSWORD`
+  set** serves `/healthz`. **Verified 2026-08-22.**
+- The same container with **nothing** set refuses to start and names
+  `SLUICE_ADMIN_PASSWORD` in the message — the image listens on `:8080`, so the
+  §5 guard applies. **Verified 2026-08-22.**
+- An empty config file loads as "override nothing" rather than failing to parse.
 - Mounting a config file over `/etc/sluice/config.yaml` still wins.
 
 Distribution (§10), verifiable once step 0 of §13 is done:

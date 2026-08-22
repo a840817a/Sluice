@@ -49,7 +49,14 @@ func selfSignedCert(ip string) (tls.Certificate, error) {
 }
 
 func main() {
-	cfgPath := flag.String("config", "config.yaml", "path to config file")
+	// SLUICE_CONFIG is the env form of -config. Both exist because a container
+	// image sets environment variables far more easily than it rewrites the
+	// command line — Kubernetes in particular. The flag still wins when given.
+	defaultCfg := "config.yaml"
+	if v, ok := os.LookupEnv("SLUICE_CONFIG"); ok && v != "" {
+		defaultCfg = v
+	}
+	cfgPath := flag.String("config", defaultCfg, "path to config file (env: SLUICE_CONFIG)")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
@@ -59,6 +66,15 @@ func main() {
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
 		slog.Error("config load failed", "err", err)
+		os.Exit(1)
+	}
+
+	// The image ships a config so it runs with nothing mounted, which means
+	// nobody is made to look at admin.password before starting. Refuse the
+	// built-in one on any address that is not loopback rather than serve an
+	// admin API that can create and delete channels behind admin/admin.
+	if err := cfg.CheckAdminPassword(); err != nil {
+		slog.Error("refusing to start", "err", err)
 		os.Exit(1)
 	}
 
