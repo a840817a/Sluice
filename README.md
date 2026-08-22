@@ -62,49 +62,136 @@ A channel's `health` endpoint advertises both its primary and, where available, 
 
 ## Getting Started
 
-### Build
+### Run the published image
+
+The gateway is distributed as a container image, so a host needs nothing
+installed — no Go toolchain, no source checkout, no build step.
+
+```bash
+docker login ghcr.io          # or: podman login ghcr.io
+docker run -d --name sluice \
+  -p 8080:8080 \
+  -v "$PWD/data:/data" \
+  -e SLUICE_ADMIN_PASSWORD=pick-something \
+  ghcr.io/a840817a/sluice:latest
+```
+
+`SLUICE_ADMIN_PASSWORD` is required: the gateway refuses to start with its
+built-in password on any address that is not loopback, because the admin API it
+guards can create and delete channels. Rolling back is a tag, not a rebuild —
+pin `:0.1.0` rather than `:latest` when that matters.
+
+The image ships its own `/etc/sluice/config.yaml`, so no config file has to be
+prepared. Everything below is optional tuning.
+
+Images are published for `linux/amd64` and `linux/arm64` under one tag; the
+right one is selected for you.
+
+### Run with compose
+
+```bash
+cp .env.example .env      # then set SLUICE_ADMIN_PASSWORD — it starts empty
+make up                   # http://localhost:8080
+make logs
+make down
+```
+
+For DRM playback from a phone or another machine, HTTPS is required: EME needs a
+secure context, and `http://<LAN-IP>` is not one while `http://localhost` is.
+
+```bash
+make up-tls               # detects this host's address, self-signed cert
+```
+
+The browser will warn — the certificate is self-signed and that is inherent.
+What it will *not* do is fail with a name mismatch, which cannot be clicked
+through: the certificate covers `localhost`, both loopback addresses, this
+host's LAN address and the container's own.
+
+### Build from source
+
+Needed only to develop the gateway; running it does not require this.
 
 ```bash
 go build -o sluice ./cmd/gateway
-```
-
-### Configure
-
-Copy the example config and edit as needed:
-
-```bash
 cp config.yaml.example config.yaml
-```
-
-Minimum required fields:
-
-```yaml
-server:
-  addr: ":8080"
-  base_url: "http://your-gateway-host:8080"
-
-admin:
-  username: "admin"
-  password: "changeme"
-
-store:
-  data_dir: "./data"
-```
-
-### Run
-
-```bash
 ./sluice -config config.yaml
 ```
 
-Channels are added at runtime via the Admin API — no restart required.
+Channels are added at runtime through the Admin API — no restart required.
+
+## Deployment notes
+
+### Disk grows without limit by default
+
+`store.cleanup` defaults to `disabled`: segments are never deleted. On a bind
+mount you can see that happening. In a **named volume you cannot** — it grows
+inside the engine's storage until the host disk fills and unrelated services
+start failing. A live channel running for days makes this a matter of when.
+
+The bind mount at `./data` is the default for exactly this reason. If you switch
+to a named volume (`DATA_MOUNT=sluice-data`), watch it:
+
+```bash
+docker system df -v | grep sluice-data
+```
+
+Set `cleanup: on_expire` to drop segments as they leave the window. Note the
+volume also holds AES-128 content keys, so it is not merely a disposable cache.
+
+### Configuration
+
+Two ways in, and they compose: the config file, and `SLUICE_*` environment
+variables that override it. Variables exist only for secrets and for values that
+differ between hosts running the same image — tuning knobs stay in the file.
+
+| Variable | Overrides |
+|---|---|
+| `SLUICE_CONFIG` | config file path (same as `-config`) |
+| `SLUICE_SERVER_ADDR` | `server.addr` |
+| `SLUICE_SERVER_BASE_URL` | `server.base_url` |
+| `SLUICE_ADMIN_USERNAME` / `SLUICE_ADMIN_PASSWORD` | `admin.*` |
+| `SLUICE_STORE_DATA_DIR` | `store.data_dir` |
+| `SLUICE_UPSTREAM_AUTH_HEADER` / `SLUICE_UPSTREAM_AUTH_VALUE` | `upstream.*` |
+| `SLUICE_TLS_SELF_SIGNED` / `SLUICE_TLS_IP` | `server.tls.*` |
+| `SLUICE_TLS_CERT_FILE` / `SLUICE_TLS_KEY_FILE` | `server.tls.*` |
+
+`SLUICE_ADMIN_PASSWORD` and `SLUICE_UPSTREAM_AUTH_VALUE` also accept a `_FILE`
+suffix naming a path to read the value from, so Docker and Kubernetes secrets —
+which arrive as mounted files — need no wrapper.
+
+To trust a private or corporate CA for upstream fetches, mount the bundle and
+point Go at it. This **replaces** the system roots rather than adding to them, so
+concatenate the public roots into the same file:
+
+```yaml
+volumes: [./corp-ca.pem:/etc/sluice/ca.pem:ro]
+environment: { SSL_CERT_FILE: /etc/sluice/ca.pem }
+```
+
+### Podman
+
+Supported by design, but **not yet tested on a Podman host** — treat the
+following as instructions to verify, not as verified behaviour.
+
+- Rootless needs `UserNS=keep-id:uid=65532,gid=65532` for the bind mount, so the
+  data directory stays owned by you and remains writable inside.
+- On SELinux systems the mount needs `:Z`.
+- Rootless cannot bind ports below 1024, so `addr: ":443"` needs a proxy, a port
+  mapping, or `net.ipv4.ip_unprivileged_port_start`.
+
+### Docker on Linux
+
+The container runs as uid 65532, while a bind-mounted `./data` belongs to you.
+Set `SLUICE_UID=$(id -u)` — `make up` does it for you. Docker Desktop on macOS
+maps ownership and does not need this.
 
 ## Configuration Reference
 
 ```yaml
 server:
   addr: ":8080"                    # Listening address
-  base_url: "http://localhost:8080" # Public URL rewritten into manifest
+  base_url: ""                     # Empty (default) = relative URLs; see note below
 
 admin:
   username: "admin"                # HTTP Basic Auth for /admin endpoints
@@ -130,6 +217,13 @@ window:
   depth: "120s"                    # Sliding window size (timeShiftBufferDepth)
   safe_edge_buffer: "6s"           # Buffer behind live edge to prevent player race
 ```
+
+`base_url` is empty by default, which makes the gateway emit **relative** URLs.
+Players resolve those against the URL they fetched the manifest from, so one
+configuration is correct at `localhost`, at a LAN address over TLS, and behind a
+reverse proxy simultaneously — nothing to change when the address does. Set it
+only for a proxy that mounts the gateway under a sub-path (`/sluice/`), where a
+root-relative `/v1/...` would escape the prefix.
 
 The source URL is **not** a gateway-level setting — it is per channel (`mpd_url`), set through the Admin API. Per-channel config is persisted in `{data_dir}/channels.json`.
 
@@ -281,6 +375,10 @@ curl -u admin:changeme -X POST \
 ## Security
 
 - Admin endpoints are protected with HTTP Basic Auth
+- The gateway **refuses to start** with the built-in `admin` password on any
+  address that is not loopback. Distributing an image means nobody is forced to
+  look at `admin.password` before running it, so the check is made at startup
+  instead. Loopback is exempt, so local development is unaffected
 - `mpd_url` is validated to allow only `http://` and `https://` schemes
 - DRM license requests are forwarded with configurable auth headers; client IP forwarding is opt-in
 - The AES-128 key proxy resolves only key URIs seen in the channel's own playlists, never a URL supplied by the caller
@@ -289,6 +387,13 @@ curl -u admin:changeme -X POST \
 ## Development
 
 ```bash
+# The four checks CI runs: build, vet, gofmt, and the race-enabled tests
+make verify
+
+# Images (ENGINE=podman for Podman)
+make image
+make image-multiarch
+
 # Run all tests
 go test ./...
 
