@@ -1,0 +1,97 @@
+# Verification and image publishing.
+#
+# Published images come from here, not from a laptop: a locally built image
+# carries whatever happened to be in that working tree, which is the ambiguity
+# tags exist to remove.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # From go.mod, so the toolchain cannot drift from what the code
+          # declares.
+          go-version-file: go.mod
+          cache: true
+
+      # The same target developers run. Two copies of these four commands would
+      # drift, and the copy that drifts is always the one nobody runs locally.
+      - name: make verify
+        run: make verify
+
+  image:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # A GHCR reference must be lowercase, and this repository is
+      # "a840817a/Sluice" with a capital S. The idiomatic
+      # ghcr.io/${{ github.repository }} would fail to push here — quietly
+      # correct on most repositories, and wrong on this one.
+      - name: Resolve image name
+        id: img
+        run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      # Provides a docker-container builder. Buildx's default docker driver
+      # cannot produce multi-platform images at all, which is the failure this
+      # step quietly prevents.
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.img.outputs.name }}
+          # latest must track releases, not main: a host pulling it should get
+          # something released, not the last commit that happened to build.
+          flavor: latest=false
+          tags: |
+            type=sha,prefix=sha-,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # One tag has to serve an amd64 server and an arm64 machine, because
+          # whoever pulls should not have to know which they are on. Cheap here:
+          # the binary is cgo-free, so this cross-compiles rather than emulating.
+          platforms: linux/amd64,linux/arm64
+          # Pull requests build to prove the Dockerfile still works, but publish
+          # nothing.
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
