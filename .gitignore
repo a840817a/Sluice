@@ -5,9 +5,11 @@
 /tmp/
 
 # Real config carries admin credentials and upstream URLs; only the example
-# belongs in the repo.
+# belongs in the repo. The same applies to .env, which holds the container's
+# admin password and host-specific values.
 /config.yaml
 /config.yml
+/.env
 
 # Compiled binaries
 /gateway
