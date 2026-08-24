@@ -77,12 +77,20 @@ MOUNT="$WORK/data:/data"
 # channels configured the gateway writes nothing at all, so "did files appear"
 # reports a failure on a perfectly good mount. The uid/gid below are the ones
 # the runtime image actually runs as.
-PROBE_IMG="${PROBE_IMG:-docker.io/library/alpine:3.20}"
-podman pull -q "$PROBE_IMG" >/dev/null 2>&1
+# The probe needs a shell, which the runtime image does not have, *and* the same
+# USER as the runtime image — otherwise it tests uid/gid semantics the real
+# container never uses. The debug target is exactly that image plus a shell, so
+# it is built here rather than substituting alpine and guessing at --user, which
+# maps differently again under rootless keep-id.
+PROBE_IMG="${PROBE_IMG:-sluice-probe:local}"
+if ! podman image exists "$PROBE_IMG" 2>/dev/null; then
+	podman build -q --target debug -t "$PROBE_IMG" . >/dev/null 2>&1 \
+		|| { echo "  could not build the debug probe image"; }
+fi
 
-probe_write() { # $1: label
-	podman run --rm --user 65532:0 "${USERNS[@]}" -v "$MOUNT" "$PROBE_IMG" \
-		sh -c 'touch /data/probe && rm -f /data/probe' >/dev/null 2>&1
+probe_write() {
+	podman run --rm "${USERNS[@]}" -v "$MOUNT" --entrypoint sh "$PROBE_IMG" \
+		-c 'touch /data/probe && rm -f /data/probe' >/dev/null 2>&1
 }
 
 # Tested both ways on purpose. A check that only runs the fixed case proves the
@@ -133,15 +141,15 @@ head_ "SELinux"
 if [ "$SELINUX" = "true" ]; then
 	# :Z has to be shown to be *necessary*, not merely present.
 	chmod 0775 "$WORK/data"
-	if podman run --rm --user 65532:0 "${USERNS[@]}" -v "$WORK/data:/data" \
-		"$PROBE_IMG" sh -c 'touch /data/z && rm -f /data/z' >/dev/null 2>&1; then
+	if podman run --rm "${USERNS[@]}" -v "$WORK/data:/data" --entrypoint sh \
+		"$PROBE_IMG" -c 'touch /data/z && rm -f /data/z' >/dev/null 2>&1; then
 		no "the mount works WITHOUT :Z on an SELinux host" \
 			"the :Z instruction is then unnecessary here — check the policy before copying it forward"
 	else
 		ok "without :Z the mount is denied (so the instruction is necessary)"
 	fi
-	if podman run --rm --user 65532:0 "${USERNS[@]}" -v "$WORK/data:/data:Z" \
-		"$PROBE_IMG" sh -c 'touch /data/z && rm -f /data/z' >/dev/null 2>&1; then
+	if podman run --rm "${USERNS[@]}" -v "$WORK/data:/data:Z" --entrypoint sh \
+		"$PROBE_IMG" -c 'touch /data/z && rm -f /data/z' >/dev/null 2>&1; then
 		ok "with :Z the mount works"
 	else
 		no "even :Z does not make the mount work"
@@ -236,10 +244,15 @@ fi
 
 head_ "Rootless low ports"
 if [ "$ROOTLESS" = "true" ]; then
-	if podman run --rm -p 443:8080 "$IMAGE" --help >/dev/null 2>&1; then
-		ok "this host can bind 443 rootless (ip_unprivileged_port_start is low)"
+	# Must test the port binding alone. Running the gateway with a bad flag
+	# also exits non-zero, and that would read as a binding failure.
+	out=$(podman run --rm -p 443:8080 --entrypoint sh "$PROBE_IMG" -c true 2>&1)
+	if [ $? -eq 0 ]; then
+		ok "this host binds 443 rootless (ip_unprivileged_port_start is lowered)"
+		printf '        %s\n' "so addr: \":443\" works here; it does not on a default host"
 	else
-		ok "binding 443 rootless fails as documented — use a proxy or a mapping"
+		ok "binding 443 rootless is refused, as documented"
+		printf '        %s\n' "${out##*: }"
 	fi
 else
 	meh "not rootless"
