@@ -10,6 +10,17 @@ Two launchers, one image and one `.env` between them:
 
 ## Podman: what must be checked before trusting it
 
+Run it rather than reading it:
+
+```bash
+./scripts/verify-podman.sh            # against the published image
+./scripts/verify-podman.sh --build    # also builds locally, including multi-arch
+```
+
+That script reports PASS/FAIL for each item below. It has not been run either —
+if it is wrong about how Podman behaves, that is a finding worth as much as any
+other here.
+
 `sluice.container` was written from documentation, on a machine with no Podman.
 It has never been started. Until the list below passes on a real host, the
 Podman path is unverified — and a deployment file that looks finished is more
