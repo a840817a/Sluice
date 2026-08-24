@@ -745,58 +745,27 @@ Distribution (§10), verifiable once step 0 of §13 is done:
 - Tagging `v0.1.0` produces `0.1.0`, `0.1`, `0`, and moves `latest`; a plain
   `main` push does **not** move `latest`.
 
-Manual — Podman path, **must be run on an actual Podman host**; cannot be done
-on the development machine (§9). Until every line here is checked, the Podman
-path is untested and will be described as such:
+Manual — Podman path. **Run and passing, 2026-08-24** (Podman 5.8.2, SELinux
+enforcing, rootful and rootless): `scripts/verify-podman.sh --build` reports
+15/15, and the Quadlet unit was additionally started under systemd — healthy,
+serving, and recovered within five seconds of `podman kill -s KILL`. The script
+is the checklist; run it again after touching the Dockerfile, the unit, or
+anything about volumes.
 
-- `podman build` for the default target; `--platform … --manifest` for two
-  architectures (settles UNVERIFIED #1).
-- Rootless with `keep-id`: the container writes segments to the bind-mounted
-  `./data`, and the directory is still owned by the invoking user afterwards —
-  readable and deletable without `sudo` (UNVERIFIED #2b). This is the default
-  path, so it is the one that must work.
-- Rootless with `DATA_MOUNT` set to a named volume: also writable (UNVERIFIED #2).
-- On an SELinux host, the bind mount works with `:Z` and fails without it —
-  confirming the README instruction is necessary rather than superstition.
-- `podman healthcheck run` reports healthy (UNVERIFIED #3).
-- Read-only rootfs starts and serves (UNVERIFIED #4).
-- The Quadlet unit starts under systemd, restarts on failure, and logs to
-  journald.
-- A secret delivered via `podman secret` is read through the `_FILE` convention.
+## 14. What is still open
 
-## 13. Implementation order
+Two items, neither blocking, both stated here rather than left to be discovered.
 
-Each step ends with the four-check pass and its own commit.
+**The DRM license URL under an empty `base_url` (§3).** Never tested. Making
+output relative is the change everything else was built on, and this is the one
+part of it that cannot be settled by reading a spec: `gwurl.LicenseURL` with an
+empty base yields `/v1/channels/{id}/license/playready`, and whether a player
+resolves a relative license-server URL from the manifest is player behaviour.
+Segment playback is unaffected either way — the fallback is narrow, keeping
+license URLs absolute while everything else stays relative — but until a DRM
+channel is played from a device that is not the gateway host, the default ships
+unproven for DRM content. Non-DRM playback is verified.
 
-0. **GitHub remote.** `origin` is set to `https://github.com/a840817a/Sluice.git`
-   but the remote is **empty** — nothing has been pushed. Two things remain, both
-   yours: decide whether the branch is `master` (current local name) or `main`
-   (the convention this repo's tooling assumes, and what §10's tag rules are
-   written against), then push. Pushing is outward-facing, so it waits for you.
-1. `.dockerignore`, Dockerfile (both targets); verify a real `docker build`.
-2. Relative-URL tests + make `base_url` empty the documented default.
-3. `internal/config` env overrides, `_FILE` support, `SLUICE_CONFIG`, and the
-   unsafe-default refusal (§5) + tests.
-4. Self-signed SAN fix (list, additive, demoted enumeration) + tests.
-5. `-healthcheck` flag.
-6. `compose.yaml`, `.env.example`, `scripts/host-ip.sh` (writing `.env`, shared
-   by compose and Quadlet per §7).
-7. Makefile.
-8. CI workflow: `make verify`, then multi-arch build and push to GHCR (§10),
-   including the tagging rules.
-9. Cut `v0.1.0` and verify the published tag set and manifest list end to end.
-10. Quadlet unit `sluice.container` for the Podman host (§9), with `AuthFile=`
-    for the GHCR credential.
-11. README: build/run rewritten around **pulling an image** as the primary path,
-    with build-from-source secondary; plus the `cleanup` warning (both mount
-    styles), the config-file delivery table, the rootless low-port caveat, and
-    the Podman section marked untested.
-
-Steps 1–9 and 11 are verifiable here **once step 0 is done**. Step 10 (Quadlet)
-is written but **cannot be verified on this machine**; it ships marked untested,
-with the §12 Podman checklist as its acceptance criteria for whoever runs it on
-the target host.
-
-Step 2 comes early because its outcome may narrow step 4 and 6 — if relative
-URLs fully work, host detection stays a convenience; if the license URL needs an
-absolute base, that changes what `make up-tls` must inject.
+**Docker on Linux (`SLUICE_UID`).** No such host was available. The reasoning is
+identical to rootful Podman, which is confirmed; reasoning is not a test, which
+is the whole lesson of §9.
