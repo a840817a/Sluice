@@ -1,12 +1,13 @@
 # Quadlet unit for running Sluice under Podman + systemd.
 #
-# The container behaviour here is verified: scripts/verify-podman.sh passes
-# 15/15 on Podman 5.8.2, rootful and rootless, with SELinux enforcing.
+# Verified 2026-08-24 on Podman 5.8.2 with SELinux enforcing.
+# scripts/verify-podman.sh passes 15/15 rootful and rootless, and this unit was
+# started rootless under systemd: healthy, serving, and back within five seconds
+# of `podman kill -s KILL`.
 #
-# The *unit* is not. `quadlet -dryrun` parses it, which catches syntax and
-# unknown keys and nothing more — it has never been started by systemd, so
-# Restart=, ordering and journald logging are still untried. Run it and fix what
-# breaks here.
+# One thing left open: whether journald captures its output. The test user could
+# not read the journal (not in adm/systemd-journal/wheel, no persistent journal
+# on that host), which says nothing either way about the unit.
 #
 # Install (rootless):
 #   mkdir -p ~/.config/containers/systemd

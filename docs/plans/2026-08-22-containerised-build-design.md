@@ -562,12 +562,17 @@ rootless succeeds because `keep-id` maps the invoking user onto 65532.
 
 ### Still not verified
 
-- **The Quadlet unit has been parsed, never started.** `quadlet -dryrun` accepts
-  it, which catches syntax and unknown keys but says nothing about whether the
-  service comes up, restarts, or logs to journald.
-- **Docker on Linux** (`SLUICE_UID`). No Linux Docker host was available; the
-  reasoning is the same as rootful Podman, which is now confirmed, but the
-  reasoning is not the test.
+- **Docker on Linux** (`SLUICE_UID`). No such host was available. The reasoning
+  is identical to rootful Podman, which is now confirmed — but reasoning is not
+  a test, which is the lesson this section exists to record.
+- Whether journald captures the unit's output. The test user could not read the
+  journal at all, which says nothing either way.
+
+Everything else in this section has been run. The Quadlet unit was started
+rootless under systemd on 2026-08-24: healthy, serving, and recovered within
+five seconds of `podman kill -s KILL`, confirming `Restart=always`. That start
+is also the only test of `HealthCmd=` as Quadlet parses it, rather than as a
+`podman run` argument.
 
 ### Third run, 2026-08-24
 

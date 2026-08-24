@@ -38,10 +38,16 @@ four of the assumptions it now guards were wrong the first time it ran.
 - [x] `ReadOnly=true` starts and serves, with no extra tmpfs.
 - [x] A password from `podman secret` is read through `SLUICE_ADMIN_PASSWORD_FILE`.
 - [x] Rootless refuses ports below 1024 — `pasta` returns EPERM for 443.
-- [ ] **The unit has only been parsed, never started.** `quadlet -dryrun`
-      accepts it, which catches syntax and unknown keys and nothing else.
-      Starting it under systemd, killing it to see `Restart=always` work, and
-      confirming journald gets the logs is still to do.
+- [x] **The unit runs.** Started rootless under systemd: `active (running)`,
+      `Up (healthy)` — which is also the only test of `HealthCmd=` in Quadlet
+      rather than on a `podman run` command line — `healthz` 200, and after
+      `podman kill -s KILL` it was back and healthy within five seconds, so
+      `Restart=always` works.
+- [ ] Reading its logs with `journalctl --user -u sluice` returned "insufficient
+      permissions" on the test host: that user was in none of `adm`,
+      `systemd-journal` or `wheel`, and the host has no persistent journal. That
+      is journal configuration, not a defect in the unit — confirm from root
+      with `journalctl _SYSTEMD_USER_UNIT=sluice.service` if it matters to you.
 
 ## Setup
 
