@@ -167,12 +167,16 @@ RUN mkdir -p /data && chmod 0775 /data
 COPY --from=builder --chown=65532:0 /data /data
 ```
 
-Note `:0` — the **group**, not `65532:65532`. Owning by uid alone works under
-Docker, where container uid 65532 is host uid 65532, but breaks under rootless
-Podman, where container uids map into a subuid range and the numbers do not
-correspond. Group 0 plus `g+rwX` is the portable pattern: Docker's fixed uid,
-rootless Podman's mapped uid, and arbitrary-uid runtimes such as OpenShift all
-retain gid 0, so all three can write.
+Note `:0` — the **group**, not `65532:65532`. Group 0 plus `g+rwX` is the
+portable pattern, because rootless Podman maps uids into a subuid range where
+the numbers do not correspond, while gid 0 survives everywhere — including
+arbitrary-uid runtimes such as OpenShift.
+
+This only works if the *process* is in group 0, which the base image does not
+arrange: it declares `User: "65532"` with no group, giving gid 65532. The
+runtime stage therefore sets `USER 65532:0` explicitly. Without that line the
+ownership is decoration and only the owner bits apply — the failure mode is a
+bind mount owned by anyone else, which is every rootful Podman host.
 
 Without this a named volume mounts root-owned and the process cannot write
 segments — surfacing as a permission error deep in the store, not at startup.
@@ -385,13 +389,27 @@ which chowns the host directory to a mapped subuid and therefore requires
 mount. And an unseen, unbounded data directory is *more* dangerous on a server,
 which is what a Podman host often is.
 
-| Engine | Requirement for the bind mount |
+| Engine / host | Requirement for the bind mount |
 |---|---|
-| Docker Desktop (macOS) | none — the file sharing layer maps ownership to the host user. **Verified 2026-08-22** |
-| Docker (Linux) | `SLUICE_UID=$(id -u)` — see below. **UNVERIFIED**: no Linux Docker host available |
-| Podman (rootful) | none — uids match numerically |
-| Podman (rootless) | `UserNS=keep-id:uid=65532,gid=65532` (Quadlet) — host ownership stays yours |
-| SELinux hosts (Fedora/RHEL) | `:Z` on the mount, or the container cannot read it |
+| Docker Desktop (macOS) | none — the sharing layer maps ownership to the host user. **Verified** |
+| Docker (Linux) | `SLUICE_UID=$(id -u)`, which `make up` passes. **UNVERIFIED** — no Linux Docker host |
+| Podman rootful | the directory must be group 0 with `g+rwX` (`chmod 0775` on a root-owned directory), or owned by 65532. **Verified 2026-08-22: fails without it** |
+| Podman rootless | `UserNS=keep-id:uid=65532,gid=65532` — host ownership stays yours |
+| SELinux (Fedora/RHEL) | `:Z` on the mount. **Verified 2026-08-22** |
+
+**What "uids match numerically" got wrong, three times.** Revisions 3 to 6 each
+asserted some variant of it, and each was wrong for the same reason: what
+decides writability is *who owns the host directory*, never whether a number
+appears on both sides. Docker on macOS hid it by ignoring ownership entirely,
+which is the machine this was designed on.
+
+The third instance was in the image itself. `distroless/static:nonroot`
+declares `User: "65532"` with no group, so the primary gid comes from its
+`/etc/passwd` and is 65532 — not 0. The `--chown=65532:0 --chmod=0775` on
+`/data` therefore bought nothing beyond the owner bits, and the local test that
+"proved" the gid-0 scheme passed only because it was run with an explicit
+`--user 12345:0`, exercising a mode the image never used. The runtime stage now
+sets `USER 65532:0` so the group membership is real.
 
 **Docker on Linux was a gap in earlier revisions.** They claimed uids "match
 numerically" for Docker generally, which is only true because Docker Desktop on
@@ -527,8 +545,32 @@ before anyone relies on them, and until then they are assumptions:
 4. Whether `read_only: true` plus the data volume is sufficient, or Podman needs
    additional tmpfs mounts.
 
-No part of this design will be described as Podman-compatible until the §12
-checklist has been run on such a host.
+### First run on a real host, 2026-08-22
+
+Podman 5.8.2, **rootful**, SELinux enabled. `scripts/verify-podman.sh` reported
+8 pass, 2 fail, 2 skip.
+
+Confirmed working: pulling the multi-arch manifest and resolving amd64; the
+named-volume opt-in; `:Z`; `ReadOnly=true`; a secret delivered as a file and
+read through `_FILE`; and `quadlet -dryrun` parsing `deploy/sluice.container`,
+which nothing had parsed before.
+
+Two failures, both real findings:
+
+1. **Bind mount not writable.** Root cause was the missing `USER 65532:0`
+   above, not anything about Podman. The test itself was also invalid — it
+   inferred writability from files appearing in the directory, and a gateway
+   with no channels writes nothing, so it would have failed on a working mount
+   too. Both are fixed.
+2. **`podman healthcheck run` failed.** Whether Podman reads the image's
+   `HEALTHCHECK` at all is the open question; the script now prints
+   `.Config.Healthcheck` so the next run distinguishes "not read" from "read but
+   failing". If Podman does not read it, the Quadlet unit needs an explicit
+   `HealthCmd=`.
+
+Still unverified after this run: Buildah's `BUILDPLATFORM` / `TARGETARCH`
+support (the run skipped `--build`), rootless behaviour including `keep-id`
+(this host was rootful), and the rootless low-port failure mode.
 
 ## 10. Distribution: GHCR
 

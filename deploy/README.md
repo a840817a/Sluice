@@ -58,6 +58,21 @@ mkdir -p ~/sluice/data
 cp ../.env.example ~/sluice/.env      # set SLUICE_ADMIN_PASSWORD; it starts empty
 ```
 
+The container runs as uid 65532, group 0, so the data directory has to be
+writable by that:
+
+```bash
+# Rootful (the directory is root-owned, so its group is already 0):
+chmod 0775 ~/sluice/data
+
+# Rootless: nothing to do — UserNS=keep-id in the unit maps you onto 65532,
+# and the directory stays owned by you.
+```
+
+Skipping this on a rootful host produces a permission error from deep inside the
+segment store rather than at startup. It was the first failure found when this
+was run on a real Podman host.
+
 The gateway refuses to start with its built-in password on any address that is
 not loopback, so this is not optional.
 

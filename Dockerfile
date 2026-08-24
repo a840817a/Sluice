@@ -70,6 +70,15 @@ CMD ["-config", "/etc/sluice/config.yaml"]
 # HTTPS) and tzdata, runs as uid 65532, and contains no shell or package
 # manager. Must remain the last stage so a plain `docker build` selects it.
 FROM gcr.io/distroless/static-debian12:nonroot AS runtime
+# The base declares USER "65532" with no group, so the primary gid comes from
+# its /etc/passwd and is 65532 — *not* 0. Without this line the gid-0 ownership
+# on /data below buys nothing: the process matches only the owner bits, so a
+# bind mount owned by anyone else (a root-owned directory under rootful Podman,
+# your own directory under Docker for Linux) is unwritable.
+#
+# Stating the group explicitly is what makes the scheme real, and it is also
+# what lets an arbitrary-uid runtime work, since those keep gid 0.
+USER 65532:0
 COPY --from=builder /out/sluice /sluice
 COPY --from=builder --chown=65532:0 --chmod=0775 /out/data /data
 COPY deploy/config.container.yaml /etc/sluice/config.yaml

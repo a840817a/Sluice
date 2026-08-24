@@ -69,29 +69,25 @@ USERNS=()
 MOUNT="$WORK/data:/data"
 [ "$SELINUX" = "true" ] && MOUNT="$MOUNT:Z"
 
-# UNVERIFIED #2b: keep-id must make the mount writable AND leave the directory
-# owned by the invoking user — that second half is the whole reason it is
-# preferred over :U, which chowns it away.
-if podman run --rm "${USERNS[@]}" -v "$MOUNT" --entrypoint /sluice "$IMAGE" \
-	-config /etc/sluice/config.yaml -healthcheck >/dev/null 2>&1; then :; fi
-if podman run --rm "${USERNS[@]}" -v "$MOUNT" --entrypoint sh \
-	"${IMAGE%:*}:latest" -c 'touch /data/probe' >/dev/null 2>&1 || \
-   podman run --rm "${USERNS[@]}" -v "$MOUNT" --entrypoint /bin/sh \
-	"$IMAGE" -c 'touch /data/probe' >/dev/null 2>&1; then
-	ok "container wrote to the bind mount"
+# UNVERIFIED #2b: the mount must be writable AND the directory must still be
+# owned by the invoking user afterwards — that second half is the whole reason
+# keep-id is preferred over :U, which chowns it away.
+#
+# Tested with a shell image rather than by starting the gateway: with no
+# channels configured the gateway writes nothing at all, so "did files appear"
+# reports a failure on a perfectly good mount. The uid/gid below are the ones
+# the runtime image actually runs as.
+PROBE_IMG="${PROBE_IMG:-docker.io/library/alpine:3.20}"
+podman pull -q "$PROBE_IMG" >/dev/null 2>&1
+if podman run --rm --user 65532:0 "${USERNS[@]}" -v "$MOUNT" "$PROBE_IMG" \
+	sh -c 'touch /data/probe' >/dev/null 2>&1; then
+	ok "uid 65532 (gid 0) wrote to the bind mount"
+	rm -f "$WORK/data/probe" 2>/dev/null
 else
-	# distroless has no shell; fall back to letting the gateway create its own
-	# state, which is the behaviour that actually matters.
-	podman run -d --name "$CTR" "${USERNS[@]}" -v "$MOUNT" \
-		-e SLUICE_ADMIN_PASSWORD=verify-only "$IMAGE" >/dev/null 2>&1
-	sleep 3
-	if [ -n "$(ls -A "$WORK/data" 2>/dev/null)" ]; then
-		ok "gateway wrote state into the bind mount"
-	else
-		no "nothing was written to the bind mount" "keep-id may not be mapping as expected"
-	fi
-	podman rm -f "$CTR" >/dev/null 2>&1
+	no "uid 65532 (gid 0) cannot write to the bind mount" \
+		"the directory is $(stat -c '%U:%G %a' "$WORK/data") — needs gid 0 with g+rwX, or chown 65532"
 fi
+
 after=$(stat -c '%u' "$WORK/data")
 if [ "$before" = "$after" ]; then
 	ok "host directory still owned by uid $after (no :U-style chown)"
@@ -133,10 +129,14 @@ podman exec "$CTR" /sluice -config /etc/sluice/config.yaml -healthcheck >/dev/nu
 
 head_ "Healthcheck"
 # UNVERIFIED #3: does Podman honour the image's HEALTHCHECK?
-if podman healthcheck run "$CTR" >/dev/null 2>&1; then
+hc=$(podman inspect "$CTR" --format '{{json .Config.Healthcheck}}' 2>/dev/null)
+if out=$(podman healthcheck run "$CTR" 2>&1); then
 	ok "podman healthcheck run (image HEALTHCHECK honoured)"
 else
-	no "podman healthcheck run failed" "Quadlet may need an explicit HealthCmd="
+	no "podman healthcheck run failed" "error: ${out:-<none>}"
+	printf '        inspect .Config.Healthcheck: %s\n' "${hc:-<empty>}"
+	printf '        %s\n' "if that is null/empty, Podman did not read the image HEALTHCHECK"
+	printf '        %s\n' "and the Quadlet unit needs an explicit HealthCmd= instead."
 fi
 podman rm -f "$CTR" >/dev/null 2>&1
 

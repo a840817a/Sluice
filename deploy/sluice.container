@@ -61,6 +61,11 @@ UserNS=keep-id:uid=65532,gid=65532
 # :Z relabels for SELinux, which Fedora and RHEL need and others ignore.
 # The directory also holds AES-128 content keys, so it is not a scratch cache —
 # back it up and protect it accordingly.
+#
+# The container runs as 65532:0, so this directory must be writable by group 0:
+#   rootful   chmod 0775 %h/sluice/data      (root-owned, group is already 0)
+#   rootless  nothing — keep-id above maps you onto 65532
+# Verified the hard way: without it, rootful Podman fails to write segments.
 Volume=%h/sluice/data:/data:Z
 
 # Per-host values: the admin password, and the address for a self-signed
