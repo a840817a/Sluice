@@ -95,9 +95,11 @@ ReadOnly=true
 # extra key that a spec-conformant reader is free to drop. Docker reads it;
 # Podman does not.
 #
-# Same command the image declares: the runtime image has no curl, so the gateway
-# probes its own /healthz.
-HealthCmd=/sluice -config /etc/sluice/config.yaml -healthcheck
+# JSON array form, and it must stay that way. Podman documents that a plain
+# string is "interpreted as an argument to /bin/sh -c" — and this image has no
+# shell, which is the same reason the gateway probes itself instead of calling
+# curl. A string here fails with no useful message.
+HealthCmd=["/sluice", "-config", "/etc/sluice/config.yaml", "-healthcheck"]
 HealthInterval=30s
 HealthTimeout=5s
 HealthStartPeriod=5s

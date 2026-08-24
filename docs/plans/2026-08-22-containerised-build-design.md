@@ -584,6 +584,29 @@ Two failures, both real findings:
    image healthcheck does not, the command is fine and only the reading of it
    was ever broken.
 
+### Third run, 2026-08-24
+
+13 pass. `USER 65532:0` confirmed: the bind mount is correctly **not** writable
+at `root:root 0755` and writable after `chmod 0775`, so the instruction is now
+known to be both necessary and sufficient. `:Z` likewise passes in both
+directions.
+
+The remaining failure was the fix itself. An explicit `--health-cmd` failed too,
+for a reason the design had already accounted for one level up: Podman documents
+that a health command which is not a JSON array is "interpreted as an argument to
+`/bin/sh -c`", and this image has no shell — the same fact that made the gateway
+probe itself rather than call curl. `HealthCmd=` and `--health-cmd` therefore
+have to use the JSON array form.
+
+Worth stating plainly, because it is the pattern rather than the incident: every
+Podman finding so far has been an assumption that looked verified. The gid-0
+scheme was tested with an explicitly passed `--user 12345:0`, exercising a mode
+the image never ran in. The bind mount and `:Z` were tested only in the fixed
+configuration, which cannot show an instruction is necessary. The healthcheck
+fix was written from the same shell-less premise it then ignored. None of these
+survived contact with a real host, and none would have been caught by more
+careful reading.
+
 ### Second run, 2026-08-22, with `--build`
 
 10 pass, 2 fail. **Buildah supports `FROM --platform=$BUILDPLATFORM` and the

@@ -162,28 +162,42 @@ podman exec "$CTR" /sluice -config /etc/sluice/config.yaml -healthcheck >/dev/nu
 head_ "Healthcheck"
 # UNVERIFIED #3: does Podman honour the image's HEALTHCHECK?
 hc=$(podman inspect "$CTR" --format '{{json .Config.Healthcheck}}' 2>/dev/null)
-if out=$(podman healthcheck run "$CTR" 2>&1); then
-	ok "podman healthcheck run (image HEALTHCHECK honoured)"
+if podman healthcheck run "$CTR" >/dev/null 2>&1; then
+	ok "image HEALTHCHECK honoured (Podman behaviour changed — the unit's HealthCmd= is now redundant)"
+elif [ "$hc" = "null" ] || [ -z "$hc" ]; then
+	# Known and worked around. Reported as a fact rather than a failure: a FAIL
+	# that can never pass just teaches people to skim this output.
+	meh "image HEALTHCHECK not read by Podman (known; OCI configs have no such field)"
+	printf '        %s\n' "the Quadlet unit declares HealthCmd= itself — see the next check"
 else
-	no "podman healthcheck run failed" "error: ${out:-<none>}"
-	printf '        inspect .Config.Healthcheck: %s\n' "${hc:-<empty>}"
-	printf '        %s\n' "if that is null/empty, Podman did not read the image HEALTHCHECK"
-	printf '        %s\n' "which is why the Quadlet unit declares HealthCmd= itself."
+	no "healthcheck defined but failing" "$hc"
 fi
 podman rm -f "$CTR" >/dev/null 2>&1
 # The fix the Quadlet unit uses. If this passes while the image healthcheck does
 # not, the diagnosis is confirmed: the command is fine and Podman simply never
 # read it from the image.
-podman run -d --name "$CTR" \
-	--health-cmd '/sluice -config /etc/sluice/config.yaml -healthcheck' \
-	--health-start-period 5s \
-	-e SLUICE_ADMIN_PASSWORD=verify-only "$IMAGE" >/dev/null 2>&1
-sleep 6
-if podman healthcheck run "$CTR" >/dev/null 2>&1; then
-	ok "explicit --health-cmd works (what HealthCmd= in the unit does)"
-else
-	no "explicit --health-cmd also fails" "$(podman logs "$CTR" 2>&1 | tail -2)"
-fi
+# JSON array form: Podman documents that a plain string is passed to
+# /bin/sh -c, and this image has no shell. Two spellings of the array are in
+# circulation, so both are tried rather than costing another round trip; the
+# unit must use whichever is reported working here.
+try_health() { # $1 label, $2 health-cmd value
+	podman rm -f "$CTR" >/dev/null 2>&1
+	podman run -d --name "$CTR" --health-cmd "$2" --health-start-period 2s \
+		-e SLUICE_ADMIN_PASSWORD=verify-only "$IMAGE" >/dev/null 2>&1 || {
+		no "could not start with $1"; return 1; }
+	sleep 4
+	if out=$(podman healthcheck run "$CTR" 2>&1); then
+		ok "$1 works"
+		return 0
+	fi
+	no "$1 fails" "${out:-<no error text>}"
+	return 1
+}
+try_health 'JSON array, bare command' \
+	'["/sluice", "-config", "/etc/sluice/config.yaml", "-healthcheck"]' || \
+try_health 'JSON array, CMD-prefixed' \
+	'["CMD", "/sluice", "-config", "/etc/sluice/config.yaml", "-healthcheck"]'
+podman rm -f "$CTR" >/dev/null 2>&1
 podman rm -f "$CTR" >/dev/null 2>&1
 
 head_ "Secret delivered as a file"
