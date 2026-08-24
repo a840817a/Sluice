@@ -1,10 +1,12 @@
 # Quadlet unit for running Sluice under Podman + systemd.
 #
-# NOT TESTED. Written from the documented behaviour of Podman and Quadlet; no
-# Podman host was available. Every line marked "verify" below is an assumption
-# until the checklist in docs/plans/2026-08-22-containerised-build-design.md
-# (§12, "Manual — Podman path") has been run. Treat this as a starting point to
-# check, not as a working configuration.
+# The container behaviour here is verified: scripts/verify-podman.sh passes
+# 15/15 on Podman 5.8.2, rootful and rootless, with SELinux enforcing.
+#
+# The *unit* is not. `quadlet -dryrun` parses it, which catches syntax and
+# unknown keys and nothing more — it has never been started by systemd, so
+# Restart=, ordering and journald logging are still untried. Run it and fix what
+# breaks here.
 #
 # Install (rootless):
 #   mkdir -p ~/.config/containers/systemd

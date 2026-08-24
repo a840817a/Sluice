@@ -175,12 +175,17 @@ A Quadlet unit is provided at [`deploy/sluice.container`](deploy/sluice.containe
 with setup steps and the checklist that must pass before it can be trusted in
 [`deploy/README.md`](deploy/README.md).
 
-Supported by design, but **not yet tested on a Podman host** — treat the
-following as instructions to verify, not as verified behaviour.
+Verified on Podman 5.8.2, rootful and rootless, with SELinux enforcing.
 
-- Rootless needs `UserNS=keep-id:uid=65532,gid=65532` for the bind mount, so the
-  data directory stays owned by you and remains writable inside.
-- On SELinux systems the mount needs `:Z`.
+- Rootless needs `UserNS=keep-id:uid=65532,gid=65532` for the bind mount. The
+  data directory then stays owned by you and is writable inside.
+- **Rootful** needs `chmod 0775` on the data directory instead: the container
+  runs as uid 65532 group 0, and a root-owned `0755` directory is not writable.
+- On SELinux the mount needs `:Z` — it is denied without it.
+- **Podman does not read the image's `HEALTHCHECK`.** The Quadlet unit declares
+  `HealthCmd=` itself; a plain `podman run` needs `--health-cmd` in JSON-array
+  form, because a plain string is passed to `/bin/sh -c` and this image has no
+  shell.
 - Rootless cannot bind ports below 1024, so `addr: ":443"` needs a proxy, a port
   mapping, or `net.ipv4.ip_unprivileged_port_start`.
 

@@ -5,53 +5,43 @@ Two launchers, one image and one `.env` between them:
 | File | Engine | Notes |
 |---|---|---|
 | `../compose.yaml` | Docker | Verified working |
-| `sluice.container` | Podman + systemd (Quadlet) | **Not tested** — see below |
+| `sluice.container` | Podman + systemd (Quadlet) | Container behaviour verified; the unit itself is parsed, not yet started |
 | `config.container.yaml` | both | Baked into the image; not deployed by hand |
 
-## Podman: what must be checked before trusting it
+## Podman: verified 2026-08-24
 
-Run it rather than reading it:
+Podman 5.8.2, SELinux enforcing, **rootful and rootless**: 15 pass, 0 fail.
 
 ```bash
-./scripts/verify-podman.sh            # against the published image
-./scripts/verify-podman.sh --build    # also builds locally, including multi-arch
+./scripts/verify-podman.sh --build
 ```
 
-That script reports PASS/FAIL for each item below. It has not been run either —
-if it is wrong about how Podman behaves, that is a finding worth as much as any
-other here.
+Re-run it after changing the Dockerfile, the unit, or anything about volumes —
+four of the assumptions it now guards were wrong the first time it ran.
 
-`sluice.container` was written from documentation, on a machine with no Podman.
-It has never been started. Until the list below passes on a real host, the
-Podman path is unverified — and a deployment file that looks finished is more
-dangerous than one that is obviously missing, so the list is here rather than in
-a commit message.
-
-- [ ] `podman build` succeeds; `--platform linux/amd64,linux/arm64 --manifest`
-      produces both architectures. Confirms Buildah supports the
-      `FROM --platform=$BUILDPLATFORM` and `TARGETOS`/`TARGETARCH` the
-      Dockerfile relies on.
-- [ ] **Rootless with `UserNS=keep-id`**: the container writes segments to
-      `~/sluice/data`, and afterwards that directory is still owned by you —
-      readable and deletable without `sudo`. This is the default path, so it is
-      the one that has to work.
-- [ ] Rootful (no `UserNS=` line) also writes successfully.
-- [ ] `DATA_MOUNT` pointed at a named volume is writable too, which is what the
-      image's `65532:0` ownership with `g+rwX` exists for.
-- [ ] On SELinux, the mount works with `:Z` and **fails without it** — check
-      both, so the instruction is known to be necessary rather than copied.
-- [x] `podman healthcheck run` — **found broken, fixed.** Podman does not read
-      the image's `HEALTHCHECK` (OCI-format configs have no such field), so the
-      unit declares `HealthCmd=` itself. This also means a plain `podman run`
-      has no healthcheck unless you pass `--health-cmd`.
-- [ ] `ReadOnly=true` starts and serves, with no extra tmpfs needed.
-- [ ] `systemctl --user restart sluice` recovers; logs reach journald.
-- [ ] A password delivered by `podman secret` is picked up through
-      `SLUICE_ADMIN_PASSWORD_FILE`.
-- [ ] Rootless cannot bind ports below 1024: confirm the failure mode before
-      someone meets it in production.
-
-Anything that fails is a bug in this unit, not in the host. Please fix it here.
+- [x] `podman build`, and multi-arch with `--platform ... --manifest`. Buildah
+      honours `FROM --platform=$BUILDPLATFORM` and `TARGETOS`/`TARGETARCH`.
+- [x] **Rootless with `keep-id`**: writable, and `~/sluice/data` is still owned
+      by you afterwards. That second half is why `keep-id` is used and `:U` is
+      not.
+- [x] **Rootful**: needs `chmod 0775` on the data directory (see Setup). Denied
+      without it, which is checked both ways so the instruction is known to be
+      necessary rather than copied.
+- [x] Named volume via `DATA_MOUNT` — what the image's `65532:0` with `g+rwX`
+      exists for.
+- [x] SELinux `:Z` — the mount is denied without it and works with it.
+- [x] `podman healthcheck run` — **the image's `HEALTHCHECK` is not read by
+      Podman**, so the unit declares `HealthCmd=` itself, in JSON-array form: a
+      plain string is passed to `/bin/sh -c`, and this image has no shell. A
+      plain `podman run` likewise has no healthcheck unless you pass
+      `--health-cmd`.
+- [x] `ReadOnly=true` starts and serves, with no extra tmpfs.
+- [x] A password from `podman secret` is read through `SLUICE_ADMIN_PASSWORD_FILE`.
+- [x] Rootless refuses ports below 1024 — `pasta` returns EPERM for 443.
+- [ ] **The unit has only been parsed, never started.** `quadlet -dryrun`
+      accepts it, which catches syntax and unknown keys and nothing else.
+      Starting it under systemd, killing it to see `Restart=always` work, and
+      confirming journald gets the logs is still to do.
 
 ## Setup
 

@@ -7,6 +7,14 @@ Goal: build and run Sluice as a container, distributed as an image that hosts
 pull, with a build pipeline that behaves the same on a developer Mac and on a
 Linux host running either Docker or Podman.
 
+> **Revision 7** records the Podman path being run for the first time. Four
+> assumptions failed on contact: the image's process was never in group 0, so
+> the volume-ownership scheme did nothing; Podman does not read the image's
+> `HEALTHCHECK`; a health command that is not a JSON array is passed to
+> `/bin/sh -c`, which a distroless image does not have; and two checks had been
+> testing only the fixed configuration, which cannot show an instruction is
+> necessary. All are fixed and re-run: 15 pass, 0 fail.
+>
 > **Revision 6** makes the bind mount the default data volume on every engine.
 > Revision 5 had defaulted Podman to a named volume on the belief that a
 > rootless bind mount required `:U`, which chowns the host directory and then
@@ -471,6 +479,10 @@ development machine equally. The differences that matter are not cosmetic — on
 of them changes §4 and §8 above — so they are designed around rather than
 papered over with a compatibility note.
 
+**Verified on a real host, rootful and rootless, on 2026-08-24.** Four of the
+assumptions below turned out to be wrong when run; see the results at the end of
+this section.
+
 ### The difference that matters: rootless uid mapping
 
 | | Docker (rootful) | Podman (rootless) |
@@ -527,62 +539,35 @@ The `_FILE` secret convention (§5) pays off here: Quadlet's `Secret=` and
   needs a proxy, `net.ipv4.ip_unprivileged_port_start`, or a port mapping.
   README must say so where it suggests `:443`.
 
-### Explicitly UNVERIFIED
+### Verified on real hosts, 2026-08-24
 
-Podman is not installed on the development machine, so none of this is tested
-here. These are the specific claims that must be confirmed on the Podman host
-before anyone relies on them, and until then they are assumptions:
+Podman 5.8.2, SELinux enforcing, tested **rootful and rootless**:
+15 pass, 0 fail. Everything this section previously listed as an assumption is
+now settled.
 
-1. Buildah's support for `FROM --platform=$BUILDPLATFORM` and the automatic
-   `TARGETOS` / `TARGETARCH` build args. Expected to work on current versions;
-   **not confirmed**.
-2. That the gid-0 volume scheme (§4) actually yields a writable data dir under
-   rootless Podman, for the named-volume opt-in.
-2b. That `UserNS=keep-id:uid=65532,gid=65532` gives a writable bind mount while
-   leaving host ownership unchanged, and the Podman version required for the
-   `uid=`/`gid=` options.
-3. `HEALTHCHECK` behaviour under Podman and Quadlet.
-4. Whether `read_only: true` plus the data volume is sufficient, or Podman needs
-   additional tmpfs mounts.
+| Was assumed | Result |
+|---|---|
+| Buildah honours `FROM --platform=$BUILDPLATFORM` and `TARGETOS`/`TARGETARCH` | Works |
+| gid-0 ownership makes the named volume writable | Works |
+| `keep-id` gives a writable bind mount **and leaves host ownership alone** | Works — directory still owned by uid 1001 afterwards |
+| Podman honours the image `HEALTHCHECK` | **False.** Not read; the unit declares `HealthCmd=` in JSON-array form |
+| `ReadOnly=true` needs no extra tmpfs | Correct |
+| `:Z` is needed on SELinux | Correct, and *necessary* — the mount is denied without it |
+| A `_FILE` secret needs no wrapper | Correct |
+| Rootless cannot bind low ports | Correct — `pasta` refuses 443 with EPERM |
 
-### First run on a real host, 2026-08-22
+The rootless and rootful bind mounts differ in the way the design predicted: at
+`root:root 0755` rootful is correctly denied and needs `chmod 0775`, while
+rootless succeeds because `keep-id` maps the invoking user onto 65532.
 
-Podman 5.8.2, **rootful**, SELinux enabled. `scripts/verify-podman.sh` reported
-8 pass, 2 fail, 2 skip.
+### Still not verified
 
-Confirmed working: pulling the multi-arch manifest and resolving amd64; the
-named-volume opt-in; `:Z`; `ReadOnly=true`; a secret delivered as a file and
-read through `_FILE`; and `quadlet -dryrun` parsing `deploy/sluice.container`,
-which nothing had parsed before.
-
-Two failures, both real findings:
-
-1. **Bind mount not writable.** Root cause was the missing `USER 65532:0`
-   above, not anything about Podman. The test itself was also invalid — it
-   inferred writability from files appearing in the directory, and a gateway
-   with no channels writes nothing, so it would have failed on a working mount
-   too. Both are fixed.
-2. **`podman healthcheck run` failed** — "container has no defined
-   healthcheck", with `.Config.Healthcheck` inspecting as `null`.
-
-   Podman never read it. The published config blob *does* contain the
-   healthcheck, so nothing was lost in transit; what it is stored as matters.
-   The image is pushed with OCI media types — buildx emits an OCI index once
-   attestations are enabled, and this one carries two — and the **OCI
-   image-config spec defines no `Healthcheck` field**. BuildKit writes it as an
-   extra key, which Docker reads and a spec-conformant reader may drop.
-
-   This affects plain `podman run`, not only Quadlet, so the fix is at the
-   deployment side rather than in the build: `sluice.container` declares
-   `HealthCmd=` itself. Setting `provenance: false` in CI would produce Docker
-   media types and probably restore it, at the cost of the attestations; that is
-   not done, because an explicit `HealthCmd=` works whatever the media type.
-
-   The causal step — that Podman drops it *because* of the media type — is the
-   best explanation of three confirmed facts, not a fourth confirmed fact. The
-   checklist now also runs an explicit `--health-cmd`: if that passes while the
-   image healthcheck does not, the command is fine and only the reading of it
-   was ever broken.
+- **The Quadlet unit has been parsed, never started.** `quadlet -dryrun` accepts
+  it, which catches syntax and unknown keys but says nothing about whether the
+  service comes up, restarts, or logs to journald.
+- **Docker on Linux** (`SLUICE_UID`). No Linux Docker host was available; the
+  reasoning is the same as rootful Podman, which is now confirmed, but the
+  reasoning is not the test.
 
 ### Third run, 2026-08-24
 
