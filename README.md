@@ -84,6 +84,10 @@ pin `:0.1.0` rather than `:latest` when that matters.
 The image ships its own `/etc/sluice/config.yaml`, so no config file has to be
 prepared. Everything below is optional tuning.
 
+**Using Podman?** That command needs different flags there — see
+[Podman](#podman). For a service rather than a one-off container,
+`./deploy/install-quadlet.sh` installs and starts it.
+
 Images are published for `linux/amd64` and `linux/arm64` under one tag; the
 right one is selected for you.
 
