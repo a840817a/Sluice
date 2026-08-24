@@ -560,60 +560,26 @@ The rootless and rootful bind mounts differ in the way the design predicted: at
 `root:root 0755` rootful is correctly denied and needs `chmod 0775`, while
 rootless succeeds because `keep-id` maps the invoking user onto 65532.
 
-### Still not verified
+### What the runs cost, and what they taught
 
-- **Docker on Linux** (`SLUICE_UID`). No such host was available. The reasoning
-  is identical to rootful Podman, which is now confirmed — but reasoning is not
-  a test, which is the lesson this section exists to record.
-- Whether journald captures the unit's output. The test user could not read the
-  journal at all, which says nothing either way.
+Three runs over two days, ending 15/15 rootful and rootless plus the unit
+started under systemd. The failures are worth more than the passes, because
+every one was an assumption that already looked verified:
 
-Everything else in this section has been run. The Quadlet unit was started
-rootless under systemd on 2026-08-24: healthy, serving, and recovered within
-five seconds of `podman kill -s KILL`, confirming `Restart=always`. That start
-is also the only test of `HealthCmd=` as Quadlet parses it, rather than as a
-`podman run` argument.
+| Assumption | Why it looked settled | What was actually true |
+|---|---|---|
+| The gid-0 volume scheme works | A local test wrote as uid 12345 | That test passed `--user 12345:0` explicitly; the image never ran in group 0, because `distroless:nonroot` declares `User "65532"` with no group |
+| `chmod 0775` is needed on rootful | The fixed case was tested | Only sufficiency was shown, never necessity — the unfixed case was never run |
+| `:Z` is needed on SELinux | Same | Same |
+| `HealthCmd=` fixes the healthcheck | Derived from "the image has no shell" | A plain string is passed to `/bin/sh -c` — the same premise, ignored one level down |
+| Podman reads the image `HEALTHCHECK` | Docker does | It does not; OCI image configs define no such field |
 
-### Third run, 2026-08-24
+None would have been caught by reading more carefully, and none survived
+contact with a real host. The checklist is a script (`scripts/verify-podman.sh`)
+for that reason, and it now tests the fixed *and* unfixed configurations wherever
+an instruction claims something is required.
 
-13 pass. `USER 65532:0` confirmed: the bind mount is correctly **not** writable
-at `root:root 0755` and writable after `chmod 0775`, so the instruction is now
-known to be both necessary and sufficient. `:Z` likewise passes in both
-directions.
-
-The remaining failure was the fix itself. An explicit `--health-cmd` failed too,
-for a reason the design had already accounted for one level up: Podman documents
-that a health command which is not a JSON array is "interpreted as an argument to
-`/bin/sh -c`", and this image has no shell — the same fact that made the gateway
-probe itself rather than call curl. `HealthCmd=` and `--health-cmd` therefore
-have to use the JSON array form.
-
-Worth stating plainly, because it is the pattern rather than the incident: every
-Podman finding so far has been an assumption that looked verified. The gid-0
-scheme was tested with an explicitly passed `--user 12345:0`, exercising a mode
-the image never ran in. The bind mount and `:Z` were tested only in the fixed
-configuration, which cannot show an instruction is necessary. The healthcheck
-fix was written from the same shell-less premise it then ignored. None of these
-survived contact with a real host, and none would have been caught by more
-careful reading.
-
-### Second run, 2026-08-22, with `--build`
-
-10 pass, 2 fail. **Buildah supports `FROM --platform=$BUILDPLATFORM` and the
-automatic `TARGETOS`/`TARGETARCH` args** — UNVERIFIED #1 is settled, and it was
-the largest open question about the build. Both failures were the two above; the
-bind mount failed against a `root:root 0755` directory, which is the documented
-failure the `chmod 0775` step exists for, on an image built before the
-`USER 65532:0` fix was published.
-
-Two checks were only proving themselves. The bind mount and `:Z` were each
-tested in the fixed configuration alone, which shows an instruction is
-sufficient but never that it is *necessary* — and an unnecessary instruction in
-a deployment document is how superstition propagates. Both now run twice, with
-and without, and fail if the unfixed case unexpectedly succeeds.
-
-Still unverified: everything rootless, including `keep-id` and the low-port
-failure mode. This host was rootful.
+What remains open is in §14.
 
 ## 10. Distribution: GHCR
 
