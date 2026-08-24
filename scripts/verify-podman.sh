@@ -79,13 +79,36 @@ MOUNT="$WORK/data:/data"
 # the runtime image actually runs as.
 PROBE_IMG="${PROBE_IMG:-docker.io/library/alpine:3.20}"
 podman pull -q "$PROBE_IMG" >/dev/null 2>&1
-if podman run --rm --user 65532:0 "${USERNS[@]}" -v "$MOUNT" "$PROBE_IMG" \
-	sh -c 'touch /data/probe' >/dev/null 2>&1; then
-	ok "uid 65532 (gid 0) wrote to the bind mount"
-	rm -f "$WORK/data/probe" 2>/dev/null
+
+probe_write() { # $1: label
+	podman run --rm --user 65532:0 "${USERNS[@]}" -v "$MOUNT" "$PROBE_IMG" \
+		sh -c 'touch /data/probe && rm -f /data/probe' >/dev/null 2>&1
+}
+
+# Tested both ways on purpose. A check that only runs the fixed case proves the
+# instruction is sufficient but never that it is necessary, and an unnecessary
+# instruction in a deployment doc is how superstition gets copied forward.
+#
+# Not started via the gateway: with no channels it writes nothing at all, so
+# "did files appear" fails on a working mount too.
+chmod 0755 "$WORK/data"
+if probe_write; then
+	if [ "$ROOTLESS" = "true" ]; then
+		ok "writable at 0755 (keep-id maps you onto 65532)"
+	else
+		no "writable at 0755 without group-write" \
+			"expected a failure here; the chmod instruction may be unnecessary on this host"
+	fi
 else
-	no "uid 65532 (gid 0) cannot write to the bind mount" \
-		"the directory is $(stat -c '%U:%G %a' "$WORK/data") — needs gid 0 with g+rwX, or chown 65532"
+	ok "correctly NOT writable at $(stat -c '%U:%G %a' "$WORK/data") — the documented failure"
+fi
+
+chmod 0775 "$WORK/data"
+if probe_write; then
+	ok "writable after chmod 0775 (process is uid 65532 gid 0)"
+else
+	no "still not writable after chmod 0775" \
+		"directory is $(stat -c '%U:%G %a' "$WORK/data"); is USER 65532:0 in the image you pulled?"
 fi
 
 after=$(stat -c '%u' "$WORK/data")
@@ -108,12 +131,21 @@ podman rm -f "$CTR" >/dev/null 2>&1
 
 head_ "SELinux"
 if [ "$SELINUX" = "true" ]; then
-	# The point is that :Z is *necessary*, not merely present. A mount without it
-	# should fail; if it succeeds, the README instruction is superstition here.
-	podman run --rm "${USERNS[@]}" -v "$WORK/data:/data" --entrypoint /sluice \
-		"$IMAGE" -config /etc/sluice/config.yaml -healthcheck >/dev/null 2>&1
-	echo "        (compare the two runs above and below by hand if unsure)"
-	ok ":Z used for the mount (see the bind-mount section)"
+	# :Z has to be shown to be *necessary*, not merely present.
+	chmod 0775 "$WORK/data"
+	if podman run --rm --user 65532:0 "${USERNS[@]}" -v "$WORK/data:/data" \
+		"$PROBE_IMG" sh -c 'touch /data/z && rm -f /data/z' >/dev/null 2>&1; then
+		no "the mount works WITHOUT :Z on an SELinux host" \
+			"the :Z instruction is then unnecessary here — check the policy before copying it forward"
+	else
+		ok "without :Z the mount is denied (so the instruction is necessary)"
+	fi
+	if podman run --rm --user 65532:0 "${USERNS[@]}" -v "$WORK/data:/data:Z" \
+		"$PROBE_IMG" sh -c 'touch /data/z && rm -f /data/z' >/dev/null 2>&1; then
+		ok "with :Z the mount works"
+	else
+		no "even :Z does not make the mount work"
+	fi
 else
 	meh "SELinux not enabled on this host"
 fi
@@ -136,7 +168,21 @@ else
 	no "podman healthcheck run failed" "error: ${out:-<none>}"
 	printf '        inspect .Config.Healthcheck: %s\n' "${hc:-<empty>}"
 	printf '        %s\n' "if that is null/empty, Podman did not read the image HEALTHCHECK"
-	printf '        %s\n' "and the Quadlet unit needs an explicit HealthCmd= instead."
+	printf '        %s\n' "which is why the Quadlet unit declares HealthCmd= itself."
+fi
+podman rm -f "$CTR" >/dev/null 2>&1
+# The fix the Quadlet unit uses. If this passes while the image healthcheck does
+# not, the diagnosis is confirmed: the command is fine and Podman simply never
+# read it from the image.
+podman run -d --name "$CTR" \
+	--health-cmd '/sluice -config /etc/sluice/config.yaml -healthcheck' \
+	--health-start-period 5s \
+	-e SLUICE_ADMIN_PASSWORD=verify-only "$IMAGE" >/dev/null 2>&1
+sleep 6
+if podman healthcheck run "$CTR" >/dev/null 2>&1; then
+	ok "explicit --health-cmd works (what HealthCmd= in the unit does)"
+else
+	no "explicit --health-cmd also fails" "$(podman logs "$CTR" 2>&1 | tail -2)"
 fi
 podman rm -f "$CTR" >/dev/null 2>&1
 

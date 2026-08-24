@@ -85,9 +85,23 @@ EnvironmentFile=%h/sluice/.env
 # verify: whether Podman needs any additional tmpfs that Docker did not.
 ReadOnly=true
 
-# verify: the image carries a HEALTHCHECK that runs the gateway's own
-# -healthcheck flag, because the distroless image has no curl. Podman is
-# expected to honour it; confirm with `podman healthcheck run sluice`.
+# Podman ignores the image's own HEALTHCHECK, so it is repeated here.
+#
+# Verified on Podman 5.8.2: `podman healthcheck run` reports "has no defined
+# healthcheck" and `.Config.Healthcheck` inspects as null, even though the
+# published config blob does contain the healthcheck. The image is pushed with
+# OCI media types (buildx emits an OCI index once attestations are on), and the
+# OCI image-config spec has no Healthcheck field — BuildKit writes it as an
+# extra key that a spec-conformant reader is free to drop. Docker reads it;
+# Podman does not.
+#
+# Same command the image declares: the runtime image has no curl, so the gateway
+# probes its own /healthz.
+HealthCmd=/sluice -config /etc/sluice/config.yaml -healthcheck
+HealthInterval=30s
+HealthTimeout=5s
+HealthStartPeriod=5s
+HealthRetries=3
 
 [Service]
 Restart=always

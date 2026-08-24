@@ -40,8 +40,10 @@ a commit message.
       image's `65532:0` ownership with `g+rwX` exists for.
 - [ ] On SELinux, the mount works with `:Z` and **fails without it** — check
       both, so the instruction is known to be necessary rather than copied.
-- [ ] `podman healthcheck run sluice` reports healthy, confirming Podman honours
-      the image's `HEALTHCHECK`.
+- [x] `podman healthcheck run` — **found broken, fixed.** Podman does not read
+      the image's `HEALTHCHECK` (OCI-format configs have no such field), so the
+      unit declares `HealthCmd=` itself. This also means a plain `podman run`
+      has no healthcheck unless you pass `--health-cmd`.
 - [ ] `ReadOnly=true` starts and serves, with no extra tmpfs needed.
 - [ ] `systemctl --user restart sluice` recovers; logs reach journald.
 - [ ] A password delivered by `podman secret` is picked up through

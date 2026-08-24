@@ -562,15 +562,45 @@ Two failures, both real findings:
    inferred writability from files appearing in the directory, and a gateway
    with no channels writes nothing, so it would have failed on a working mount
    too. Both are fixed.
-2. **`podman healthcheck run` failed.** Whether Podman reads the image's
-   `HEALTHCHECK` at all is the open question; the script now prints
-   `.Config.Healthcheck` so the next run distinguishes "not read" from "read but
-   failing". If Podman does not read it, the Quadlet unit needs an explicit
-   `HealthCmd=`.
+2. **`podman healthcheck run` failed** — "container has no defined
+   healthcheck", with `.Config.Healthcheck` inspecting as `null`.
 
-Still unverified after this run: Buildah's `BUILDPLATFORM` / `TARGETARCH`
-support (the run skipped `--build`), rootless behaviour including `keep-id`
-(this host was rootful), and the rootless low-port failure mode.
+   Podman never read it. The published config blob *does* contain the
+   healthcheck, so nothing was lost in transit; what it is stored as matters.
+   The image is pushed with OCI media types — buildx emits an OCI index once
+   attestations are enabled, and this one carries two — and the **OCI
+   image-config spec defines no `Healthcheck` field**. BuildKit writes it as an
+   extra key, which Docker reads and a spec-conformant reader may drop.
+
+   This affects plain `podman run`, not only Quadlet, so the fix is at the
+   deployment side rather than in the build: `sluice.container` declares
+   `HealthCmd=` itself. Setting `provenance: false` in CI would produce Docker
+   media types and probably restore it, at the cost of the attestations; that is
+   not done, because an explicit `HealthCmd=` works whatever the media type.
+
+   The causal step — that Podman drops it *because* of the media type — is the
+   best explanation of three confirmed facts, not a fourth confirmed fact. The
+   checklist now also runs an explicit `--health-cmd`: if that passes while the
+   image healthcheck does not, the command is fine and only the reading of it
+   was ever broken.
+
+### Second run, 2026-08-22, with `--build`
+
+10 pass, 2 fail. **Buildah supports `FROM --platform=$BUILDPLATFORM` and the
+automatic `TARGETOS`/`TARGETARCH` args** — UNVERIFIED #1 is settled, and it was
+the largest open question about the build. Both failures were the two above; the
+bind mount failed against a `root:root 0755` directory, which is the documented
+failure the `chmod 0775` step exists for, on an image built before the
+`USER 65532:0` fix was published.
+
+Two checks were only proving themselves. The bind mount and `:Z` were each
+tested in the fixed configuration alone, which shows an instruction is
+sufficient but never that it is *necessary* — and an unnecessary instruction in
+a deployment document is how superstition propagates. Both now run twice, with
+and without, and fail if the unfixed case unexpectedly succeeds.
+
+Still unverified: everything rootless, including `keep-id` and the low-port
+failure mode. This host was rootful.
 
 ## 10. Distribution: GHCR
 
