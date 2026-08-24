@@ -52,6 +52,21 @@ four of the assumptions it now guards were wrong the first time it ran.
 ## Setup
 
 ```bash
+./install-quadlet.sh
+```
+
+Does everything below and starts the service. It refuses to continue until
+`SLUICE_ADMIN_PASSWORD` is set, and it adapts to the host: `chmod 0775` on the
+data directory for rootful, the `UserNS=keep-id` line dropped there because
+rootful Podman rejects it, and `:Z` removed where SELinux is off.
+
+**Not yet run.** Written from the steps that were performed by hand on a
+verified host, but the script itself has not been executed — see the note at the
+top of this file about what that is worth.
+
+### By hand
+
+```bash
 mkdir -p ~/sluice/data
 cp ../.env.example ~/sluice/.env      # set SLUICE_ADMIN_PASSWORD; it starts empty
 ```

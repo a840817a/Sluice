@@ -25,6 +25,7 @@ help:
 	@echo 'Go:        build test verify'
 	@echo 'Image:     image image-debug image-multiarch     (ENGINE=docker|podman)'
 	@echo 'Run:       up up-tls down logs'
+	@echo 'Podman:    ./deploy/install-quadlet.sh   (systemd service)'
 	@echo 'Other:     clean'
 
 # --- Go -------------------------------------------------------------------

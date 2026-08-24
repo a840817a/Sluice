@@ -171,9 +171,32 @@ environment: { SSL_CERT_FILE: /etc/sluice/ca.pem }
 
 ### Podman
 
-A Quadlet unit is provided at [`deploy/sluice.container`](deploy/sluice.container),
-with setup steps and the checklist that must pass before it can be trusted in
-[`deploy/README.md`](deploy/README.md).
+```bash
+./deploy/install-quadlet.sh          # or: ./deploy/install-quadlet.sh 0.1.1
+```
+
+Installs [`deploy/sluice.container`](deploy/sluice.container) as a systemd
+service and starts it. It detects rootful versus rootless and applies what each
+one needs — the group-write bit, the `keep-id` mapping, the SELinux relabel —
+because each of those was got wrong at least once while this was built.
+
+It stops and tells you where to put a password rather than inventing one, since
+a generated password is one nobody recorded.
+
+To try the image without systemd:
+
+```bash
+podman run -d --name sluice -p 8080:8080 \
+  -v "$PWD/data:/data:Z" \
+  -e SLUICE_ADMIN_PASSWORD=pick-something \
+  --health-cmd '["/sluice","-config","/etc/sluice/config.yaml","-healthcheck"]' \
+  ghcr.io/a840817a/sluice:latest
+```
+
+`--health-cmd` is needed because **Podman does not read the image's
+`HEALTHCHECK`**, and it must be a JSON array: a plain string is passed to
+`/bin/sh -c`, which this image does not have. Rootless also needs
+`--userns=keep-id:uid=65532,gid=65532`; rootful needs `chmod 0775 ./data`.
 
 Verified on Podman 5.8.2, rootful and rootless, with SELinux enforcing.
 
