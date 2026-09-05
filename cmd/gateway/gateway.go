@@ -10,6 +10,7 @@ import (
 	"github.com/a840817a/sluice/internal/channel"
 	"github.com/a840817a/sluice/internal/config"
 	"github.com/a840817a/sluice/internal/httpapi"
+	"github.com/a840817a/sluice/internal/store"
 	"github.com/a840817a/sluice/internal/web"
 )
 
@@ -42,6 +43,19 @@ type gateway struct {
 // nothing, and the omission stays silent until a restart serves an empty
 // channel.
 func newGateway(ctx context.Context, cfg config.Config) (*gateway, error) {
+	// --- Data directory ---
+	//
+	// Before anything opens it. A data directory the process cannot write is a
+	// deployment mistake that nothing downstream reports in time: the channel
+	// store only reads at startup, /healthz never touches the directory, and a
+	// container therefore reaches "healthy" and fails on the first segment
+	// write instead — with an error that names a path deep inside the store
+	// rather than the mount that caused it. Refusing here trades a running but
+	// useless gateway for a startup failure that says what is wrong.
+	if err := store.CheckWritable(cfg.Store.DataDir); err != nil {
+		return nil, err
+	}
+
 	// --- Channel store (channels.json) ---
 	storePath := filepath.Join(cfg.Store.DataDir, "channels.json")
 	chStore, err := channel.NewStore(storePath)

@@ -273,3 +273,42 @@ func truncateForLog(s string, n int) string {
 	}
 	return s[:n] + "…"
 }
+
+// A data directory the gateway cannot write is the one misconfiguration that
+// used to survive every check: the process starts, /healthz answers 200, the
+// container reports healthy, and the failure only appears when a channel first
+// writes a segment — as "mkdir /data/<uuid>: permission denied", far from its
+// cause. Found on a real Podman host, where the image ran as a gid the
+// bind-mounted directory did not grant.
+//
+// newGateway must therefore refuse to build. This pins that, and that the
+// refusal happens before the store is opened rather than as a side effect of it.
+func TestNewGatewayRefusesAnUnwritableDataDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: mode bits do not deny root, so this cannot be provoked")
+	}
+	dataDir := t.TempDir()
+	if err := os.Chmod(dataDir, 0o555); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dataDir, 0o755) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	gw, err := newGateway(ctx, testConfig(dataDir))
+	if err == nil {
+		gw.manager.StopAll()
+		t.Fatal("newGateway succeeded on an unwritable data directory; it would have reported healthy and then failed every write")
+	}
+	if !strings.Contains(err.Error(), dataDir) {
+		t.Errorf("error does not name the directory %q: %v", dataDir, err)
+	}
+	// The operator's next question is always "unwritable by whom" — the answer
+	// has to travel with the error, because reproducing it means a redeploy.
+	for _, want := range []string{"uid=", "gid=", "mode="} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error is missing %q: %v", want, err)
+		}
+	}
+}

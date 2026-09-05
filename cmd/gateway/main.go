@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/a840817a/sluice/internal/config"
+	"github.com/a840817a/sluice/internal/store"
 )
 
 // sanEntries builds the Subject Alternative Name set for the self-signed
@@ -118,6 +119,8 @@ func main() {
 	cfgPath := flag.String("config", defaultCfg, "path to config file (env: SLUICE_CONFIG)")
 	healthcheck := flag.Bool("healthcheck", false,
 		"probe this gateway's /healthz and exit 0 or 1; used by the container HEALTHCHECK")
+	checkStore := flag.Bool("check-store", false,
+		"verify store.data_dir is writable and exit 0 or 1; a deployment preflight")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
@@ -137,6 +140,22 @@ func main() {
 			slog.Error("healthcheck failed", "err", err)
 			os.Exit(1)
 		}
+		return
+	}
+
+	// Also before the password policy, and for the same reason: this answers
+	// "can this host's volume be written by this image", which is true or false
+	// regardless of what password the eventual gateway would run with. It is
+	// what deploy/bootstrap.sh runs before installing a unit, so that a mount
+	// the gateway cannot use fails at install time rather than becoming a
+	// service that restarts forever. newGateway performs the same check, so a
+	// gateway started any other way still refuses.
+	if *checkStore {
+		if err := store.CheckWritable(cfg.Store.DataDir); err != nil {
+			slog.Error("data directory check failed", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("data directory is writable", "dir", cfg.Store.DataDir)
 		return
 	}
 
