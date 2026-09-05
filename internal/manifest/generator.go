@@ -291,27 +291,30 @@ func buildRepresentation(
 	// Key by origAS.ID (positional index) to support multiple ASes of the same
 	// MediaType. Everything read here comes from the snapshot, so the whole
 	// manifest describes one instant and the processor cannot move underneath it.
-	if cfg.GatewayBaseURL != "" {
-		{
-			// Absent and empty are the same thing here: either way no timeline
-			// is emitted and the representation keeps its fixed-duration
-			// template. Segments arrive already sorted by SegNo.
-			published := projectPublishedSegments(origType, snap.Published(origPeriod.ID, origAS.ID, origRep.ID), cfg)
-			if len(published) > 0 && tmpl.Timescale > 0 {
-				timeline := buildTimeline(published)
-				if timeline != nil {
-					st.SegmentTimeline = timeline
-					st.Duration = nil // timeline supersedes fixed duration
-					startNo := published[0].SegNo
-					st.StartNumber = &startNo
-					// Align PresentationTimeOffset with the actual media StartPTS so
-					// that players compute (T - PTO) / timescale = seconds from window
-					// start, not seconds since epoch (which would show seekbar as "N years").
-					if published[0].StartPTS > 0 {
-						pto := uint64(published[0].StartPTS)
-						st.PresentationTimeOffset = &pto
-					}
-				}
+	//
+	// This is deliberately not gated on GatewayBaseURL. An empty base is the
+	// documented default (relative URLs, resolved against the manifest's own
+	// URL), and a timeline source has no fixed duration to fall back on — so
+	// skipping the timeline there emitted a representation carrying no segment
+	// info at all, which players reject outright.
+	//
+	// Absent and empty are the same thing here: either way no timeline is
+	// emitted and the representation keeps its fixed-duration template.
+	// Segments arrive already sorted by SegNo.
+	published := projectPublishedSegments(origType, snap.Published(origPeriod.ID, origAS.ID, origRep.ID), cfg)
+	if len(published) > 0 && tmpl.Timescale > 0 {
+		timeline := buildTimeline(published)
+		if timeline != nil {
+			st.SegmentTimeline = timeline
+			st.Duration = nil // timeline supersedes fixed duration
+			startNo := published[0].SegNo
+			st.StartNumber = &startNo
+			// Align PresentationTimeOffset with the actual media StartPTS so
+			// that players compute (T - PTO) / timescale = seconds from window
+			// start, not seconds since epoch (which would show seekbar as "N years").
+			if published[0].StartPTS > 0 {
+				pto := uint64(published[0].StartPTS)
+				st.PresentationTimeOffset = &pto
 			}
 		}
 	}
