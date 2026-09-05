@@ -63,7 +63,8 @@ func (s *Server) handleChannelHealth(w http.ResponseWriter, r *http.Request) {
 
 	rt := s.manager.Get(channelID)
 	if rt != nil {
-		chCfg := rt.Config()
+		sv := rt.Serving()
+		chCfg := sv.Config
 		resp.Running = true
 		resp.Title = chCfg.Title
 		if chCfg.IsHLS() {
@@ -74,10 +75,10 @@ func (s *Server) handleChannelHealth(w http.ResponseWriter, r *http.Request) {
 			// Both predicates are needed here. ServesDASH alone is true for a
 			// DASH runtime too, and this branch is entered on the *config*
 			// saying HLS, which does not by itself guarantee rt.HLS was built.
-			if rt.IsHLSSource() && rt.ServesDASH() {
+			if sv.IsHLSSource && sv.ServesDASH {
 				resp.AltManifestURL = mpdURL
 			}
-		} else if view, ok := s.hlsViewFor(rt); ok && view.ready {
+		} else if view, ok := s.hlsViewFor(rt, sv); ok && view.ready {
 			// A clear DASH channel additionally serves HLS.
 			resp.AltManifestURL = m3u8URL
 		}
@@ -89,9 +90,8 @@ func (s *Server) handleChannelHealth(w http.ResponseWriter, r *http.Request) {
 
 		// The index that describes what the channel can actually serve: after a
 		// VOD transition that is the full-history index, not the live window the
-		// ring still holds. Reading rt.Index directly reported a transitioned
-		// channel's segment counts from the wrong index.
-		ci := rt.ActiveIndex()
+		// ring still holds.
+		ci := sv.Index
 		ci.Mu().RLock()
 		for periodID, ps := range ci.Periods {
 			ph := &periodHealth{AdaptationSets: make(map[string]asHealth)}

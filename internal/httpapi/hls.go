@@ -30,7 +30,7 @@ func (s *Server) handleMasterPlaylist(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "channel not found or not running", http.StatusNotFound)
 		return
 	}
-	view, ok := s.hlsViewFor(rt)
+	view, ok := s.hlsViewFor(rt, rt.Serving())
 	if !ok {
 		http.Error(w, "channel cannot be served as HLS (encrypted or unsupported)", http.StatusNotFound)
 		return
@@ -65,7 +65,10 @@ func (s *Server) handleMediaPlaylist(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "channel not found or not running", http.StatusNotFound)
 		return
 	}
-	view, ok := s.hlsViewFor(rt)
+	// One read of the channel for the whole response: the index the segments
+	// come from and the VOD flag that describes them have to agree.
+	sv := rt.Serving()
+	view, ok := s.hlsViewFor(rt, sv)
 	if !ok {
 		http.Error(w, "channel cannot be served as HLS", http.StatusNotFound)
 		return
@@ -75,26 +78,25 @@ func (s *Server) handleMediaPlaylist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ci := rt.ActiveIndex()
-	segs := publishedSegsForRep(ci, repID)
+	segs := publishedSegsForRep(sv.Index, repID)
 
 	// The advertised target duration must never shrink between reloads, so it
 	// is tracked per channel+representation rather than recomputed per request.
 	targetDur := s.stickyTargetDuration.Get(channelID+"/"+repID, segs)
 
-	isVOD := rt.Mode() == ch.ModeVOD
+	isVOD := sv.IsVOD()
 	opts := hlsout.MediaOptions{
 		GatewayBaseURL: s.cfg.Server.BaseURL,
 		ChannelID:      channelID,
 		RepID:          repID,
 		VOD:            isVOD,
 		TargetDuration: targetDur,
-		WindowSegments: windowSegments(s.cfg.Window.Depth.Seconds(), targetDur, rt.Config().KeepsAllSegments() || isVOD),
+		WindowSegments: windowSegments(s.cfg.Window.Depth.Seconds(), targetDur, sv.Config.KeepsAllSegments() || isVOD),
 	}
 	// fMP4 representations need their initialization section advertised via
 	// EXT-X-MAP; a non-empty init path is exactly the fMP4 signal, and is empty
 	// for self-contained TS/WebVTT segments regardless of source.
-	if initPath := publishedInitPath(ci, repID); initPath != "" {
+	if initPath := publishedInitPath(sv.Index, repID); initPath != "" {
 		opts.InitURI = gwurl.InitURL(s.cfg.Server.BaseURL, channelID, repID)
 	}
 	// Segments kept encrypted on disk are advertised with a key URI pointing at
@@ -112,7 +114,7 @@ func (s *Server) handleMediaPlaylist(w http.ResponseWriter, r *http.Request) {
 // synthesizeHLSManifest builds the stand-in DASH MPD for an fMP4 HLS channel,
 // or nil when nothing is published yet. HLS carries no MPD, so the structure
 // comes from the discovered variants and the timeline from the segment index.
-func (s *Server) synthesizeHLSManifest(rt *ch.Runtime, snap index.Snapshot, isVOD bool, windowDepth time.Duration) *imdp.ParsedMPD {
+func (s *Server) synthesizeHLSManifest(rt *ch.Runtime, sv ch.Serving, snap index.Snapshot, isVOD bool, windowDepth time.Duration) *imdp.ParsedMPD {
 	variants := rt.HLS.Variants()
 	out := make([]manifest.HLSVariant, 0, len(variants))
 	for _, v := range variants {
@@ -139,7 +141,7 @@ func (s *Server) synthesizeHLSManifest(rt *ch.Runtime, snap index.Snapshot, isVO
 		AudioASID: hlsingest.AudioASID,
 		VOD:       isVOD,
 		// A stable anchor for the live edge; unused for VOD.
-		AvailabilityStartTime: rt.StaticIngestStartTime(),
+		AvailabilityStartTime: sv.StaticIngestStart,
 		MinimumUpdatePeriod:   s.cfg.Upstream.PollInterval,
 		TimeShiftBufferDepth:  windowDepth,
 	})
@@ -194,14 +196,19 @@ func (s *Server) handleKeyProxy(w http.ResponseWriter, r *http.Request) {
 	keyID := chi.URLParam(r, "keyID")
 
 	rt := s.manager.Get(channelID)
-	if rt == nil || !rt.CanServeKeys() {
+	if rt == nil {
+		http.NotFound(w, r)
+		return
+	}
+	sv := rt.Serving()
+	if !sv.CanServeKeys {
 		http.NotFound(w, r)
 		return
 	}
 	// Decrypt-on-ingest channels republish in the clear; there is no key to hand
 	// out, and serving one would leak a credential for content we already
 	// stripped protection from.
-	if rt.Config().DecryptOnIngest() {
+	if sv.Config.DecryptOnIngest() {
 		http.NotFound(w, r)
 		return
 	}

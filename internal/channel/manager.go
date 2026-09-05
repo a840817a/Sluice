@@ -912,8 +912,13 @@ func sourceStatus(rt *Runtime) *SourceStatus {
 }
 
 func buildStatus(rt *Runtime) ChannelStatus {
+	// One read for the whole status: the reported mode and the index the counts
+	// come from must describe the same instant, or an operator sees "live" over
+	// full-history numbers during a transition.
+	sv := rt.Serving()
+
 	modeStr := "live"
-	switch rt.Mode() {
+	switch sv.Mode {
 	case ModeTransitioning:
 		modeStr = "transitioning"
 	case ModeVOD:
@@ -923,12 +928,12 @@ func buildStatus(rt *Runtime) ChannelStatus {
 	}
 	s := ChannelStatus{
 		ID:      rt.ID,
-		MPDURL:  rt.Config().MPDURL,
+		MPDURL:  sv.Config.MPDURL,
 		Running: true,
 		Mode:    modeStr,
 		Source:  sourceStatus(rt),
 	}
-	ci := rt.ActiveIndex()
+	ci := sv.Index
 	stats := make(map[string]*PeriodStats)
 	ci.ForEachRep(func(ref index.RepRef, rep *index.RepresentationState) {
 		ps, ok := stats[ref.PeriodID]

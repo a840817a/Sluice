@@ -48,8 +48,10 @@ func (v hlsView) knownRep(repID string) bool {
 // when the channel cannot be served as HLS at all (an encrypted DASH source,
 // whose HLS DRM signalling is out of scope). A capable-but-not-yet-ready channel
 // returns a view with ready=false.
-func (s *Server) hlsViewFor(rt *ch.Runtime) (hlsView, bool) {
-	if rt.IsHLSSource() {
+// The Serving is passed in rather than read here so a handler's view and the
+// rest of its response describe the same instant.
+func (s *Server) hlsViewFor(rt *ch.Runtime, sv ch.Serving) (hlsView, bool) {
+	if sv.IsHLSSource {
 		return hlsView{
 			variants:            rt.HLS.Variants(),
 			renditions:          rt.HLS.Renditions(),
@@ -61,7 +63,7 @@ func (s *Server) hlsViewFor(rt *ch.Runtime) (hlsView, bool) {
 
 	// DASH source: derive the description from the upstream MPD. DASH is always
 	// fMP4, so it maps cleanly onto fMP4 HLS output — for clear content.
-	p := rt.ParsedMPD()
+	p := sv.ParsedMPD
 	if p == nil {
 		return hlsView{ready: false}, true // not fetched yet
 	}

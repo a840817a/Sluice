@@ -46,25 +46,29 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// One read of the channel for the whole response. Mode, index and the
+	// timing anchors below have to describe the same instant: read one at a
+	// time, a channel finishing into VOD mid-handler yields a manifest that
+	// declares itself live while its segments come from the full-history index.
+	sv := rt.Serving()
+
 	// An HLS source is only serveable as DASH when its segments are fMP4;
 	// MPEG-TS would require remuxing, which this gateway deliberately does not
 	// do. Such channels are served through master.m3u8 instead.
-	if !rt.ServesDASH() {
+	if !sv.ServesDASH {
 		http.Error(w, "channel has an MPEG-TS HLS source; use master.m3u8", http.StatusNotFound)
 		return
 	}
 
-	mode := rt.Mode()
-	isVOD := mode == ch.ModeVOD
-	isStaticIngesting := mode == ch.ModeStaticIngesting
-	// One snapshot for the whole response. Synthesis decides which
-	// representations exist and at what timescale, and generation builds their
-	// timelines; reading the live index twice let those two answers come from
-	// two different instants while ingest kept committing in between.
-	snap := rt.ActiveIndex().Snapshot()
+	isVOD := sv.IsVOD()
+	// Synthesis decides which representations exist and at what timescale, and
+	// generation builds their timelines; reading the index twice let those two
+	// answers come from two different instants while ingest kept committing in
+	// between.
+	snap := sv.Index.Snapshot()
 
 	baseURL := s.cfg.Server.BaseURL
-	chCfg := rt.Config()
+	chCfg := sv.Config
 	windowDepth := s.cfg.Window.Depth
 	if chCfg.KeepsAllSegments() {
 		windowDepth = 24 * time.Hour
@@ -75,10 +79,10 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 	// from the very same files the HLS output serves. DASH channels use the
 	// real upstream MPD.
 	var p *imdp.ParsedMPD
-	if rt.IsHLSSource() {
-		p = s.synthesizeHLSManifest(rt, snap, isVOD, windowDepth)
+	if sv.IsHLSSource {
+		p = s.synthesizeHLSManifest(rt, sv, snap, isVOD, windowDepth)
 	} else {
-		p = rt.ParsedMPD()
+		p = sv.ParsedMPD
 		if p == nil && isVOD {
 			if path := s.savedVODManifestPath(channelID); path != "" {
 				serveFile(w, r, path, "application/dash+xml")
@@ -101,9 +105,9 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 		SafeEdgeBuffer:              s.cfg.Window.SafeEdgeBuffer,
 		FallbackMinimumUpdatePeriod: s.cfg.Upstream.PollInterval,
 		VODMode:                     isVOD,
-		FinalDuration:               rt.FinalDuration(),
-		StaticIngesting:             isStaticIngesting,
-		StaticIngestStart:           rt.StaticIngestStartTime(),
+		FinalDuration:               sv.FinalDuration,
+		StaticIngesting:             sv.IsStaticIngesting(),
+		StaticIngestStart:           sv.StaticIngestStart,
 	}
 
 	out, err := manifest.Generate(p, snap, cfg)
@@ -137,10 +141,10 @@ func (s *Server) handleLicense(drmType string) http.HandlerFunc {
 			return
 		}
 
-		// One snapshot for the whole request: the admin API can swap the config
+		// One read for the whole request: the admin API can swap the config
 		// mid-handler, and reading it per field could pair one DRM system's
 		// enable flag with the other's URL.
-		cfg := rt.Config()
+		cfg := rt.Serving().Config
 
 		var upstreamURL string
 		switch drmType {

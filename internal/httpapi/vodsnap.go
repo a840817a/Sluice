@@ -19,12 +19,17 @@ import (
 // It is exported because main.go registers it as the manager's OnVODReady
 // callback. Nothing in this package calls it.
 func (s *Server) SaveVODManifest(rt *ch.Runtime) {
-	p := rt.ParsedMPD()
-	if p == nil || rt.VODIndex() == nil {
+	sv := rt.Serving()
+	p := sv.ParsedMPD
+	// The full-history index specifically, not whichever index is active: this
+	// callback exists to snapshot the completed VOD, and a channel that has not
+	// built one has nothing to save.
+	vodIdx := rt.VODIndex()
+	if p == nil || vodIdx == nil {
 		return
 	}
 	baseURL := s.cfg.Server.BaseURL
-	chCfg := rt.Config()
+	chCfg := sv.Config
 	cfg := manifest.GeneratorConfig{
 		GatewayBaseURL:     baseURL,
 		ChannelID:          rt.ID,
@@ -33,9 +38,9 @@ func (s *Server) SaveVODManifest(rt *ch.Runtime) {
 		DisablePlayReady:   !chCfg.PlayReadyEnabled(),
 		DisableWidevine:    !chCfg.WidevineEnabled(),
 		VODMode:            true,
-		FinalDuration:      rt.FinalDuration(),
+		FinalDuration:      sv.FinalDuration,
 	}
-	data, err := manifest.Generate(p, rt.VODIndex().Snapshot(), cfg)
+	data, err := manifest.Generate(p, vodIdx.Snapshot(), cfg)
 	if err != nil {
 		slog.Warn("saveVODManifest: generate failed", "channel", rt.ID, "err", err)
 		return
