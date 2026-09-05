@@ -540,18 +540,29 @@ func (m *Manager) TransitionToVOD(id string) error {
 	return nil
 }
 
-// awaitStaticIngestComplete polls the broker until the queue drains (all
-// static segments have been fetched), then triggers a VOD transition so that
-// the channel is persisted as VOD and restartable from disk.
+// drainCheckInterval is how often a channel whose source has finished is polled
+// for the pipeline going idle. It can be short because Broker.Idle answers the
+// question exactly: it used to be two seconds, which was not a poll interval so
+// much as a grace period long enough for in-flight segments to land before an
+// empty queue was mistaken for a finished ingest.
+const drainCheckInterval = 100 * time.Millisecond
+
+// awaitStaticIngestComplete waits for the channel's pipeline to go idle — no
+// task queued and none in flight — then triggers a VOD transition so that the
+// channel is persisted as VOD and restartable from disk.
+//
+// The distinction matters because the transition rebuilds from disk: a segment
+// that has been popped but not yet written is not merely late, it is missing
+// from the finished asset.
 func (m *Manager) awaitStaticIngestComplete(ctx context.Context, rt *Runtime, broker *queue.Broker, parsedMPD *imdp.ParsedMPD) {
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(drainCheckInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if broker.Len() == 0 {
+			if broker.Idle() {
 				slog.Info("static ingest complete, transitioning to VOD", "channel", rt.ID)
 				m.transitionToVOD(rt, parsedMPD)
 				return

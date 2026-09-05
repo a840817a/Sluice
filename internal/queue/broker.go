@@ -21,6 +21,14 @@ type Broker struct {
 	// with nothing to explain the gap. It is an atomic rather than a mu-guarded
 	// field because Requeue abandons tasks without holding mu.
 	dropped atomic.Uint64
+
+	// outstanding counts tasks that have left the queue and not yet been
+	// released: being fetched, waiting in the pool's result channel, or being
+	// written to disk. It is guarded by mu rather than atomic precisely so that
+	// leaving the queue and becoming outstanding happen together — a reader
+	// between the two would see no work anywhere and conclude, wrongly, that
+	// ingest had finished.
+	outstanding int
 }
 
 // NewBroker creates a Broker with the given capacity limit.
@@ -93,6 +101,7 @@ func (b *Broker) Pop() *SegmentTask {
 			continue
 		}
 		result = t
+		b.outstanding++
 		break
 	}
 
@@ -103,6 +112,31 @@ func (b *Broker) Pop() *SegmentTask {
 	}
 
 	return result
+}
+
+// Release reports that one popped task has reached a terminal state, whatever
+// that state was: stored, dropped, or handed back to Requeue. The processor
+// calls it once per result after handling, so a task that was requeued is back
+// in the queue before its in-flight count drops and the broker never looks
+// empty in between.
+func (b *Broker) Release() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.outstanding > 0 {
+		b.outstanding--
+	}
+}
+
+// Idle reports that this broker has no work anywhere: nothing queued and
+// nothing in flight.
+//
+// This is the question to ask before treating ingest as finished. Len alone
+// answers a narrower one — "is the queue empty" — which becomes true the moment
+// the last task is popped, while it is still being downloaded.
+func (b *Broker) Idle() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.pq) == 0 && b.outstanding == 0
 }
 
 // Len returns the current queue length (including possibly-expired entries).

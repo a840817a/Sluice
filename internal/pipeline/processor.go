@@ -131,6 +131,11 @@ func (p *Processor) Run(ctx context.Context, pool *fetch.Pool) {
 				return
 			}
 			p.handle(res)
+			// This task has left the pipeline: stored, dropped, or pushed back
+			// for retry by handle. Releasing it here — after handle, so a
+			// requeue is already back in the queue — is what lets the broker
+			// tell a finished ingest from a merely empty queue.
+			p.broker.Release()
 		}
 	}
 }

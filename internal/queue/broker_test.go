@@ -210,3 +210,84 @@ func TestBroker_DroppedCountsEveryAbandonment(t *testing.T) {
 		}
 	})
 }
+
+// A popped task has left the queue but is not finished: it is being fetched, or
+// waiting in the result channel, or being written to disk. Callers that ask
+// "is the ingest done" must not mistake an empty queue for completed work — a
+// VOD transition that fires here rebuilds from disk and loses whatever had not
+// landed yet.
+func TestBrokerIdleAccountsForWorkInFlight(t *testing.T) {
+	b := NewBroker(0)
+	if !b.Idle() {
+		t.Fatal("a fresh broker with no work is not idle")
+	}
+
+	b.Push(makeTask(1, 1))
+	if b.Idle() {
+		t.Error("broker with a queued task reports idle")
+	}
+
+	task := b.Pop()
+	if task == nil {
+		t.Fatal("Pop returned nil")
+	}
+	if b.Len() != 0 {
+		t.Fatalf("Len = %d after popping the only task, want 0", b.Len())
+	}
+	if b.Idle() {
+		t.Error("broker reports idle while a popped task is still in flight — " +
+			"this is the state that loses segments in the VOD transition")
+	}
+
+	b.Release()
+	if !b.Idle() {
+		t.Error("broker is not idle after its only task was released")
+	}
+}
+
+// A task the processor hands back for retry is queued again, so the broker must
+// never look idle across the handover. Requeue happens while handling, Release
+// after it, so the task is back in the queue before its in-flight count drops.
+func TestBrokerNotIdleAcrossRequeue(t *testing.T) {
+	b := NewBroker(0)
+	b.Push(makeTask(1, 1))
+
+	task := b.Pop()
+	if task == nil {
+		t.Fatal("Pop returned nil")
+	}
+	if !b.Requeue(task, 3, time.Millisecond) {
+		t.Fatal("Requeue discarded a task with retries left")
+	}
+	if b.Idle() {
+		t.Error("broker reports idle with a requeued task still pending")
+	}
+
+	b.Release()
+	if b.Idle() {
+		t.Error("broker reports idle after releasing a task it had requeued: " +
+			"the task is still in the queue")
+	}
+}
+
+// Retries exhausted: the task is discarded rather than requeued, so once the
+// processor releases it there is genuinely nothing left.
+func TestBrokerIdleAfterRequeueDiscardsTask(t *testing.T) {
+	b := NewBroker(0)
+	b.Push(makeTask(1, 1))
+
+	task := b.Pop()
+	if task == nil {
+		t.Fatal("Pop returned nil")
+	}
+	// Requeue discards once Retries exceeds the budget, so spend it first.
+	task.Retries = 3
+	if b.Requeue(task, 1, time.Millisecond) {
+		t.Fatal("Requeue kept a task that was out of retries")
+	}
+
+	b.Release()
+	if !b.Idle() {
+		t.Error("broker is not idle after its only task was discarded")
+	}
+}
