@@ -49,18 +49,19 @@ type Config struct {
 	LicenseHeaders  []Header `json:"license_headers,omitempty"` // injected into DRM license proxy requests
 	ForwardClientIP bool     `json:"forward_client_ip"`
 	Enabled         bool     `json:"enabled"`
-	// EnableVODTransition keeps all downloaded segments on disk during live
-	// and automatically transitions to full-history VOD when the stream ends
-	// (upstream MPD changes from type=dynamic to type=static, or via admin API).
-	EnableVODTransition bool `json:"enable_vod_transition"`
 	// IsVOD is set to true after a successful live→VOD transition so the gateway
 	// can restore VOD mode (using an unbounded ring buffer) after a restart.
 	IsVOD bool `json:"is_vod,omitempty"`
 	// KeepAllSegments keeps every fetched segment available in the live DVR
-	// window for the lifetime of the channel (no time-based expiration,
-	// unbounded ring buffer). Distinct from EnableVODTransition: this stays
-	// in live mode even when upstream goes static.
-	KeepAllSegments bool `json:"keep_all_segments,omitempty"`
+	// window for the lifetime of the channel: no time-based expiration, and an
+	// unbounded ring buffer. It is a pointer because nil — the value a config
+	// stored before this became the default decodes to — means "keep", not
+	// "window": only an explicit false selects the sliding window.
+	//
+	// It does not decide whether the channel transitions to VOD when the
+	// upstream ends; that happens either way. It decides how much history the
+	// live channel still holds when it does.
+	KeepAllSegments *bool `json:"keep_all_segments,omitempty"`
 }
 
 // BoolPtr returns a pointer to b for optional JSON booleans.
@@ -120,4 +121,12 @@ func (c Config) PlayReadyEnabled() bool {
 // WidevineEnabled returns true unless the channel explicitly disables Widevine.
 func (c Config) WidevineEnabled() bool {
 	return c.EnableWidevine == nil || *c.EnableWidevine
+}
+
+// KeepsAllSegments returns true unless the channel explicitly asks for the
+// sliding window. Keeping everything is the default: a channel that ends up as
+// VOD is only as complete as what it still holds, and an operator who wants the
+// window has to say so.
+func (c Config) KeepsAllSegments() bool {
+	return c.KeepAllSegments == nil || *c.KeepAllSegments
 }

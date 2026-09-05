@@ -78,7 +78,7 @@ function renderProgress(refs, status) {
     patchText(refs.progMain, '—');
     patchText(refs.progUnit, '');
     patchHidden(refs.progBar, true);
-    ['metaRate', 'metaEta', 'metaQueue', 'metaUptime', 'metaExtra']
+    ['metaRate', 'metaEta', 'metaQueue', 'metaUptime', 'metaSource', 'metaExtra']
       .forEach(k => patchText(refs[k], ''));
     return;
   }
@@ -137,6 +137,11 @@ function renderProgress(refs, status) {
   const up = fmt.since(p.started_at);
   patchText(refs.metaUptime, up ? `已運行 ${up}` : '');
 
+  // Why the channel has or has not settled into VOD: the upstream's own
+  // end-of-stream signal. A single playlist that never reaches ENDLIST holds
+  // the whole channel in live, and this line is what names it.
+  patchText(refs.metaSource, sourceLabel(status.source_status));
+
   // Only surface failures and drops when there are some: a permanent "0 失敗"
   // is noise that trains the eye to skip the line where it matters.
   const extra = [];
@@ -159,6 +164,16 @@ function renderProgress(refs, status) {
     patchText(refs.segError,
       `最後一次分段錯誤（${segErr.stage}${where}）：${segErr.message}`);
   }
+}
+
+/** Renders the upstream's end-of-stream signal, or '' when it has not said. */
+function sourceLabel(src) {
+  if (!src) return '';
+  if (src.upstream_type) return `上游 ${src.upstream_type}`;
+  if (src.poll_targets) {
+    return `已結束 ${fmt.int(src.ended_targets || 0)}/${fmt.int(src.poll_targets)} 個播放清單`;
+  }
+  return '';
 }
 
 // ── track rows ──────────────────────────────────────────────────────────────
@@ -237,8 +252,10 @@ function renderCard(card, id, cfg, status) {
 
   patchAttr(refs.playLink, 'href', playerURL(id));
 
-  // Manual VOD conversion only applies to a running live channel.
+  // Manual VOD conversion only applies to a running live channel; restoring to
+  // live, only to one that has already transitioned.
   patchHidden(refs.vodBtn, !(status.running && mode === 'live'));
+  patchHidden(refs.restoreBtn, !(status.running && mode === 'vod'));
 
   renderProgress(refs, status);
   renderTracks(card, status.tracks);

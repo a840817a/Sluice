@@ -74,6 +74,18 @@ type Runtime struct {
 	vodIndex          atomic.Pointer[index.ChannelIndex] // non-nil after a successful VOD transition
 	finalDuration     atomic.Int64                       // time.Duration: mediaPresentationDuration from finalMPD
 	staticIngestStart atomic.Pointer[time.Time]          // set when a static upstream is first detected
+
+	// vodSuppressed blocks the automatic VOD transition for a channel that was
+	// just restored to live. Without it the restore is futile: the upstream is
+	// normally still finished, so the source would complete cleanly again
+	// within seconds and put the channel straight back into VOD.
+	//
+	// storedBaseline is the stored-segment count at the moment of that restore.
+	// The suppression lifts as soon as the count exceeds it, which is exactly
+	// "the upstream produced something new" — Progress.AddStored only counts
+	// segments the index accepted as new.
+	vodSuppressed  atomic.Bool
+	storedBaseline atomic.Uint64
 }
 
 // Config returns the channel's current configuration.
@@ -134,6 +146,24 @@ func (rt *Runtime) StaticIngestStartTime() time.Time {
 
 func (rt *Runtime) setStaticIngestStart(t time.Time) { rt.staticIngestStart.Store(&t) }
 
+// autoVODAllowed reports whether a clean source completion may transition this
+// channel to VOD, lifting the suppression a restore installed once the upstream
+// has produced a segment this run.
+//
+// The check is by counter rather than by a callback on the processor because
+// AddStored is already the one place that means "a new segment was committed";
+// a second notification path would be a second thing to keep true.
+func (rt *Runtime) autoVODAllowed() bool {
+	if !rt.vodSuppressed.Load() {
+		return true
+	}
+	if rt.Progress.Snapshot().SegmentsStored > rt.storedBaseline.Load() {
+		rt.vodSuppressed.Store(false)
+		return true
+	}
+	return false
+}
+
 // IsHLSSource reports whether this channel ingests HLS.
 //
 // It reads the runtime that was actually built rather than the configuration
@@ -174,13 +204,18 @@ type Manager struct {
 	runtimes   map[string]*Runtime
 	store      *Store            // optional; when set, VOD state is persisted on transition
 	onVODReady func(rt *Runtime) // optional; called after any successful VOD transition
+	// suppressVOD carries the "do not auto-transition" mark across the restart
+	// that RestoreToLive performs. It cannot live on the Runtime because that
+	// restart builds a new one; Start consumes the entry and clears it.
+	suppressVOD map[string]bool
 }
 
 // NewManager creates a Manager. gwCfg supplies gateway-level defaults.
 func NewManager(gwCfg gocfg.Config) *Manager {
 	return &Manager{
-		gwCfg:    gwCfg,
-		runtimes: make(map[string]*Runtime),
+		gwCfg:       gwCfg,
+		runtimes:    make(map[string]*Runtime),
+		suppressVOD: make(map[string]bool),
 	}
 }
 
@@ -246,6 +281,15 @@ func (m *Manager) Start(parentCtx context.Context, id string, cfg Config) (*Runt
 	}
 	rt.setConfig(cfg)
 
+	// Consume the mark left by RestoreToLive. The baseline is the same number
+	// newIngestPipeline seeded into progress, so "stored has grown past it"
+	// means a segment arrived during this run and not before it.
+	if m.suppressVOD[id] {
+		delete(m.suppressVOD, id)
+		rt.vodSuppressed.Store(true)
+		rt.storedBaseline.Store(storedSegments(ci))
+	}
+
 	m.attachSource(rt, id, cfg, chGwCfg, pl)
 
 	if cfg.IsVOD {
@@ -275,8 +319,7 @@ func (m *Manager) channelGatewayConfig(cfg Config) gocfg.Config {
 	chGwCfg := m.gwCfg
 	chGwCfg.Upstream.MPDURL = cfg.MPDURL
 	chGwCfg.Upstream.ForwardClientIP = cfg.ForwardClientIP
-	chGwCfg.Store.EnableVODTransition = cfg.EnableVODTransition
-	chGwCfg.Store.KeepAllSegments = cfg.KeepAllSegments
+	chGwCfg.Store.KeepAllSegments = cfg.KeepsAllSegments()
 	return chGwCfg
 }
 
@@ -298,7 +341,7 @@ func (m *Manager) restoreIndex(id string, cfg Config) *index.ChannelIndex {
 	}
 	// The rebuilt index must use the same ring capacity the processor will, so
 	// the rule lives in one place.
-	capacity := pipeline.SegmentCapacity(cfg.KeepAllSegments, cfg.EnableVODTransition)
+	capacity := pipeline.SegmentCapacity(cfg.KeepsAllSegments())
 	if err := index.RebuildFromDiskWithCapacity(ci, m.gwCfg.Store.DataDir, id, capacity); err != nil {
 		slog.Warn("disk rebuild failed", "channel", id, "err", err)
 	}
@@ -406,16 +449,6 @@ func (m *Manager) restoreVODState(rt *Runtime, id string) {
 // Every goroutine is counted in rt.wg, which is what lets Stop join them rather
 // than merely cancel them — see Stop for why that matters.
 func (m *Manager) launchIngest(ctx context.Context, rt *Runtime, cfg Config, pl *ingestPipeline) {
-	// Register the VOD transition callback if requested. Only DASH signals the
-	// end of a live stream this way (type dynamic→static); the HLS watcher
-	// signals it by returning from Run when every variant reaches EXT-X-ENDLIST.
-	if cfg.EnableVODTransition && rt.Watcher != nil {
-		rt.Watcher.SetVODTransitionCallback(func(p *imdp.ParsedMPD) {
-			rt.wg.Add(1)
-			go func() { defer rt.wg.Done(); m.transitionToVOD(rt, p) }()
-		})
-	}
-
 	rt.wg.Add(3)
 	go func() { defer rt.wg.Done(); pl.pool.Run(ctx) }()
 	go func() { defer rt.wg.Done(); pl.processor.Run(ctx, pl.pool) }()
@@ -433,6 +466,25 @@ func (m *Manager) superviseSource(ctx context.Context, rt *Runtime, cfg Config, 
 			// an HLS playlist that reached EXT-X-ENDLIST. Enter StaticIngesting
 			// mode and wait for the broker to drain before doing the full VOD
 			// transition.
+			//
+			// Unless this channel was just restored to live, in which case the
+			// upstream is expected to still be finished: fall through to the
+			// backoff and keep re-running the source, so that a stream which
+			// does come back is picked up (and lifts the suppression) instead
+			// of the restore being undone within seconds.
+			if !rt.autoVODAllowed() {
+				slog.Info("source completed while auto-VOD is suppressed, waiting for upstream to resume",
+					"channel", rt.ID, "backoff", backoff)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
+				if backoff < 60*time.Second {
+					backoff *= 2
+				}
+				continue
+			}
 			if !cfg.IsVOD {
 				rt.setStaticIngestStart(time.Now())
 				rt.mode.Store(int32(ModeStaticIngesting))
@@ -480,6 +532,8 @@ func (m *Manager) TransitionToVOD(id string) error {
 	if mode != ModeLive && mode != ModeStaticIngesting {
 		return fmt.Errorf("channel %q is not in live or static-ingesting mode", id)
 	}
+	// An explicit operator action overrides a restore's suppression.
+	rt.vodSuppressed.Store(false)
 	parsed := rt.ParsedMPD()
 	rt.wg.Add(1)
 	go func() { defer rt.wg.Done(); m.transitionToVOD(rt, parsed) }()
@@ -622,6 +676,52 @@ func (m *Manager) RestartWithConfig(ctx context.Context, id string, cfg, oldCfg 
 	return nil
 }
 
+// RestoreToLive brings a channel that has transitioned to VOD back to live
+// ingest: it clears IsVOD, restarts the channel, and marks it so the automatic
+// VOD transition does not immediately undo the restore.
+//
+// Nothing on disk is touched. The segments recorded so far stay where they are
+// and the live index rebuilds from them, so a keep-all channel resumes with its
+// whole history intact. A channel that explicitly asked for the sliding window
+// comes back with only a window's worth of it — and, under
+// store.cleanup: on_expire, will start deleting what falls out. That is the
+// operator's call to make; the admin UI warns before asking for it.
+func (m *Manager) RestoreToLive(ctx context.Context, id string) error {
+	m.mu.RLock()
+	store := m.store
+	m.mu.RUnlock()
+	if store == nil {
+		return fmt.Errorf("no channel store attached")
+	}
+
+	cfg, ok := store.Get(id)
+	if !ok {
+		return fmt.Errorf("channel %q not found", id)
+	}
+	if !cfg.IsVOD {
+		return fmt.Errorf("channel %q is not in VOD mode", id)
+	}
+
+	next := cfg
+	next.IsVOD = false
+
+	m.mu.Lock()
+	m.suppressVOD[id] = true
+	m.mu.Unlock()
+
+	if err := m.RestartWithConfig(ctx, id, next, cfg); err != nil {
+		// The rollback restarted the channel as VOD, which never consults the
+		// mark — but leaving it set would suppress the transition of whatever
+		// starts this channel next.
+		m.mu.Lock()
+		delete(m.suppressVOD, id)
+		m.mu.Unlock()
+		return err
+	}
+	slog.Info("channel restored to live", "id", id)
+	return nil
+}
+
 // ApplyConfig applies cfg to a running channel without restarting it, and
 // reports the fields that prevented it from doing so.
 //
@@ -752,6 +852,18 @@ type ChannelStatus struct {
 	// Tracks is the per-representation breakdown. Absent until the first segment
 	// is indexed.
 	Tracks []TrackStats `json:"tracks,omitempty"`
+	// Source reports how close the upstream is to being finished. A pointer so
+	// a status with nothing to say serialises to the same keys it always had.
+	Source *SourceStatus `json:"source_status,omitempty"`
+}
+
+// SourceStatus reports the upstream's end-of-stream signal, which is what
+// decides when a channel transitions to VOD: the MPD's presentation type for
+// DASH, and the EXT-X-ENDLIST count across poll targets for HLS.
+type SourceStatus struct {
+	UpstreamType string `json:"upstream_type,omitempty"` // DASH: "dynamic" | "static"
+	EndedTargets int    `json:"ended_targets,omitempty"` // HLS: playlists that reached ENDLIST
+	PollTargets  int    `json:"poll_targets,omitempty"`  // HLS: playlists being polled
 }
 
 // PeriodStats summarises one period's segment counts.
@@ -782,6 +894,23 @@ func storedSegments(ci *index.ChannelIndex) uint64 {
 	return n
 }
 
+// sourceStatus reports what the channel's watcher knows about the upstream
+// ending, or nil when it knows nothing yet — before the first MPD fetch, or
+// before HLS discovery has named the playlists to poll.
+func sourceStatus(rt *Runtime) *SourceStatus {
+	switch {
+	case rt.Watcher != nil:
+		if t := rt.Watcher.UpstreamType(); t != "" {
+			return &SourceStatus{UpstreamType: t}
+		}
+	case rt.HLS != nil:
+		if ended, total := rt.HLS.EndListProgress(); total > 0 {
+			return &SourceStatus{EndedTargets: ended, PollTargets: total}
+		}
+	}
+	return nil
+}
+
 func buildStatus(rt *Runtime) ChannelStatus {
 	modeStr := "live"
 	switch rt.Mode() {
@@ -797,6 +926,7 @@ func buildStatus(rt *Runtime) ChannelStatus {
 		MPDURL:  rt.Config().MPDURL,
 		Running: true,
 		Mode:    modeStr,
+		Source:  sourceStatus(rt),
 	}
 	ci := rt.ActiveIndex()
 	stats := make(map[string]*PeriodStats)

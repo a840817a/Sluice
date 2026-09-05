@@ -154,6 +154,7 @@ const ACTIONS = {
   restart: forms.restartChannel,
   delete: forms.deleteChannel,
   vod: forms.transitionToVOD,
+  'restore-live': forms.restoreToLive,
 };
 
 /**

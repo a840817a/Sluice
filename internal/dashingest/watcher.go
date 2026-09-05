@@ -41,11 +41,7 @@ type Watcher struct {
 	lastMPDBytes []byte // raw XML bytes of the most recently fetched MPD
 	// lastKnown tracks the highest seen segment number per representation key.
 	lastKnown map[string]uint64
-	// onVODTransition is called once when the upstream MPD transitions from
-	// dynamic to static (live stream ended). Set via SetVODTransitionCallback.
-	onVODTransition func(p *imdp.ParsedMPD)
-
-	client *http.Client
+	client    *http.Client
 }
 
 // SetProgress attaches the channel's progress counters. Must be called before Run.
@@ -129,6 +125,17 @@ func (w *Watcher) Run(ctx context.Context) error {
 			}
 			w.prog.ClearSourceError()
 			w.processMPD(ctx, p)
+			// The stream ended: the upstream now describes a finished asset.
+			// Returning nil is how a source reports "ingest complete" — the
+			// channel manager turns that into the VOD transition, the same way
+			// it does for an HLS source whose variants all reach ENDLIST.
+			// processMPD ran first on purpose: the final static MPD names the
+			// whole timeline, so any tail segments the last dynamic MPD had
+			// already rolled out of its window get enqueued before we stop.
+			if p.Type == imdp.PresentationStatic {
+				slog.Info("upstream stream ended", "channel", w.channelID)
+				return nil
+			}
 			// Adjust interval if the MPD changed it.
 			newInterval := p.MinimumUpdatePeriod
 			if newInterval <= 0 {
@@ -142,13 +149,18 @@ func (w *Watcher) Run(ctx context.Context) error {
 	}
 }
 
-// SetVODTransitionCallback registers a function to be called once when the
-// upstream MPD transitions from type=dynamic to type=static (stream end).
-// Must be called before Run.
-func (w *Watcher) SetVODTransitionCallback(fn func(p *imdp.ParsedMPD)) {
+// UpstreamType reports the presentation type of the most recently fetched MPD
+// ("dynamic" or "static"), or "" before the first fetch.
+//
+// It is the DASH answer to the same question EndListProgress answers for HLS:
+// has the upstream declared the stream finished yet.
+func (w *Watcher) UpstreamType() string {
 	w.mu.Lock()
-	w.onVODTransition = fn
-	w.mu.Unlock()
+	defer w.mu.Unlock()
+	if w.lastMPD == nil {
+		return ""
+	}
+	return string(w.lastMPD.Type)
 }
 
 // ParsedMPD returns the most recently fetched ParsedMPD (nil if none yet).
@@ -207,25 +219,12 @@ func (w *Watcher) processMPD(ctx context.Context, p *imdp.ParsedMPD) {
 	presentMax, knownSegs := snapshotTrackedSegments(w.channelID, w.ci)
 
 	w.mu.Lock()
-	prevType := imdp.PresentationType("")
-	if w.lastMPD != nil {
-		prevType = w.lastMPD.Type
-	}
 	w.lastMPD = p
 	snapshot := make(map[string]uint64, len(w.lastKnown))
 	for k, v := range w.lastKnown {
 		snapshot[k] = v
 	}
-	cb := w.onVODTransition
 	w.mu.Unlock()
-
-	// Detect live → VOD transition: upstream MPD changed from dynamic to static.
-	if prevType == imdp.PresentationDynamic && p.Type == imdp.PresentationStatic && cb != nil {
-		slog.Info("upstream stream ended, triggering VOD transition",
-			"channel", w.channelID)
-		cb(p)
-		return // stop enqueueing; VOD rebuild takes over
-	}
 
 	// Prefer MPD-level BaseURL over computed directory URL.
 	baseURL := mpdDirURL(w.cfg.Upstream.MPDURL)

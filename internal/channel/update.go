@@ -49,11 +49,12 @@ func RestartRequired(old, next Config, mode ChannelMode) []string {
 	// Frozen into the watcher at construction.
 	add(!vod && old.MPDURL != next.MPDURL, "mpd_url")
 
-	// Both size the segment ring buffer, which is allocated once per
-	// representation and cannot be resized in place. A VOD channel's index is
-	// already unbounded, so neither can shrink it.
-	add(!vod && old.KeepAllSegments != next.KeepAllSegments, "keep_all_segments")
-	add(!vod && old.EnableVODTransition != next.EnableVODTransition, "enable_vod_transition")
+	// Sizes the segment ring buffer, which is allocated once per representation
+	// and cannot be resized in place. A VOD channel's index is already
+	// unbounded, so it cannot shrink it. Compared through the accessor: an
+	// absent value already means "keep", so a config that spells it out is not
+	// an edit and must not cost a restart.
+	add(!vod && old.KeepsAllSegments() != next.KeepsAllSegments(), "keep_all_segments")
 
 	// Decides the whole shape of the runtime, in either mode. The admin API
 	// never lets a client set this, but the manager itself does on transition.

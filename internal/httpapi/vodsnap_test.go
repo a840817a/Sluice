@@ -43,9 +43,8 @@ func TestVODTransitionSnapshotsManifestToDisk(t *testing.T) {
 	t.Cleanup(func() { _ = mgr.Stop("vodsnap") })
 
 	if _, err := mgr.Start(context.Background(), "vodsnap", ch.Config{
-		MPDURL:              origin.URL + "/manifest.mpd",
-		Enabled:             true,
-		EnableVODTransition: true,
+		MPDURL:  origin.URL + "/manifest.mpd",
+		Enabled: true,
 	}); err != nil {
 		t.Fatalf("start: %v", err)
 	}

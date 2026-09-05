@@ -161,9 +161,8 @@ func TestNewGatewayRegistersVODSnapshotCallback(t *testing.T) {
 	dataDir := t.TempDir()
 	writeChannelsJSON(t, dataDir, map[string]channel.Config{
 		"gwvod": {
-			MPDURL:              origin.URL + "/manifest.mpd",
-			Enabled:             true,
-			EnableVODTransition: true,
+			MPDURL:  origin.URL + "/manifest.mpd",
+			Enabled: true,
 		},
 	})
 

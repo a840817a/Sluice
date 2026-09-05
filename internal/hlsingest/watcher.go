@@ -143,6 +143,13 @@ type Watcher struct {
 	// the DVR window rather than everything the channel ingested. Publishing that
 	// as a total would claim a channel had stored 12,483 of 20 segments.
 	vodVariantTotals map[string]int
+	// pollTargets is how many playlists Run is currently waiting on, and
+	// endedTargets which of them have reported EXT-X-ENDLIST. Together they
+	// answer the operator's question when a channel will not settle into VOD:
+	// which playlist is still open. Kept apart from vodVariantTotals, which is
+	// first-poll-only and means something else.
+	pollTargets  int
+	endedTargets map[string]bool
 	// keyURIs maps the published key ID back to the upstream key URI. Only URIs
 	// actually seen in this channel's playlists are ever resolvable, which is
 	// what stops the key proxy from being turned into an open relay.
@@ -311,6 +318,8 @@ func (w *Watcher) Run(ctx context.Context) error {
 
 	w.mu.Lock()
 	variants := append([]variant(nil), w.variants...)
+	w.pollTargets = len(variants)
+	w.endedTargets = make(map[string]bool, len(variants))
 	w.mu.Unlock()
 
 	var wg sync.WaitGroup
@@ -351,6 +360,19 @@ func (w *Watcher) publishVODTotal(pollTargets int) {
 	if complete && total > 0 {
 		w.prog.SetExpectedTotal(uint64(total))
 	}
+}
+
+// EndListProgress reports how many of the playlists this watcher polls have
+// reached EXT-X-ENDLIST, out of how many there are.
+//
+// It exists because a single variant that never ends — a 404 the poll loop
+// retries forever, or a source that simply omits the tag — keeps the whole
+// channel out of VOD with nothing to show for it. "3/4 ended" names the one
+// that is holding everything up.
+func (w *Watcher) EndListProgress() (ended, total int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.endedTargets), w.pollTargets
 }
 
 // SetProgress attaches the channel's progress counters. Must be called before Run.
@@ -564,11 +586,12 @@ func (w *Watcher) pollVariant(ctx context.Context, v variant) {
 			if media.EndList {
 				slog.Info("HLS variant ended",
 					"channel", w.channelID, "rep", v.RepID)
+				w.mu.Lock()
+				w.endedTargets[v.RepID] = true
 				if firstPoll {
-					w.mu.Lock()
 					w.vodVariantTotals[v.RepID] = len(media.Segments)
-					w.mu.Unlock()
 				}
+				w.mu.Unlock()
 				return
 			}
 		}

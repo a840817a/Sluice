@@ -89,7 +89,7 @@ func (s *Server) handleMediaPlaylist(w http.ResponseWriter, r *http.Request) {
 		RepID:          repID,
 		VOD:            isVOD,
 		TargetDuration: targetDur,
-		WindowSegments: windowSegments(s.cfg.Window.Depth.Seconds(), targetDur, rt.Config().KeepAllSegments || isVOD),
+		WindowSegments: windowSegments(s.cfg.Window.Depth.Seconds(), targetDur, rt.Config().KeepsAllSegments() || isVOD),
 	}
 	// fMP4 representations need their initialization section advertised via
 	// EXT-X-MAP; a non-empty init path is exactly the fMP4 signal, and is empty

@@ -66,7 +66,7 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 	baseURL := s.cfg.Server.BaseURL
 	chCfg := rt.Config()
 	windowDepth := s.cfg.Window.Depth
-	if chCfg.KeepAllSegments {
+	if chCfg.KeepsAllSegments() {
 		windowDepth = 24 * time.Hour
 	}
 

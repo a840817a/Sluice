@@ -247,7 +247,6 @@ worker:
 store:
   data_dir: "./data"               # Segment cache root directory
   cleanup: "disabled"              # disabled | on_expire
-  enable_vod_transition: false     # Keep all segments for live→VOD transition
 
 window:
   depth: "120s"                    # Sliding window size (timeShiftBufferDepth)
@@ -297,6 +296,7 @@ Endpoints that do not apply to a channel return 404 — see [Output formats](#ou
 | `DELETE` | `/admin/api/channels/{channelID}` | Stop and remove channel |
 | `GET` | `/admin/api/channels/{channelID}/status` | Real-time ingest progress, per-track breakdown, and representation status |
 | `POST` | `/admin/api/channels/{channelID}/transition-to-vod` | Trigger live→VOD transition |
+| `POST` | `/admin/api/channels/{channelID}/restore-to-live` | Bring a VOD channel back to live ingest |
 
 #### Ingest Progress
 
@@ -343,8 +343,7 @@ Optional fields:
 | `fetch_headers` | `[{"name":…,"value":…}]` injected into upstream manifest/segment requests |
 | `license_headers` | Same shape, injected into DRM license proxy requests |
 | `forward_client_ip` | Pass `X-Forwarded-For` to the license server |
-| `enable_vod_transition` | Keep all segments and auto-transition to VOD when upstream ends |
-| `keep_all_segments` | Unbounded DVR window; stays live even when upstream goes static |
+| `keep_all_segments` | Unbounded DVR window; defaults to true, set `false` for the sliding window |
 
 ## Disk Layout
 
@@ -392,14 +391,18 @@ All logs are JSON via `log/slog` to stdout. Key log events:
 
 ## Live → VOD Transition
 
-When the upstream stream ends and the MPD changes from `type=dynamic` to `type=static`, the gateway:
+When the upstream ends, the gateway transitions the channel to VOD. This is not optional and is the same for both protocols: a DASH upstream signals the end by changing from `type=dynamic` to `type=static`, an HLS one by every polled playlist reaching `#EXT-X-ENDLIST`. The gateway then:
 
-1. Waits for the final MPD fetch
-2. Rebuilds the channel index as an unbounded full history
-3. Switches manifest output to a static (VOD) MPD
+1. Ingests whatever the final manifest still names
+2. Rebuilds the channel index as an unbounded full history, from the segments on disk
+3. Switches manifest output to a static (VOD) MPD / a terminated playlist
 4. Sets `is_vod: true` in `channels.json`
 
 On restart, channels with `is_vod: true` are restored as VOD directly — no re-ingestion needed.
+
+How much history the VOD covers is decided long before the transition, by `keep_all_segments` (default true) and `store.cleanup`: the rebuild can only find what is still on disk.
+
+To undo a transition that fired on an upstream hiccup, `POST .../restore-to-live` (「還原直播」 in the admin UI). Segments are kept, the channel goes back to live ingest, and the automatic transition is suppressed until the upstream delivers a new segment — otherwise the still-finished upstream would send it straight back to VOD.
 
 To manually trigger (e.g., when upstream doesn't signal end-of-stream):
 

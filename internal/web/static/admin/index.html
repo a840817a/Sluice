@@ -51,6 +51,7 @@
         <span data-f="metaEta"></span>
         <span data-f="metaQueue"></span>
         <span data-f="metaUptime"></span>
+        <span data-f="metaSource"></span>
         <span data-f="metaExtra"></span>
       </div>
       <p class="ch-seg-err" data-f="segError" hidden></p>
@@ -76,6 +77,7 @@
       <button class="btn btn-sm btn-edit" data-action="edit">編輯</button>
       <button class="btn btn-sm" data-action="restart">重啟</button>
       <button class="btn btn-sm btn-vod" data-action="vod" data-f="vodBtn" hidden>轉 VOD</button>
+      <button class="btn btn-sm" data-action="restore-live" data-f="restoreBtn" hidden>還原直播</button>
       <button class="btn btn-sm btn-danger" data-action="delete">刪除</button>
     </div>
   </article>
@@ -141,14 +143,8 @@
         </div>
         <div class="field full">
           <label class="inline-checkbox">
-            <input type="checkbox" name="enable_vod_transition">
-            直播結束後自動轉換為 VOD<span class="badge restart">需重啟</span>
-          </label>
-        </div>
-        <div class="field full">
-          <label class="inline-checkbox">
             <input type="checkbox" name="keep_all_segments">
-            保留所有片段（DVR 可拉到頻道啟動以來；占用較多記憶體）<span class="badge restart">需重啟</span>
+            保留所有片段（DVR 可拉到頻道啟動以來；占用較多記憶體。取消勾選則只保留滑動視窗）<span class="badge restart">需重啟</span>
           </label>
         </div>
         <div class="field full">
@@ -230,14 +226,8 @@
           </div>
           <div class="field full">
             <label class="inline-checkbox">
-              <input type="checkbox" name="enable_vod_transition">
-              直播結束後自動轉換為 VOD
-            </label>
-          </div>
-          <div class="field full">
-            <label class="inline-checkbox">
-              <input type="checkbox" name="keep_all_segments">
-              保留所有片段（DVR 可拉到頻道啟動以來；占用較多記憶體）
+              <input type="checkbox" name="keep_all_segments" checked>
+              保留所有片段（DVR 可拉到頻道啟動以來；占用較多記憶體。取消勾選則只保留滑動視窗）
             </label>
           </div>
           <div class="field full">

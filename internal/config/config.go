@@ -93,12 +93,9 @@ type StoreConfig struct {
 	// segment 儲存根目錄，結構：{data_dir}/{channel}/periods/{period}/{type}/{segNo}.m4s
 	DataDir string      `yaml:"data_dir"`
 	Cleanup CleanupMode `yaml:"cleanup"` // default: "disabled"
-	// EnableVODTransition keeps all segments on disk during live and supports
-	// automatic transition to a full-history VOD when the stream ends.
-	// When true, Cleanup is ignored during live (no segments are deleted).
-	EnableVODTransition bool `yaml:"enable_vod_transition"`
 	// KeepAllSegments is per-channel only; populated by the channel manager from
-	// the channel config. Keeps every fetched segment available in live DVR.
+	// the channel config. Keeps every fetched segment available in live DVR,
+	// which also means Cleanup is ignored: no segments are deleted.
 	KeepAllSegments bool `yaml:"-"`
 }
 

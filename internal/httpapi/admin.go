@@ -244,6 +244,28 @@ func (a *AdminServer) handleTransitionToVOD(w http.ResponseWriter, r *http.Reque
 	})
 }
 
+// handleRestoreToLive brings a VOD channel back to live ingest, undoing an
+// automatic transition that fired on an upstream hiccup.
+//
+// POST /admin/api/channels/{channelID}/restore-to-live
+func (a *AdminServer) handleRestoreToLive(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "channelID")
+	if _, ok := a.store.Get(id); !ok {
+		writeErr(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	// a.ctx, never the request's: the channel outlives the response, and a
+	// request-scoped context would cancel its ingest the moment this returns.
+	if err := a.manager.RestoreToLive(a.ctx, id); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"id":     id,
+		"status": "live",
+	})
+}
+
 // --- helpers ---
 
 func writeJSON(w http.ResponseWriter, code int, v interface{}) {

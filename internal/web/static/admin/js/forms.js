@@ -8,7 +8,6 @@ import { configFor } from './cards.js';
 const CHECKBOXES = [
   'enable_playready',
   'enable_widevine',
-  'enable_vod_transition',
   'keep_all_segments',
   'forward_client_ip',
 ];
@@ -20,7 +19,6 @@ const RESTART_FIELDS = {
   source_type: '來源類型',
   mpd_url: '來源 URL',
   hls_key_mode: 'HLS AES-128 處理',
-  enable_vod_transition: '自動轉 VOD',
   keep_all_segments: '保留所有片段',
 };
 
@@ -128,7 +126,6 @@ function currentEditValues() {
     source_type: f.elements['source_type'].value,
     mpd_url: f.elements['mpd_url'].value,
     hls_key_mode: f.elements['hls_key_mode'].value,
-    enable_vod_transition: f.elements['enable_vod_transition'].checked,
     keep_all_segments: f.elements['keep_all_segments'].checked,
   };
 }
@@ -140,8 +137,9 @@ function refreshRestartNote() {
     source_type: editingCfg.source_type || 'dash',
     mpd_url: editingCfg.mpd_url || '',
     hls_key_mode: editingCfg.hls_key_mode || 'passthrough',
-    enable_vod_transition: !!editingCfg.enable_vod_transition,
-    keep_all_segments: !!editingCfg.keep_all_segments,
+    // Absent means "keep": the same default the gateway applies, so merely
+    // opening the modal must not read as a change.
+    keep_all_segments: editingCfg.keep_all_segments !== false,
   };
   const changed = Object.keys(RESTART_FIELDS).filter(k => now[k] !== orig[k]);
   const note = document.getElementById('editRestartNote');
@@ -175,8 +173,7 @@ export function openEdit(id) {
   // Configs written before HLS support have no source_type and mean DASH.
   f.elements['source_type'].value = cfg.source_type || 'dash';
   f.elements['hls_key_mode'].value = cfg.hls_key_mode || 'passthrough';
-  f.elements['enable_vod_transition'].checked = !!cfg.enable_vod_transition;
-  f.elements['keep_all_segments'].checked = !!cfg.keep_all_segments;
+  f.elements['keep_all_segments'].checked = cfg.keep_all_segments !== false;
   f.elements['enable_playready'].checked = cfg.enable_playready !== false;
   f.elements['enable_widevine'].checked = cfg.enable_widevine !== false;
   f.elements['forward_client_ip'].checked = !!cfg.forward_client_ip;
@@ -270,6 +267,21 @@ export async function transitionToVOD(id) {
     onChanged();
   } catch (err) {
     showMsg(err.message || '轉換失敗', 'err');
+  }
+}
+
+export async function restoreToLive(id) {
+  if (!confirm(
+    `將 channel「${id}」還原為直播模式？\n\n` +
+    '已錄下的片段都會保留。若此頻道未勾選「保留所有片段」，還原後只會留下滑動視窗' +
+    '內的片段，且在 cleanup: on_expire 設定下舊片段會開始被刪除。'
+  )) return;
+  try {
+    await api.restoreToLive(id);
+    showMsg('已還原為直播模式', 'ok');
+    onChanged();
+  } catch (err) {
+    showMsg(err.message || '還原失敗', 'err');
   }
 }
 

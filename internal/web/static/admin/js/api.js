@@ -67,6 +67,10 @@ export function transitionToVOD(id) {
   return request(`${BASE}/${encodeURIComponent(id)}/transition-to-vod`, { method: 'POST' });
 }
 
+export function restoreToLive(id) {
+  return request(`${BASE}/${encodeURIComponent(id)}/restore-to-live`, { method: 'POST' });
+}
+
 /** Public player URL for a channel. */
 export function playerURL(id) {
   return `/player/${encodeURIComponent(id)}`;

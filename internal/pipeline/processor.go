@@ -36,20 +36,20 @@ const sidecarCompactEvery = 2000
 // SegmentCapacity returns the ring buffer capacity per representation.
 // Unbounded (0) when the channel wants every segment kept; capped otherwise.
 //
-// It takes the two flags rather than a config so the channel manager can call
-// it while restoring an index from disk, before it has assembled the
-// per-channel gateway config. Both callers must agree: a rebuilt index with a
-// bounded ring and a processor with an unbounded one would silently drop
-// history a KeepAllSegments channel is supposed to keep.
-func SegmentCapacity(keepAllSegments, enableVODTransition bool) int {
-	if keepAllSegments || enableVODTransition {
+// It takes the flag rather than a config so the channel manager can call it
+// while restoring an index from disk, before it has assembled the per-channel
+// gateway config. Both callers must agree: a rebuilt index with a bounded ring
+// and a processor with an unbounded one would silently drop history a
+// KeepAllSegments channel is supposed to keep.
+func SegmentCapacity(keepAllSegments bool) int {
+	if keepAllSegments {
 		return 0
 	}
 	return ringCapacity
 }
 
 func segmentCapacity(cfg config.Config) int {
-	return SegmentCapacity(cfg.Store.KeepAllSegments, cfg.Store.EnableVODTransition)
+	return SegmentCapacity(cfg.Store.KeepAllSegments)
 }
 
 // KeyFetcher supplies AES-128 content keys for segments that must be decrypted
@@ -380,9 +380,9 @@ func (p *Processor) barrier(periodID string) *index.Barrier {
 }
 
 func (p *Processor) expireOldSegments(ps *index.PeriodState) {
-	// When VOD transition is enabled or the channel keeps all segments, skip
-	// expiration so the full history stays available.
-	if p.cfg.Store.EnableVODTransition || p.cfg.Store.KeepAllSegments {
+	// When the channel keeps all segments, skip expiration so the full history
+	// stays available.
+	if p.cfg.Store.KeepAllSegments {
 		return
 	}
 

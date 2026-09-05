@@ -114,6 +114,7 @@ func NewRouter(
 		r.Get("/admin/api/channels/{channelID}/status", admin.handleChannelStatus)
 		r.Post("/admin/api/channels/{channelID}/restart", admin.handleRestartChannel)
 		r.Post("/admin/api/channels/{channelID}/transition-to-vod", admin.handleTransitionToVOD)
+		r.Post("/admin/api/channels/{channelID}/restore-to-live", admin.handleRestoreToLive)
 	})
 
 	return r

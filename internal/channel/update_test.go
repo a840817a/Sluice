@@ -48,8 +48,7 @@ func TestRestartRequired(t *testing.T) {
 
 		// Ingest-only: inert once the channel is serving from disk in VOD mode.
 		{"mpd url", func(c *Config) { c.MPDURL = "http://example.com/b.mpd" }, []string{"mpd_url"}, nil},
-		{"keep all", func(c *Config) { c.KeepAllSegments = true }, []string{"keep_all_segments"}, nil},
-		{"vod transition", func(c *Config) { c.EnableVODTransition = true }, []string{"enable_vod_transition"}, nil},
+		{"keep all", func(c *Config) { c.KeepAllSegments = BoolPtr(false) }, []string{"keep_all_segments"}, nil},
 	}
 
 	for _, tc := range tests {
@@ -136,8 +135,7 @@ func TestVODBlockersAreSubsetOfLive(t *testing.T) {
 		func(c *Config) { c.SourceType = SourceHLS },
 		func(c *Config) { c.HLSKeyMode = KeyModeDecrypt },
 		func(c *Config) { c.MPDURL = "http://other" },
-		func(c *Config) { c.KeepAllSegments = true },
-		func(c *Config) { c.EnableVODTransition = true },
+		func(c *Config) { c.KeepAllSegments = BoolPtr(false) },
 		func(c *Config) { c.IsVOD = true },
 		func(c *Config) { c.Title = "x" },
 	}
