@@ -17,6 +17,16 @@ TAG="${1:-latest}"
 IMAGE="${IMAGE:-ghcr.io/a840817a/sluice}:${TAG}"
 HTTP_PORT="${SLUICE_HTTP_PORT:-8080}"
 
+# TLS is off unless asked for. It matters for more than eavesdropping: browsers
+# expose EME only in a secure context, so a DRM channel served over plain HTTP
+# to anything but localhost fails in the player with shaka error 6020
+# (MISSING_EME_SUPPORT) — navigator.requestMediaKeySystemAccess is simply not
+# there. Clear content is unaffected.
+TLS_SELF_SIGNED="${SLUICE_TLS_SELF_SIGNED:-false}"
+TLS_IP="${SLUICE_TLS_IP:-}"
+TLS_GIVEN=""
+[ -n "${SLUICE_TLS_SELF_SIGNED:-}${SLUICE_TLS_IP:-}" ] && TLS_GIVEN=yes
+
 command -v podman >/dev/null || { echo "podman not found"; exit 1; }
 command -v systemctl >/dev/null || { echo "systemd not found — this installs a Quadlet unit"; exit 1; }
 
@@ -51,6 +61,17 @@ fi
 # directory is the one thing worth putting on its own disk. Defaults to living
 # under SLUICE_DIR, which is right for a single-disk host.
 DATA_DIR="${SLUICE_DATA_DIR:-$SLUICE_DIR/data}"
+
+# A self-signed certificate covers every address the gateway can see, but it
+# runs in a network namespace: net.InterfaceAddrs() returns the container's
+# addresses, never the host's. So the address people actually type has to be
+# passed in, or the certificate will not carry it — and a name mismatch is the
+# one TLS warning a browser will not let you click through.
+if [ "$TLS_SELF_SIGNED" = "true" ] && [ -z "$TLS_IP" ]; then
+	TLS_IP=$(ip -4 route get 1.1.1.1 2>/dev/null |
+		awk '{for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }}')
+	[ -n "$TLS_IP" ] && echo "note     SLUICE_TLS_IP not set; using $TLS_IP for the certificate"
+fi
 
 echo "podman   $ver rootless=$ROOTLESS selinux=$SELINUX"
 echo "image    $IMAGE"
@@ -87,6 +108,46 @@ elif ! grep -qE '^SLUICE_ADMIN_PASSWORD=.+' "$ENV_FILE"; then
 	echo "$ENV_FILE exists but SLUICE_ADMIN_PASSWORD is empty — set it and re-run"; exit 1
 else
 	echo "kept     $ENV_FILE (existing password left alone)"
+fi
+
+# --- TLS ------------------------------------------------------------------
+# Same .env as the password: one per-host file, and the unit reads it already.
+# Only rewritten when this run was actually given TLS settings.
+set_env() {
+	if grep -qE "^$1=" "$ENV_FILE"; then
+		sed -i "s#^$1=.*#$1=$2#" "$ENV_FILE"
+	else
+		printf '%s=%s\n' "$1" "$2" >> "$ENV_FILE"
+	fi
+}
+# Each key is written only if this run named it. Writing both together would
+# mean that re-running with just a new SLUICE_TLS_IP — to correct an address —
+# also wrote SELF_SIGNED=false and silently turned TLS off.
+if [ -n "${SLUICE_TLS_SELF_SIGNED:-}" ]; then
+	set_env SLUICE_TLS_SELF_SIGNED "$TLS_SELF_SIGNED"
+fi
+if [ -n "$TLS_IP" ] && [ -n "$TLS_GIVEN" ]; then
+	set_env SLUICE_TLS_IP "$TLS_IP"
+fi
+[ -n "$TLS_GIVEN" ] && echo "wrote    TLS settings into $ENV_FILE"
+
+# From here the file is the source of truth, so a host configured by an earlier
+# run is described and probed correctly by a re-run that says nothing about TLS.
+if grep -qE '^SLUICE_TLS_SELF_SIGNED=true' "$ENV_FILE"; then
+	TLS_SELF_SIGNED=true
+	SCHEME=https
+	TLS_IP=$(sed -n 's/^SLUICE_TLS_IP=//p' "$ENV_FILE")
+	if [ -n "$TLS_IP" ]; then
+		echo "tls      self-signed, certificate covers $TLS_IP"
+	else
+		echo "tls      self-signed, but SLUICE_TLS_IP is unset"
+		echo "warn     the certificate will not carry this host's address, and a name"
+		echo "warn     mismatch is the one TLS warning a browser cannot click through"
+	fi
+else
+	TLS_SELF_SIGNED=false
+	SCHEME=http
+	echo "tls      off (plain HTTP)"
 fi
 
 # :Z relabels the mount for SELinux. Harmless where SELinux is off, but dropped
@@ -239,7 +300,28 @@ if [ "$state" != "healthy" ]; then
 fi
 
 echo
-curl -fsS "localhost:${HTTP_PORT}/healthz" && echo
+# -k when self-signed: nothing can verify a certificate the gateway generated
+# for itself, and this request never leaves loopback. The question here is "is
+# my own listener answering", not who it claims to be.
+probe=(curl -fsS)
+[ "$TLS_SELF_SIGNED" = "true" ] && probe+=(-k)
+"${probe[@]}" "${SCHEME}://localhost:${HTTP_PORT}/healthz" && echo
+
+echo "  ${SCHEME}://<this host>:${HTTP_PORT}/    # player"
 echo "  ${SYSTEMCTL[*]} stop sluice        # stop"
 echo "  bash bootstrap.sh                  # re-run to upgrade (:latest)"
 echo "  ${SYSTEMCTL[*]} restart sluice     # after editing Image= to pin or roll back"
+
+# Last, so it survives a curl | bash that scrolled everything else away.
+if [ "$TLS_SELF_SIGNED" != "true" ]; then
+	echo
+	if [ "$HTTP_PORT" = "443" ]; then
+		echo "NOTE: published on 443 but serving plain HTTP — https://<host>/ will not"
+		echo "      connect at all. That is almost certainly not what you meant."
+	fi
+	echo "NOTE: no TLS. Browsers expose EME only in a secure context, so a DRM"
+	echo "      channel opened at anything but localhost fails in the player with"
+	echo "      shaka error 6020 (MISSING_EME_SUPPORT). Clear content is unaffected."
+	echo "      To switch on a self-signed certificate, re-run with:"
+	echo "          SLUICE_TLS_SELF_SIGNED=true SLUICE_TLS_IP=<this host's IP>"
+fi

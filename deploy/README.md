@@ -115,6 +115,35 @@ that is not configured yet. `cmd/gateway/checkstore_test.go` pins that ordering,
 because a password requirement there would fail identically whether the mount
 was good or bad.
 
+#### TLS, and why a DRM channel needs it
+
+```bash
+SLUICE_TLS_SELF_SIGNED=true SLUICE_TLS_IP=<this host's IP> bash bootstrap.sh
+```
+
+Browsers expose EME only in a secure context. Served over plain HTTP to
+anything but localhost, `navigator.requestMediaKeySystemAccess` does not exist
+at all and a DRM channel fails in the player with shaka error 6020,
+`MISSING_EME_SUPPORT` — not 6001, which is what an unsupported key system looks
+like. Clear content plays fine, which is what makes this confusing: the gateway,
+the manifest and the keys are all working.
+
+`SLUICE_TLS_IP` matters more here than on a host install. The self-signed
+certificate covers every address the gateway can see, but it sees a container
+network namespace — never the host's LAN address. Without this the certificate
+will not carry the address people type, and a name mismatch is the one TLS
+warning a browser will not let you click through. The script fills it in from
+the default route when TLS is on and the value is missing.
+
+The settings live in the same `.env` as the password. A re-run that says nothing
+about TLS leaves them alone, and re-running with only `SLUICE_TLS_IP` changes
+the address without turning TLS off.
+
+There is one listener, so TLS is served on whatever port the container binds —
+publishing stays `SLUICE_HTTP_PORT`. Publishing 443 while serving plain HTTP is
+called out at the end of a run, because `https://<host>/` then does not connect
+at all.
+
 ### By hand
 
 ```bash
