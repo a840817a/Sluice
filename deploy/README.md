@@ -1,11 +1,12 @@
 # Deploying Sluice
 
-Two launchers, one image and one `.env` between them:
+Three launchers, one image and one `.env` between them:
 
 | File | Engine | Notes |
 |---|---|---|
 | `../compose.yaml` | Docker | Verified working |
 | `sluice.container` | Podman + systemd (Quadlet) | Container behaviour verified; the unit itself is parsed, not yet started |
+| `bootstrap.sh` | Podman + systemd (Quadlet) | Same install on a host with no checkout; carries the unit inline |
 | `config.container.yaml` | both | Baked into the image; not deployed by hand |
 
 ## Podman: verified 2026-08-24
@@ -64,6 +65,56 @@ rootful Podman rejects it, and `:Z` removed where SELinux is off.
 verified host, but the script itself has not been executed — see the note at the
 top of this file about what that is worth.
 
+### On a host with no checkout
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/a840817a/Sluice/main/deploy/bootstrap.sh | sudo bash
+```
+
+Same result as `install-quadlet.sh`, but it carries the unit inline instead of
+reading `sluice.container`, so nothing has to be cloned. **If you change
+`sluice.container`, change the heredoc in `bootstrap.sh` too** — nothing enforces
+that, so it is worth diffing the directive names when either one moves.
+
+Defaults to `:latest`; pass a tag (`bash -s -- 0.1.1`) to pin. Re-running it is
+the upgrade path for a moving tag: Podman's default pull policy is `missing`, so
+`systemctl restart` alone keeps starting the image already on disk.
+
+Before installing anything it runs the gateway's own writability check inside
+the real image, against the real mount, user namespace and SELinux label:
+
+```bash
+podman run --rm --read-only -v "$DATA_DIR:/data:Z" \
+    --userns=keep-id:uid=65532,gid=65532 \
+    $IMAGE -config /etc/sluice/config.yaml -check-store
+```
+
+(`--userns` on rootless only, and `:Z` on SELinux only — the script adds each
+where the host needs it, exactly as it does for the unit.)
+
+If `/data` is not writable it prints the directory's uid/gid/mode next to the
+uid/gid the process runs as, and stops without installing the unit. That timing
+is the point: the unit is `Restart=always`, so installing first would leave a
+service crash-looping and enabled at boot over a fault that was already
+knowable.
+
+It is the same `store.CheckWritable` the gateway calls at startup, so there is
+one definition of "writable" rather than a shell reimplementation that drifts
+from it — and the check covers every cause at once: a mode or owner the process
+does not match, an image that declares `USER` with no group (before 0.1.1, the
+primary gid came from the image's own `/etc/passwd` and was 65532, not 0), a
+missing `:Z`, a read-only mount.
+
+`-check-store` arrived after 0.1.1. Against an older tag the script says so and
+continues rather than refusing — those images work when the volume is right,
+they just cannot say so in advance — but 0.1.0 is the one that cannot write a
+group-0 directory at all, so a warning there is worth acting on.
+
+`-check-store` runs ahead of the admin-password policy, so it works on a host
+that is not configured yet. `cmd/gateway/checkstore_test.go` pins that ordering,
+because a password requirement there would fail identically whether the mount
+was good or bad.
+
 ### By hand
 
 ```bash
@@ -82,9 +133,11 @@ chmod 0775 ~/sluice/data
 # and the directory stays owned by you.
 ```
 
-Skipping this on a rootful host produces a permission error from deep inside the
-segment store rather than at startup. It was the first failure found when this
-was run on a real Podman host.
+Skipping this on a rootful host used to produce a permission error from deep
+inside the segment store, minutes or days after a start that reported healthy —
+the first failure found when this was run on a real Podman host. The gateway now
+checks the directory at startup and refuses to run, so the mistake is loud and
+immediate whichever launcher you use.
 
 The gateway refuses to start with its built-in password on any address that is
 not loopback, so this is not optional.
@@ -97,6 +150,9 @@ Edit the `Image=` tag, then:
 systemctl --user daemon-reload
 systemctl --user restart sluice
 ```
+
+Or, if the unit was installed by `bootstrap.sh` at `:latest`, re-run it — the
+restart on its own will not pull a newer image.
 
 Rolling back is the same edit with the previous tag. Every push to `main` also
 publishes an immutable `sha-<short>` tag if you need to pin something that was
