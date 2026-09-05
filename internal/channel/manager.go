@@ -17,7 +17,6 @@ import (
 	"github.com/a840817a/sluice/internal/hlskey"
 	"github.com/a840817a/sluice/internal/index"
 	imdp "github.com/a840817a/sluice/internal/mpd"
-	"github.com/a840817a/sluice/internal/pipeline"
 	"github.com/a840817a/sluice/internal/progress"
 	"github.com/a840817a/sluice/internal/queue"
 )
@@ -236,26 +235,13 @@ func (m *Manager) SetOnVODReady(fn func(rt *Runtime)) {
 	m.mu.Unlock()
 }
 
-// ingestPipeline is the per-channel machinery both protocols share: one queue,
-// one worker pool, one processor, and the counters they feed. It is passed
-// between Start's phases so each of them can stay a named step rather than
-// another hundred lines of the same function.
-type ingestPipeline struct {
-	headers   *fetch.AtomicHeaders
-	broker    *queue.Broker
-	pool      *fetch.Pool
-	processor *pipeline.Processor
-	progress  *progress.Counters
-}
-
 // Start launches all goroutines for a channel. Idempotent: if already running,
 // the existing runtime is returned unchanged.
 //
-// The body is a sequence of named phases rather than one long composition,
-// because the order between them carries meaning that is easy to break: the
-// index has to be restored before the processor is built (they must agree on
-// ring capacity), the runtime has to be registered before ingest starts, and a
-// VOD channel must return before any ingest goroutine is launched at all.
+// The order here carries meaning that is easy to break: the ingest machinery is
+// built before the runtime that publishes it, the runtime is registered before
+// ingest starts, and a VOD channel returns before any ingest goroutine is
+// launched at all. What each piece is made of lives in newIngestPipeline.
 func (m *Manager) Start(parentCtx context.Context, id string, cfg Config) (*Runtime, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -266,13 +252,15 @@ func (m *Manager) Start(parentCtx context.Context, id string, cfg Config) (*Runt
 
 	ctx, cancel := context.WithCancel(parentCtx)
 
-	chGwCfg := m.channelGatewayConfig(cfg)
-	ci := m.restoreIndex(id, cfg)
-	pl := m.newIngestPipeline(id, cfg, chGwCfg, ci)
+	pl := newIngestPipeline(m.gwCfg, id, cfg)
 
 	rt := &Runtime{
 		ID:       id,
-		Index:    ci,
+		Index:    pl.index,
+		Watcher:  pl.watcher,
+		HLS:      pl.hls,
+		Keys:     pl.keys,
+		Source:   pl.source,
 		Progress: pl.progress,
 		Broker:   pl.broker,
 		headers:  pl.headers,
@@ -287,10 +275,8 @@ func (m *Manager) Start(parentCtx context.Context, id string, cfg Config) (*Runt
 	if m.suppressVOD[id] {
 		delete(m.suppressVOD, id)
 		rt.vodSuppressed.Store(true)
-		rt.storedBaseline.Store(storedSegments(ci))
+		rt.storedBaseline.Store(storedSegments(pl.index))
 	}
-
-	m.attachSource(rt, id, cfg, chGwCfg, pl)
 
 	if cfg.IsVOD {
 		m.restoreVODState(rt, id)
@@ -308,106 +294,6 @@ func (m *Manager) Start(parentCtx context.Context, id string, cfg Config) (*Runt
 
 	slog.Info("channel started", "id", id)
 	return rt, nil
-}
-
-// channelGatewayConfig merges gateway defaults with this channel's settings.
-//
-// The result is a copy: several fields are per-channel only (marked yaml:"-" on
-// the config type) and exist so downstream constructors can read one config
-// instead of a config plus a scattering of overrides.
-func (m *Manager) channelGatewayConfig(cfg Config) gocfg.Config {
-	chGwCfg := m.gwCfg
-	chGwCfg.Upstream.MPDURL = cfg.MPDURL
-	chGwCfg.Upstream.ForwardClientIP = cfg.ForwardClientIP
-	chGwCfg.Store.KeepAllSegments = cfg.KeepsAllSegments()
-	return chGwCfg
-}
-
-// restoreIndex rebuilds the channel's segment index from what is already on
-// disk, so a restart resumes instead of re-fetching.
-//
-// A rebuild failure is logged and not returned: an empty index means the
-// channel re-ingests, which is recoverable, whereas refusing to start leaves it
-// down until someone intervenes.
-func (m *Manager) restoreIndex(id string, cfg Config) *index.ChannelIndex {
-	ci := index.NewChannelIndex()
-	if cfg.IsVOD {
-		// A channel already transitioned to VOD keeps its full history, so the
-		// rebuild uses unbounded rings.
-		if err := index.RebuildFromDiskForVOD(ci, m.gwCfg.Store.DataDir, id); err != nil {
-			slog.Warn("VOD disk rebuild failed", "channel", id, "err", err)
-		}
-		return ci
-	}
-	// The rebuilt index must use the same ring capacity the processor will, so
-	// the rule lives in one place.
-	capacity := pipeline.SegmentCapacity(cfg.KeepsAllSegments())
-	if err := index.RebuildFromDiskWithCapacity(ci, m.gwCfg.Store.DataDir, id, capacity); err != nil {
-		slog.Warn("disk rebuild failed", "channel", id, "err", err)
-	}
-	return ci
-}
-
-// newIngestPipeline builds the queue, worker pool and processor for a channel.
-func (m *Manager) newIngestPipeline(id string, cfg Config, chGwCfg gocfg.Config, ci *index.ChannelIndex) *ingestPipeline {
-	// One provider shared by the fetcher, the watcher and the key cache, so a
-	// credential rotation applied via ApplyConfig reaches all three at once.
-	headers := fetch.NewAtomicHeaders(HeaderMap(cfg.FetchHeaders))
-
-	broker := queue.NewBroker(4096)
-	fetcher := fetch.NewFetcher(nil, headers, m.gwCfg.Worker.MaxSegmentBytes, m.gwCfg.Worker.SegmentTimeout)
-	pool := fetch.NewPool(fetcher, broker, m.gwCfg.Worker.FetchWorkers)
-	processor := pipeline.NewProcessor(chGwCfg, id, ci, broker)
-
-	// Progress counts from this start onwards, so the segments the rebuild
-	// restored from disk are seeded in rather than re-counted as fresh work.
-	// They are seeded without throughput samples: they were not fetched during
-	// this run, and treating them as such would render an absurd rate and ETA.
-	prog := progress.New()
-	prog.SeedStored(storedSegments(ci))
-	processor.SetProgress(prog)
-
-	return &ingestPipeline{
-		headers:   headers,
-		broker:    broker,
-		pool:      pool,
-		processor: processor,
-		progress:  prog,
-	}
-}
-
-// attachSource picks the ingest driver for this channel's upstream protocol.
-// Both feed the same broker, processor, store and index; only discovery and the
-// publish rule differ.
-func (m *Manager) attachSource(rt *Runtime, id string, cfg Config, chGwCfg gocfg.Config, pl *ingestPipeline) {
-	if !cfg.IsHLS() {
-		w := dashingest.NewWatcher(chGwCfg, id, pl.headers, rt.Index, pl.broker)
-		w.SetProgress(pl.progress)
-		rt.Watcher = w
-		rt.Source = w
-		return
-	}
-
-	hw := hlsingest.NewWatcher(chGwCfg, id, cfg.MPDURL, pl.headers, cfg.DecryptOnIngest(),
-		hlsingest.SourceStatePath(m.gwCfg.Store.DataDir, id), rt.Index, pl.broker)
-	hw.SetProgress(pl.progress)
-	rt.HLS = hw
-	rt.Source = hw
-
-	// One key cache per channel, shared by decrypt-on-ingest and the key proxy,
-	// so a key is fetched from the upstream server at most once. Passthrough
-	// channels persist keys to disk so playback survives the upstream key server
-	// going away; decrypt channels never serve keys and keep them in memory only.
-	keyStorePath := ""
-	if !cfg.DecryptOnIngest() {
-		keyStorePath = hlskey.KeyStorePath(m.gwCfg.Store.DataDir, id)
-	}
-	rt.Keys = hlskey.NewCache(nil, pl.headers, keyStorePath)
-	pl.processor.SetKeyFetcher(rt.Keys)
-
-	// HLS tracks are independent media playlists the player aligns itself, so
-	// publish each segment directly rather than gating on the A/V barrier.
-	pl.processor.SetPublishPolicy(pipeline.PublishImmediate)
 }
 
 // restoreVODState brings a channel back up in VOD mode from persisted state,
