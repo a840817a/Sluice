@@ -87,8 +87,13 @@ func (s *Server) handleChannelHealth(w http.ResponseWriter, r *http.Request) {
 		}
 		resp.Periods = make(map[string]*periodHealth)
 
-		rt.Index.Mu().RLock()
-		for periodID, ps := range rt.Index.Periods {
+		// The index that describes what the channel can actually serve: after a
+		// VOD transition that is the full-history index, not the live window the
+		// ring still holds. Reading rt.Index directly reported a transitioned
+		// channel's segment counts from the wrong index.
+		ci := rt.ActiveIndex()
+		ci.Mu().RLock()
+		for periodID, ps := range ci.Periods {
 			ph := &periodHealth{AdaptationSets: make(map[string]asHealth)}
 			ps.Mu().RLock()
 			for asID, as := range ps.AdaptationSets {
@@ -111,7 +116,7 @@ func (s *Server) handleChannelHealth(w http.ResponseWriter, r *http.Request) {
 			ps.Mu().RUnlock()
 			resp.Periods[periodID] = ph
 		}
-		rt.Index.Mu().RUnlock()
+		ci.Mu().RUnlock()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
