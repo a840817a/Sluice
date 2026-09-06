@@ -537,10 +537,13 @@ func injectContentProtections(encoded []byte, orig *imdp.ParsedMPD, cfg Generato
 					continue
 				}
 				val := attrValue(rawCP, "value")
+				// The LA_URL is not rewritten here. RawCPs come back from the
+				// parser re-encoded through encoding/xml, which resolves the
+				// mspr: prefix into an xmlns attribute, so every PlayReady
+				// object reaching this point is spelled <pro xmlns="...">.
+				// rewriteProElements handles that spelling over the finished
+				// bytes, after this injection.
 				raw := rawCP
-				if !cfg.DisablePlayReady && cfg.LicenseURL != "" {
-					raw = rewriteRawCPLAURL(raw, cfg.LicenseURL)
-				}
 				stub := `<ContentProtection schemeIdUri="` + sid + `"/>`
 				if val != "" {
 					stub = `<ContentProtection schemeIdUri="` + sid + `" value="` + val + `"/>`
@@ -582,27 +585,6 @@ func attrValue(xml, attr string) string {
 		return ""
 	}
 	return rest[:end]
-}
-
-// rewriteRawCPLAURL rewrites the LA_URL inside an mspr:pro attribute in a
-// raw ContentProtection XML string.
-func rewriteRawCPLAURL(rawCP, licenseURL string) string {
-	const open = `<mspr:pro>`
-	const close = `</mspr:pro>`
-	start := strings.Index(rawCP, open)
-	if start < 0 {
-		return rawCP
-	}
-	end := strings.Index(rawCP[start:], close)
-	if end < 0 {
-		return rawCP
-	}
-	b64 := rawCP[start+len(open) : start+end]
-	rewritten, err := RewriteLAURL(b64, licenseURL)
-	if err != nil {
-		return rawCP
-	}
-	return rawCP[:start+len(open)] + rewritten + rawCP[start+end:]
 }
 
 // rewriteProElements rewrites LA_URL inside every <pro>...</pro> element in the
