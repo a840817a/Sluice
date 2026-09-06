@@ -384,52 +384,68 @@ func (p *Processor) barrier(periodID string) *index.Barrier {
 	return b
 }
 
-func (p *Processor) expireOldSegments(ps *index.PeriodState) {
-	// When the channel keeps all segments, skip expiration so the full history
-	// stays available.
-	if p.cfg.Store.KeepAllSegments {
-		return
+// expiryCutoff returns the media-time boundary below which published segments
+// have left the window, and whether any expiry should happen at all.
+//
+// It is separated from the walk because it is the whole of the decision: given
+// a live edge, everything about which segments age out is arithmetic on the
+// configuration, with no index and no filesystem involved.
+//
+// The cutoff is media time, not wall clock. A segment's EndSec comes from
+// tfdt/timescale — presentation time — so the window has to be measured from
+// the period's own live edge or a channel whose upstream clock differs from
+// ours expires the wrong segments.
+func expiryCutoff(cfg config.Config, liveEdgeSec float64) (float64, bool) {
+	// Keeping every segment outranks the cleanup mode: a channel that will
+	// finish as VOD must not shed the history it is about to serve.
+	if cfg.Store.KeepAllSegments {
+		return 0, false
 	}
-
-	depth := p.cfg.Window.Depth
-	safe := p.cfg.Window.SafeEdgeBuffer
+	depth := cfg.Window.Depth
 	if depth <= 0 {
-		return
+		return 0, false
 	}
-	// Expiry must be based on media timeline, not wall clock.
-	// Segment EndSec is derived from tfdt/timescale (presentation time), so we
-	// compute a media-time cutoff from the current live edge in this period.
-	liveEdge := periodLiveEdgeSec(ps)
-	if liveEdge <= 0 {
-		return
+	if liveEdgeSec <= 0 {
+		return 0, false
 	}
-	cutoff := liveEdge - (depth + safe).Seconds()
+	cutoff := liveEdgeSec - (depth + cfg.Window.SafeEdgeBuffer).Seconds()
 	if cutoff <= 0 {
+		return 0, false
+	}
+	return cutoff, true
+}
+
+func (p *Processor) expireOldSegments(ps *index.PeriodState) {
+	cutoff, ok := expiryCutoff(p.cfg, periodLiveEdgeSec(ps))
+	if !ok {
 		return
 	}
 
-	// Note the os.Remove below runs with the period and AdaptationSet read locks
-	// held. That was already true of the hand-rolled walk this replaced and is
-	// preserved deliberately: collecting paths and deleting outside the walk is
-	// a real improvement but a separate change, not something to smuggle into a
-	// mechanical conversion.
+	// The walk holds the period and AdaptationSet read locks, so it collects
+	// what to delete and does not delete it: os.Remove is a syscall that can
+	// block on a slow or failing filesystem, and blocking here stalls every
+	// reader of this period — including the handlers serving the manifest.
+	var toDelete []string
 	ps.ForEachRep(func(_, _ string, rep *index.RepresentationState) {
 		switch p.cfg.Store.Cleanup {
 		case config.CleanupOnExpire:
-			// Collect paths and expire atomically, then delete from disk.
-			paths := rep.ExpireAndCollectPaths(cutoff)
-			for _, path := range paths {
-				if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-					slog.Warn("cleanup: failed to remove expired segment",
-						"path", path, "err", err)
-				}
-			}
+			// Collecting paths and expiring under the representation's own lock
+			// keeps the two atomic, so no segment is expired without its path
+			// being handed back exactly once.
+			toDelete = append(toDelete, rep.ExpireAndCollectPaths(cutoff)...)
 		default:
 			// "disabled" (and any unrecognized mode): only update the index,
 			// never delete from disk.
 			rep.ExpireOlderThan(cutoff)
 		}
 	})
+
+	for _, path := range toDelete {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			slog.Warn("cleanup: failed to remove expired segment",
+				"path", path, "err", err)
+		}
+	}
 }
 
 // periodLiveEdgeSec returns the maximum EndSec among published segments in a
