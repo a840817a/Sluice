@@ -76,18 +76,85 @@ function formBody(form, { keepEmptyHeaders }) {
   return body;
 }
 
-// ── add form ────────────────────────────────────────────────────────────────
+// ── shared fields ───────────────────────────────────────────────────────────
 
-function initAddForm() {
-  const form = document.getElementById('addForm');
-  const sourceType = document.getElementById('addSourceType');
-  const sourceURL = document.getElementById('addSourceURL');
+/**
+ * Stamps the shared channel-fields template into a form. Both forms carry the
+ * same sections, so the markup lives once in #channelFieldsTpl and the ids the
+ * rest of this file relies on (`addFetchHeaders`, `editSourceType`, ...) are
+ * derived here from the prefix.
+ */
+function mountFields(form, prefix, { showRestart }) {
+  const tpl = document.getElementById('channelFieldsTpl');
+  const frag = tpl.content.cloneNode(true);
 
-  // Swap the URL hint so the expected format is obvious for the chosen protocol.
+  const ids = {
+    'source-type': `${prefix}SourceType`,
+    'source-url': `${prefix}SourceURL`,
+    'fetch-headers': `${prefix}FetchHeaders`,
+    'license-headers': `${prefix}LicenseHeaders`,
+  };
+  frag.querySelectorAll('[data-role]').forEach(el => {
+    el.id = ids[el.dataset.role];
+  });
+  // Each "+ 新增" button targets the header list it sits under.
+  frag.querySelectorAll('[data-add-header]').forEach(btn => {
+    btn.dataset.addHeader = btn.previousElementSibling.id;
+  });
+  if (showRestart) {
+    frag.querySelectorAll('[data-restart]').forEach(el => { el.hidden = false; });
+  }
+
+  // Prepend, so anything already in the container (the edit form's restart
+  // note) stays below the fields.
+  form.querySelector('[data-fields]').prepend(frag);
+}
+
+/** Swaps the URL hint so the expected format is obvious for the chosen protocol. */
+function bindSourceHint(prefix) {
+  const sourceType = document.getElementById(`${prefix}SourceType`);
+  const sourceURL = document.getElementById(`${prefix}SourceURL`);
   sourceType.addEventListener('change', () => {
     sourceURL.placeholder = sourceType.value === 'hls'
       ? 'https://cdn.example.com/master.m3u8'
       : 'https://cdn.example.com/stream.mpd';
+  });
+}
+
+// ── drawers ─────────────────────────────────────────────────────────────────
+
+function openDrawer(id) {
+  document.getElementById(id).classList.add('open');
+  const first = document.getElementById(id).querySelector('input:not([type="checkbox"])');
+  if (first) first.focus();
+}
+
+function closeDrawer(id) {
+  document.getElementById(id).classList.remove('open');
+}
+
+function isOpen(id) {
+  return document.getElementById(id).classList.contains('open');
+}
+
+// ── add form ────────────────────────────────────────────────────────────────
+
+export function openAdd() {
+  openDrawer('addOverlay');
+}
+
+export function closeAdd() {
+  closeDrawer('addOverlay');
+}
+
+function initAddForm() {
+  const form = document.getElementById('addForm');
+  mountFields(form, 'add', { showRestart: false });
+  bindSourceHint('add');
+
+  document.getElementById('openAdd').addEventListener('click', openAdd);
+  document.getElementById('addOverlay').addEventListener('click', e => {
+    if (e.target === e.currentTarget) closeAdd();
   });
 
   form.addEventListener('submit', async e => {
@@ -101,10 +168,11 @@ function initAddForm() {
 
     try {
       const d = await api.createChannel(body);
-      showMsg(`Channel「${(d && (d.title || d.id)) || ''}」已建立`, 'ok');
+      showMsg(`頻道「${(d && (d.title || d.id)) || ''}」已建立`, 'ok');
       form.reset();
       clearHeaders('addFetchHeaders');
       clearHeaders('addLicenseHeaders');
+      closeAdd();
       onChanged();
     } catch (err) {
       showMsg(err.message, 'err');
@@ -181,25 +249,24 @@ export function openEdit(id) {
   loadHeaders('editLicenseHeaders', cfg.license_headers);
 
   refreshRestartNote();
-  document.getElementById('editOverlay').classList.add('open');
+  openDrawer('editOverlay');
 }
 
 export function closeEdit() {
   editingID = null;
   editingCfg = null;
   document.getElementById('editRestartNote').classList.remove('on');
-  document.getElementById('editOverlay').classList.remove('open');
+  closeDrawer('editOverlay');
 }
 
 function initEditModal() {
   const overlay = document.getElementById('editOverlay');
   const form = document.getElementById('editForm');
+  mountFields(form, 'edit', { showRestart: true });
+  bindSourceHint('edit');
 
   overlay.addEventListener('click', e => {
     if (e.target === e.currentTarget) closeEdit();
-  });
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Escape' && overlay.classList.contains('open')) closeEdit();
   });
 
   // Re-evaluate on every edit so the warning appears the moment a restart-forcing
@@ -300,5 +367,12 @@ export function initForms() {
 
   document.addEventListener('click', e => {
     if (e.target.closest('[data-action="close-edit"]')) closeEdit();
+    if (e.target.closest('[data-action="close-add"]')) closeAdd();
+  });
+
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    if (isOpen('editOverlay')) closeEdit();
+    else if (isOpen('addOverlay')) closeAdd();
   });
 }

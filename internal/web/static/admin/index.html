@@ -7,16 +7,15 @@
 <link rel="stylesheet" href="/admin/admin.css">
 </head>
 <body>
-<header>
-  <h1>Sluice 後台管理</h1>
-</header>
 
 <!-- Header key/value row -->
 <template id="headerRowTpl">
   <div class="header-row">
     <input class="hdr-name"  placeholder="Header 名稱">
     <input class="hdr-value" placeholder="值">
-    <button type="button" class="btn-remove" title="移除">×</button>
+    <button type="button" class="btn-remove" title="移除" aria-label="移除">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg>
+    </button>
   </div>
 </template>
 
@@ -25,17 +24,15 @@
 <template id="channelCardTpl">
   <article class="ch-card">
     <div class="ch-head">
-      <div class="ch-title-row">
-        <span class="ch-title" data-f="title"></span>
-        <span class="badge src" data-f="sourceBadge"></span>
+      <div class="ch-title-col">
+        <div class="ch-title-row">
+          <span class="dot" data-f="liveDot" hidden></span>
+          <span class="ch-title" data-f="title"></span>
+          <span class="tag src" data-f="sourceBadge"></span>
+        </div>
+        <span class="ch-url"><span class="ch-id" data-f="id"></span> · <span data-f="url"></span></span>
       </div>
-      <span class="ch-url" data-f="url"></span>
-      <span class="ch-id" data-f="id"></span>
-    </div>
-
-    <div class="ch-badges">
-      <span class="badge" data-f="runBadge"></span>
-      <span class="badge" data-f="modeBadge"></span>
+      <span class="tag" data-f="modeBadge"></span>
     </div>
 
     <p class="ch-source-err" data-f="sourceError" hidden></p>
@@ -57,6 +54,18 @@
       <p class="ch-seg-err" data-f="segError" hidden></p>
     </div>
 
+    <div class="ch-actions">
+      <a class="btn btn-play" data-f="playLink" target="_blank" rel="noopener">播放</a>
+      <button class="btn" data-action="edit">編輯</button>
+      <button class="btn" data-action="restart" data-f="restartBtn">重啟</button>
+      <button class="btn btn-vod" data-action="vod" data-f="vodBtn" hidden>轉 VOD</button>
+      <button class="btn" data-action="restore-live" data-f="restoreBtn" hidden>還原直播</button>
+      <span class="spacer"></span>
+      <button class="btn btn-icon btn-danger" data-action="delete" title="刪除" aria-label="刪除">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/></svg>
+      </button>
+    </div>
+
     <details class="ch-tracks" data-f="tracksBox" hidden>
       <summary data-f="tracksSummary">每軌明細</summary>
       <div class="tracks-scroll">
@@ -64,199 +73,216 @@
           <thead>
             <tr>
               <th>軌道</th><th>類型</th><th>規格</th>
-              <th>語言</th><th>已發布</th><th>待發布</th><th>已過期</th><th>最大序號</th>
+              <th>語言</th><th class="r">已發布</th><th class="r">待發布</th><th class="r">已過期</th><th class="r">最大序號</th>
             </tr>
           </thead>
           <tbody data-f="tracksBody"></tbody>
         </table>
       </div>
     </details>
-
-    <div class="ch-actions">
-      <a class="btn btn-sm btn-play" data-f="playLink" target="_blank" rel="noopener">播放</a>
-      <button class="btn btn-sm btn-edit" data-action="edit">編輯</button>
-      <button class="btn btn-sm" data-action="restart">重啟</button>
-      <button class="btn btn-sm btn-vod" data-action="vod" data-f="vodBtn" hidden>轉 VOD</button>
-      <button class="btn btn-sm" data-action="restore-live" data-f="restoreBtn" hidden>還原直播</button>
-      <button class="btn btn-sm btn-danger" data-action="delete">刪除</button>
-    </div>
   </article>
 </template>
 
 <!-- One row of the per-track table -->
 <template id="trackRowTpl">
   <tr>
-    <td data-f="repId"></td>
+    <td class="mono" data-f="repId"></td>
     <td data-f="mediaType"></td>
     <td data-f="spec"></td>
     <td data-f="language"></td>
-    <td data-f="published"></td>
-    <td data-f="committed"></td>
-    <td data-f="expired"></td>
-    <td data-f="maxSegNo"></td>
+    <td class="r" data-f="published"></td>
+    <td class="r" data-f="committed"></td>
+    <td class="r" data-f="expired"></td>
+    <td class="r" data-f="maxSegNo"></td>
   </tr>
 </template>
 
-<!-- Edit modal -->
-<div class="modal-overlay" id="editOverlay">
-  <div class="modal">
-    <h3>編輯 Channel：<span id="editTitle"></span></h3>
-    <form id="editForm">
-      <div class="grid">
-        <div class="field full">
-          <label>標題（選填）</label>
-          <input name="title" placeholder="我的直播頻道">
-        </div>
-        <div class="field">
-          <label>來源類型<span class="badge restart">需重啟</span></label>
-          <select name="source_type" id="editSourceType">
-            <option value="dash">DASH (MPD)</option>
-            <option value="hls">HLS (M3U8)</option>
-          </select>
-        </div>
-        <div class="field">
-          <label>來源 URL *<span class="badge restart">需重啟</span></label>
-          <input name="mpd_url" required>
-        </div>
-        <div class="field">
-          <label>HLS AES-128 處理<span class="badge restart">需重啟</span></label>
-          <select name="hls_key_mode">
-            <option value="passthrough">維持加密（代理金鑰，金鑰存 gateway）</option>
-            <option value="decrypt">入庫時解密（明文重發）</option>
-          </select>
-        </div>
-        <div class="field">
-          <label>PlayReady License URL</label>
-          <input name="playready_license_url">
-          <label class="inline-checkbox">
-            <input type="checkbox" name="enable_playready" checked>
-            啟用 PlayReady
-          </label>
-        </div>
-        <div class="field">
-          <label>Widevine License URL</label>
-          <input name="widevine_license_url">
-          <label class="inline-checkbox">
-            <input type="checkbox" name="enable_widevine" checked>
-            啟用 Widevine
-          </label>
-        </div>
-        <div class="field full">
-          <label class="inline-checkbox">
-            <input type="checkbox" name="keep_all_segments">
-            保留所有片段（DVR 可拉到頻道啟動以來；占用較多記憶體。取消勾選則只保留滑動視窗）<span class="badge restart">需重啟</span>
-          </label>
-        </div>
-        <div class="field full">
-          <label class="inline-checkbox">
-            <input type="checkbox" name="forward_client_ip">
-            轉發用戶端 IP 至 DRM 授權伺服器
-          </label>
-        </div>
-        <p class="restart-note" id="editRestartNote"></p>
-        <div class="headers-section">
-          <div class="section-label">Fetch Headers（上游 MPD / 分段請求）</div>
-          <div id="editFetchHeaders"></div>
-          <button type="button" class="btn-add-header" data-add-header="editFetchHeaders">+ 新增</button>
-        </div>
-        <div class="headers-section">
-          <div class="section-label">License Headers（DRM 授權伺服器）</div>
-          <div id="editLicenseHeaders"></div>
-          <button type="button" class="btn-add-header" data-add-header="editLicenseHeaders">+ 新增</button>
-        </div>
+<!-- Shared form fields: the add drawer and the edit modal render the same
+     sections, so the section markup is written once here. -->
+<template id="channelFieldsTpl">
+  <div class="fsec">
+    <div class="sec-label">來源</div>
+    <div class="field full">
+      <label>標題（選填）</label>
+      <input name="title" placeholder="我的直播頻道">
+    </div>
+    <div class="grid-2">
+      <div class="field">
+        <label>來源類型<span class="tag restart" data-restart hidden>需重啟</span></label>
+        <select name="source_type" data-role="source-type">
+          <option value="dash">DASH (MPD)</option>
+          <option value="hls">HLS (M3U8)</option>
+        </select>
       </div>
-      <div class="modal-actions">
-        <button type="button" class="btn" data-action="close-edit">取消</button>
-        <button type="submit" class="btn btn-primary">儲存</button>
+      <div class="field">
+        <label>HLS AES-128 處理<span class="tag restart" data-restart hidden>需重啟</span></label>
+        <select name="hls_key_mode">
+          <option value="passthrough">維持加密（代理金鑰）</option>
+          <option value="decrypt">入庫時解密（明文重發）</option>
+        </select>
+      </div>
+    </div>
+    <div class="field full">
+      <label>來源 URL <span class="req">*</span><span class="tag restart" data-restart hidden>需重啟</span></label>
+      <input name="mpd_url" data-role="source-url" class="mono" placeholder="https://cdn.example.com/stream.mpd" required>
+    </div>
+  </div>
+
+  <div class="fsec">
+    <div class="sec-label">DRM 授權</div>
+    <div class="grid-2">
+      <div class="field">
+        <label class="inline-checkbox"><input type="checkbox" name="enable_playready" checked>PlayReady</label>
+        <input name="playready_license_url" class="mono" placeholder="https://drm.example.com/pr">
+      </div>
+      <div class="field">
+        <label class="inline-checkbox"><input type="checkbox" name="enable_widevine" checked>Widevine</label>
+        <input name="widevine_license_url" class="mono" placeholder="https://drm.example.com/wv">
+      </div>
+    </div>
+    <label class="inline-checkbox">
+      <input type="checkbox" name="forward_client_ip">
+      轉發用戶端 IP 至 DRM 授權伺服器
+    </label>
+  </div>
+
+  <div class="fsec">
+    <div class="sec-label">片段保留</div>
+    <label class="inline-checkbox top">
+      <input type="checkbox" name="keep_all_segments" checked>
+      <span>保留所有片段<span class="tag restart" data-restart hidden>需重啟</span><br><span class="hint">DVR 可拉到頻道啟動以來，但占用較多記憶體。取消勾選則只保留滑動視窗。</span></span>
+    </label>
+  </div>
+
+  <div class="fsec">
+    <div class="sec-label">自訂 Headers</div>
+    <div class="headers-section">
+      <div class="sub-label">Fetch Headers <span class="hint">上游 MPD / 分段請求</span></div>
+      <div data-role="fetch-headers"></div>
+      <button type="button" class="btn-add-header" data-add-header>+ 新增</button>
+    </div>
+    <div class="headers-section">
+      <div class="sub-label">License Headers <span class="hint">DRM 授權伺服器</span></div>
+      <div data-role="license-headers"></div>
+      <button type="button" class="btn-add-header" data-add-header>+ 新增</button>
+    </div>
+  </div>
+</template>
+
+<div class="shell">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 8h16"/><path d="M4 16h16"/><path d="M9 4v16"/></svg>
+      </span>
+      <span class="brand-name">SLUICE</span>
+    </div>
+    <nav class="nav">
+      <a class="nav-item on" href="/admin/" aria-current="page">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9l5 3-5 3z"/></svg>
+        頻道
+      </a>
+    </nav>
+    <div class="gw-status" id="gwStatus" data-state="ok">
+      <span class="gw-line"><span class="gw-dot"></span><span id="gwText">Gateway 已連線</span></span>
+      <span class="gw-sub mono">每 2 秒更新</span>
+    </div>
+  </aside>
+
+  <!-- Content -->
+  <main class="content">
+    <div class="page-head">
+      <div>
+        <h1>頻道</h1>
+        <p class="page-sub">管理 DASH / HLS 來源的擷取、DRM 與 VOD 轉換</p>
+      </div>
+      <button class="btn btn-primary btn-lg" id="openAdd" type="button">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+        新增頻道
+      </button>
+    </div>
+
+    <div id="msg" role="status"></div>
+
+    <div class="tiles" id="tiles">
+      <div class="tile"><span class="k">頻道</span><span class="v mono" data-sum="total">–</span></div>
+      <div class="tile"><span class="k">運行中</span><span class="v mono ok" data-sum="running">–</span></div>
+      <div class="tile" data-sum-tile="degraded"><span class="k">需要處理</span><span class="v mono err" data-sum="degraded">–</span><span class="tile-sub" data-sum="degradedNames"></span></div>
+      <div class="tile"><span class="k">總吞吐</span><span class="v mono" data-sum="throughput">–</span><span class="tile-sub mono" data-sum="stored"></span></div>
+    </div>
+
+    <div class="toolbar">
+      <label class="search">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input type="search" id="search" placeholder="搜尋標題、URL 或 ID" autocomplete="off">
+      </label>
+      <div class="filters" id="filters" role="group" aria-label="狀態篩選">
+        <button type="button" class="pill on" data-filter="all">全部 <span class="n" data-count="all">0</span></button>
+        <button type="button" class="pill" data-filter="live">直播 <span class="n" data-count="live">0</span></button>
+        <button type="button" class="pill" data-filter="ingesting">下載中 <span class="n" data-count="ingesting">0</span></button>
+        <button type="button" class="pill" data-filter="vod">VOD <span class="n" data-count="vod">0</span></button>
+        <button type="button" class="pill pill-err" data-filter="degraded">異常 <span class="n" data-count="degraded">0</span></button>
+        <button type="button" class="pill" data-filter="stopped">已停止 <span class="n" data-count="stopped">0</span></button>
+      </div>
+    </div>
+
+    <div id="channelList"><p class="empty">載入中…</p></div>
+  </main>
+</div>
+
+<!-- Add drawer -->
+<div class="drawer-overlay" id="addOverlay">
+  <div class="drawer" role="dialog" aria-modal="true" aria-labelledby="addHeading">
+    <div class="drawer-head">
+      <div>
+        <h2 id="addHeading">新增頻道</h2>
+        <p class="hint">建立後會立即開始從來源抓取。</p>
+      </div>
+      <button type="button" class="btn btn-icon" data-action="close-add" title="關閉" aria-label="關閉">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <form id="addForm" class="drawer-form">
+      <div class="drawer-body" data-fields></div>
+      <div class="drawer-foot">
+        <span class="hint">來源類型與 URL 建立後修改需重啟</span>
+        <div class="foot-actions">
+          <button type="button" class="btn" data-action="close-add">取消</button>
+          <button type="submit" class="btn btn-primary">新增並啟動</button>
+        </div>
       </div>
     </form>
   </div>
 </div>
 
-<main>
-  <div id="msg" role="status"></div>
-
-  <!-- Add channel -->
-  <div class="panel">
-    <h2>新增 Channel</h2>
-    <form id="addForm">
-      <div class="form-row">
-        <div class="field f-title">
-          <label>標題（選填）</label>
-          <input name="title" placeholder="我的直播頻道">
-        </div>
-        <div class="field f-source">
-          <label>來源類型</label>
-          <select name="source_type" id="addSourceType">
-            <option value="dash">DASH (MPD)</option>
-            <option value="hls">HLS (M3U8)</option>
-          </select>
-        </div>
-        <div class="field f-url">
-          <label>來源 URL *</label>
-          <input name="mpd_url" id="addSourceURL" placeholder="https://cdn.example.com/stream.mpd" required>
-        </div>
-        <button class="btn btn-primary btn-align-end" type="submit">新增</button>
+<!-- Edit modal -->
+<div class="drawer-overlay" id="editOverlay">
+  <div class="drawer" role="dialog" aria-modal="true" aria-labelledby="editHeading">
+    <div class="drawer-head">
+      <div>
+        <h2 id="editHeading">編輯頻道：<span id="editTitle"></span></h2>
+        <p class="hint">未標「需重啟」的欄位會即時套用。</p>
       </div>
-      <details class="advanced">
-        <summary>進階設定</summary>
-        <div class="extra">
-          <div class="field">
-            <label>HLS AES-128 處理</label>
-            <select name="hls_key_mode">
-              <option value="passthrough">維持加密（代理金鑰，金鑰存 gateway）</option>
-              <option value="decrypt">入庫時解密（明文重發）</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>PlayReady License URL</label>
-            <input name="playready_license_url" placeholder="https://drm.example.com/pr">
-            <label class="inline-checkbox">
-              <input type="checkbox" name="enable_playready" checked>
-              啟用 PlayReady
-            </label>
-          </div>
-          <div class="field">
-            <label>Widevine License URL</label>
-            <input name="widevine_license_url" placeholder="https://drm.example.com/wv">
-            <label class="inline-checkbox">
-              <input type="checkbox" name="enable_widevine" checked>
-              啟用 Widevine
-            </label>
-          </div>
-          <div class="field full">
-            <label class="inline-checkbox">
-              <input type="checkbox" name="keep_all_segments" checked>
-              保留所有片段（DVR 可拉到頻道啟動以來；占用較多記憶體。取消勾選則只保留滑動視窗）
-            </label>
-          </div>
-          <div class="field full">
-            <label class="inline-checkbox">
-              <input type="checkbox" name="forward_client_ip">
-              轉發用戶端 IP 至 DRM 授權伺服器
-            </label>
-          </div>
-          <div class="headers-section">
-            <div class="section-label">Fetch Headers（上游 MPD / 分段請求）</div>
-            <div id="addFetchHeaders"></div>
-            <button type="button" class="btn-add-header" data-add-header="addFetchHeaders">+ 新增</button>
-          </div>
-          <div class="headers-section">
-            <div class="section-label">License Headers（DRM 授權伺服器）</div>
-            <div id="addLicenseHeaders"></div>
-            <button type="button" class="btn-add-header" data-add-header="addLicenseHeaders">+ 新增</button>
-          </div>
+      <button type="button" class="btn btn-icon" data-action="close-edit" title="關閉" aria-label="關閉">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <form id="editForm" class="drawer-form">
+      <div class="drawer-body" data-fields>
+        <p class="restart-note" id="editRestartNote"></p>
+      </div>
+      <div class="drawer-foot">
+        <span></span>
+        <div class="foot-actions">
+          <button type="button" class="btn" data-action="close-edit">取消</button>
+          <button type="submit" class="btn btn-primary">儲存</button>
         </div>
-      </details>
+      </div>
     </form>
   </div>
-
-  <!-- Channel list -->
-  <div class="panel">
-    <h2>Channel 列表</h2>
-    <div id="channelList"><p class="empty">載入中…</p></div>
-  </div>
-</main>
+</div>
 
 <script type="module" src="/admin/js/main.js"></script>
 </body>

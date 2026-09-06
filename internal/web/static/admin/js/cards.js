@@ -75,6 +75,7 @@ function renderProgress(refs, status) {
   const mode = status.mode || 'live';
 
   if (!status.running || !p) {
+    refs.progMain.className = 'prog-idle';
     patchText(refs.progMain, '—');
     patchText(refs.progUnit, '');
     patchHidden(refs.progBar, true);
@@ -88,6 +89,8 @@ function renderProgress(refs, status) {
   const hasTotal = !!p.total_known && total > 0 && !p.total_capped;
 
   refs.progMain.classList.toggle('prog-done', mode === 'vod' || !!p.finalized);
+  refs.progMain.classList.toggle('prog-idle', false);
+  refs.progMain.classList.toggle('prog-text', mode === 'transitioning');
 
   if (mode === 'static_ingesting' && p.total_known && total > 0) {
     // A capped total is a floor, so it is shown with a ≥ and drives no bar.
@@ -237,20 +240,46 @@ function renderCard(card, id, cfg, status) {
   patchAttr(refs.url, 'title', cfg.mpd_url || '');
   patchText(refs.id, id);
 
-  patchVariantClass(refs.sourceBadge, 'badge src', fmt.sourceClass(cfg.source_type));
+  patchVariantClass(refs.sourceBadge, 'tag src', fmt.sourceClass(cfg.source_type));
   patchText(refs.sourceBadge, fmt.sourceLabel(cfg.source_type));
 
-  const degraded = !!(status.progress && status.progress.source_error);
-  patchVariantClass(refs.runBadge, 'badge',
-    status.running ? (degraded ? 'degraded' : 'running') : 'stopped');
-  patchText(refs.runBadge, status.running ? (degraded ? '運行中（異常）' : '運行中') : '已停止');
-
   const mode = status.mode || 'live';
-  patchHidden(refs.modeBadge, !status.running);
-  patchVariantClass(refs.modeBadge, 'badge', fmt.modeClass(mode));
-  patchText(refs.modeBadge, fmt.modeLabel(mode));
+  const degraded = !!(status.running && status.progress && status.progress.source_error);
+
+  // One tag carries the whole state: a stopped channel has no mode worth
+  // showing, and a degraded one is still running, so the warning replaces the
+  // mode rather than sitting beside it.
+  let tagClass, tagText;
+  if (!status.running) {
+    tagClass = 'stopped'; tagText = fmt.modeLabel('stopped');
+  } else if (degraded) {
+    tagClass = 'degraded'; tagText = fmt.modeLabel('degraded');
+  } else {
+    tagClass = fmt.modeClass(mode); tagText = fmt.modeLabel(mode);
+  }
+  patchVariantClass(refs.modeBadge, 'tag', tagClass);
+  patchText(refs.modeBadge, tagText);
+
+  patchHidden(refs.liveDot, !(status.running && mode === 'live'));
+
+  // Filter and search keys, read by main.js without re-parsing the payload.
+  const root = card.root;
+  const state = !status.running ? 'stopped' : mode;
+  if (root.dataset.mode !== state) root.dataset.mode = state;
+  const deg = degraded ? '1' : '';
+  if (root.dataset.degraded !== deg) root.dataset.degraded = deg;
+  const key = `${cfg.title || ''} ${cfg.mpd_url || ''} ${id}`.toLowerCase();
+  if (root.dataset.search !== key) root.dataset.search = key;
+  root.classList.toggle('degraded', degraded);
+  root.classList.toggle('stopped', !status.running);
 
   patchAttr(refs.playLink, 'href', playerURL(id));
+
+  // Restart doubles as "start" on a stopped channel, and is the headline
+  // action on a degraded one.
+  patchText(refs.restartBtn, status.running ? '重啟' : '啟動');
+  patchVariantClass(refs.restartBtn, 'btn',
+    !status.running ? 'btn-start' : (degraded ? 'btn-warn' : ''));
 
   // Manual VOD conversion only applies to a running live channel; restoring to
   // live, only to one that has already transitioned.
@@ -259,6 +288,39 @@ function renderCard(card, id, cfg, status) {
 
   renderProgress(refs, status);
   renderTracks(card, status.tracks);
+}
+
+/**
+ * Aggregates one poll response for the summary tiles and filter counts.
+ * Pure: reads the payload only, so main.js can render it however it likes.
+ */
+export function summarize(data) {
+  const s = {
+    total: 0, running: 0, degraded: 0, degradedNames: [],
+    live: 0, ingesting: 0, vod: 0, transition: 0, stopped: 0,
+    bytesPerSec: 0, segments: 0, bytes: 0,
+  };
+  Object.keys(data).forEach(id => {
+    const cfg = data[id].config || {};
+    const st = data[id].status || {};
+    const p = st.progress || {};
+    s.total++;
+    if (!st.running) { s.stopped++; return; }
+    s.running++;
+    const mode = st.mode || 'live';
+    if (mode === 'live') s.live++;
+    else if (mode === 'static_ingesting') s.ingesting++;
+    else if (mode === 'vod') s.vod++;
+    else if (mode === 'transitioning') s.transition++;
+    if (p.source_error) {
+      s.degraded++;
+      s.degradedNames.push(cfg.title || id);
+    }
+    s.bytesPerSec += Number(p.bytes_per_sec) || 0;
+    s.segments += Number(p.segments_stored) || 0;
+    s.bytes += Number(p.bytes_stored) || 0;
+  });
+  return s;
 }
 
 /**

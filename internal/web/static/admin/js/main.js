@@ -1,7 +1,8 @@
 // Boot and the poll loop.
 
 import * as api from './api.js';
-import { renderCards } from './cards.js';
+import { renderCards, summarize } from './cards.js';
+import * as fmt from './format.js';
 import * as forms from './forms.js';
 
 /** How often the channel list is refreshed while the tab is visible. */
@@ -125,6 +126,9 @@ async function poll() {
       clearMsg();
     }
     renderCards(document.getElementById('channelList'), data || {});
+    renderSummary(summarize(data || {}));
+    applyFilter();
+    setGateway(true);
     schedule(POLL_INTERVAL);
   } catch (err) {
     if (err.name === 'AbortError') return; // superseded by a newer poll
@@ -136,6 +140,7 @@ async function poll() {
     if (pollFailures === 1) {
       showMsg(pollErrorText(err), 'err', { sticky: true });
     }
+    setGateway(false);
     schedule(retryDelay(pollFailures));
   } finally {
     if (inFlight === controller) inFlight = null;
@@ -145,6 +150,124 @@ async function poll() {
 /** Refreshes now, resetting the cadence. Used after a mutating action. */
 function refreshNow() {
   schedule(0);
+}
+
+// ── summary, filters, gateway status ────────────────────────────────────────
+
+function setSum(key, text) {
+  const el = document.querySelector(`[data-sum="${key}"]`);
+  if (el && el.textContent !== text) el.textContent = text;
+}
+
+function setCount(key, n) {
+  const el = document.querySelector(`[data-count="${key}"]`);
+  const s = fmt.int(n);
+  if (el && el.textContent !== s) el.textContent = s;
+}
+
+/** Fills the four tiles and the filter-chip counts from one poll's summary. */
+function renderSummary(s) {
+  setSum('total', fmt.int(s.total));
+  setSum('running', fmt.int(s.running));
+  setSum('degraded', fmt.int(s.degraded));
+  setSum('degradedNames', s.degradedNames.join('、'));
+  document.querySelector('[data-sum-tile="degraded"]').classList.toggle('alert', s.degraded > 0);
+
+  const tp = document.querySelector('[data-sum="throughput"]');
+  const rate = s.bytesPerSec > 0 ? fmt.bytes(s.bytesPerSec) : '—';
+  // Split value and unit so the unit can be set small without markup in data.
+  const [num, unit] = rate === '—' ? ['—', ''] : rate.split(' ');
+  const want = unit ? `${num} ${unit}/s` : num;
+  if (tp.dataset.v !== want) {
+    tp.dataset.v = want;
+    tp.textContent = '';
+    tp.append(num);
+    if (unit) {
+      const u = document.createElement('span');
+      u.className = 'unit';
+      u.textContent = ` ${unit}/s`;
+      tp.append(u);
+    }
+  }
+  setSum('stored', s.segments ? `${fmt.int(s.segments)} 段 · ${fmt.bytes(s.bytes)}` : '');
+
+  setCount('all', s.total);
+  setCount('live', s.live);
+  setCount('ingesting', s.ingesting);
+  setCount('vod', s.vod);
+  setCount('degraded', s.degraded);
+  setCount('stopped', s.stopped);
+}
+
+let activeFilter = 'all';
+let query = '';
+
+const FILTER_MODE = {
+  live: 'live',
+  ingesting: 'static_ingesting',
+  vod: 'vod',
+  stopped: 'stopped',
+};
+
+/**
+ * Hides cards that fail the active chip or the search box. Cards carry their
+ * keys as data attributes, written by cards.js on every render, so this never
+ * needs the payload and can run on every keystroke.
+ */
+function applyFilter() {
+  const list = document.getElementById('channelList');
+  let shown = 0;
+  list.querySelectorAll('.ch-card').forEach(card => {
+    let ok = true;
+    if (activeFilter === 'degraded') ok = card.dataset.degraded === '1';
+    else if (activeFilter !== 'all') ok = card.dataset.mode === FILTER_MODE[activeFilter];
+    if (ok && query) ok = (card.dataset.search || '').includes(query);
+    card.hidden = !ok;
+    if (ok) shown++;
+  });
+
+  // "No match" is distinct from "no channels": the latter is rendered by
+  // cards.js and must not be duplicated here.
+  let note = list.querySelector('.empty.filtered');
+  const hasCards = list.querySelector('.ch-card') !== null;
+  if (hasCards && shown === 0) {
+    if (!note) {
+      note = document.createElement('p');
+      note.className = 'empty filtered';
+      note.textContent = '沒有符合條件的頻道。';
+      list.appendChild(note);
+    }
+  } else if (note) {
+    note.remove();
+  }
+}
+
+function initFilters() {
+  const chips = document.getElementById('filters');
+  chips.addEventListener('click', e => {
+    const btn = e.target.closest('[data-filter]');
+    if (!btn) return;
+    activeFilter = btn.dataset.filter;
+    chips.querySelectorAll('[data-filter]').forEach(b => {
+      b.classList.toggle('on', b === btn);
+    });
+    applyFilter();
+  });
+
+  const search = document.getElementById('search');
+  search.addEventListener('input', () => {
+    query = search.value.trim().toLowerCase();
+    applyFilter();
+  });
+}
+
+function setGateway(ok) {
+  const box = document.getElementById('gwStatus');
+  const state = ok ? 'ok' : 'err';
+  if (box.dataset.state !== state) {
+    box.dataset.state = state;
+    document.getElementById('gwText').textContent = ok ? 'Gateway 已連線' : 'Gateway 無回應';
+  }
 }
 
 // ── card actions ────────────────────────────────────────────────────────────
@@ -179,6 +302,7 @@ function initCardActions() {
 forms.configure({ message: showMsg, changed: refreshNow });
 forms.initForms();
 initCardActions();
+initFilters();
 
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) refreshNow();

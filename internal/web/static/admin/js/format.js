@@ -69,10 +69,12 @@ export function since(iso) {
 }
 
 export const MODE_LABEL = {
-  live: 'LIVE 中',
+  live: 'LIVE',
   vod: 'VOD',
-  static_ingesting: '下載中',
-  transitioning: '轉換中',
+  static_ingesting: 'INGEST',
+  transitioning: 'REBUILD',
+  degraded: 'DEGRADED',
+  stopped: 'STOPPED',
 };
 
 export const MODE_CLASS = {
