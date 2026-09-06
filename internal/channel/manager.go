@@ -228,7 +228,17 @@ func (m *Manager) SetStore(s *Store) {
 
 // SetOnVODReady registers a callback invoked after any successful VOD transition
 // (live→VOD or static-ingest-complete). Called in a separate goroutine.
-// Must be set before any Start().
+//
+// Must be set before any Start(): a channel that transitions before the callback
+// is registered writes nothing, and the omission is silent until a restart
+// serves an empty channel. Nothing enforces that ordering — the callback is a
+// field on a live Manager, so there is no point at which it could be required —
+// and no test covers it either. What is covered is the callback being absent
+// altogether (cmd/gateway.TestNewGatewayRegistersVODSnapshotCallback).
+//
+// In practice the window is wide: starting channels only launches goroutines,
+// so the restore loop finishes long before the first transition can complete.
+// Registering late is wrong, but it does not currently lose anything.
 func (m *Manager) SetOnVODReady(fn func(rt *Runtime)) {
 	m.mu.Lock()
 	m.onVODReady = fn

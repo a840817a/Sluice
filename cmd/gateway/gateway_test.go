@@ -151,11 +151,13 @@ func writeChannelsJSON(t *testing.T, dataDir string, channels map[string]channel
 // on its own. The manifest on disk therefore only appears if newGateway
 // registered the callback at all.
 //
-// It does NOT pin the registration's position relative to the restore loop:
-// this channel takes ~2s to transition, so registering after the loop still
-// lands in time (verified by moving the line). That ordering requirement —
-// SetOnVODReady's "must be set before any Start()" — stays a code-reading
-// constraint, documented at the call site in gateway.go.
+// It does NOT pin the registration's position relative to the restore loop.
+// Starting a channel only launches goroutines, so the restore loop returns in
+// microseconds while the transition needs at least one drain-check tick plus the
+// ingest itself — registering after the loop still lands in time (verified by
+// moving the line). That ordering requirement — SetOnVODReady's "must be set
+// before any Start()" — stays a code-reading constraint, documented at the call
+// site in gateway.go.
 func TestNewGatewayRegistersVODSnapshotCallback(t *testing.T) {
 	origin := startClearDASHOrigin(t)
 	dataDir := t.TempDir()
