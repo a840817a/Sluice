@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	ch "github.com/a840817a/sluice/internal/channel"
@@ -17,6 +19,14 @@ import (
 // newTestAdminServer creates an AdminServer backed by a temp-file store and
 // an empty Manager. No channels are pre-loaded.
 func newTestAdminServer(t *testing.T) *AdminServer {
+	t.Helper()
+	admin, _ := newTestAdminServerIn(t)
+	return admin
+}
+
+// newTestAdminServerIn is newTestAdminServer plus the data directory it was
+// given, for tests that assert on what the handlers did or did not touch there.
+func newTestAdminServerIn(t *testing.T) (*AdminServer, string) {
 	t.Helper()
 	dir := t.TempDir()
 	store, err := ch.NewStore(filepath.Join(dir, "channels.json"))
@@ -30,7 +40,24 @@ func newTestAdminServer(t *testing.T) *AdminServer {
 	// cmd/gateway wires them. A restart persists through the manager, so a
 	// manager without the store cannot complete one.
 	mgr.SetStore(store)
-	return NewAdminServer(context.Background(), mgr, store)
+	return NewAdminServer(context.Background(), mgr, store), dir
+}
+
+// adminCall runs one named handler. adminExec dispatches on the HTTP method and
+// therefore only reaches the four handlers in its switch; anything else — the
+// transition and restore endpoints among them — has to be called directly.
+func adminCall(handler http.HandlerFunc, method, path string, routeParams map[string]string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, nil)
+	if len(routeParams) > 0 {
+		rctx := chi.NewRouteContext()
+		for k, v := range routeParams {
+			rctx.URLParams.Add(k, v)
+		}
+		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	}
+	w := httptest.NewRecorder()
+	handler(w, req)
+	return w
 }
 
 func adminExec(admin *AdminServer, method, path string, body interface{}, routeParams map[string]string) *httptest.ResponseRecorder {
@@ -354,5 +381,129 @@ func TestHandleUpdateChannel_PreservesInternalVODState(t *testing.T) {
 	}
 	if rt.Mode() != ch.ModeVOD {
 		t.Fatalf("expected runtime to restore as VOD, got %v", rt.Mode())
+	}
+}
+
+// Deleting a channel removes it from channels.json but deliberately leaves the
+// segments on disk — the handler's own doc says so, and an operator who wanted
+// the bytes gone has to say that separately.
+func TestAdminDeleteChannelRemovesConfigButNotSegments(t *testing.T) {
+	admin, dataDir := newTestAdminServerIn(t)
+
+	if w := adminExec(admin, http.MethodPost, "/admin/api/channels", map[string]any{
+		"id":      "gone",
+		"mpd_url": "http://origin/manifest.mpd",
+	}, nil); w.Code != http.StatusCreated {
+		t.Fatalf("create: status %d, body %s", w.Code, w.Body.String())
+	}
+
+	// A segment already on disk for that channel.
+	segDir := filepath.Join(dataDir, "gone")
+	if err := os.MkdirAll(segDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	segPath := filepath.Join(segDir, "0.m4s")
+	if err := os.WriteFile(segPath, []byte("segment"), 0o644); err != nil {
+		t.Fatalf("write segment: %v", err)
+	}
+
+	w := adminExec(admin, http.MethodDelete, "/admin/api/channels/gone", nil,
+		map[string]string{"channelID": "gone"})
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("delete: status %d, body %s", w.Code, w.Body.String())
+	}
+	if body := w.Body.String(); body != "" {
+		t.Errorf("204 response carried a body: %q", body)
+	}
+
+	if _, ok := admin.store.Get("gone"); ok {
+		t.Error("channel is still in the store after a 204")
+	}
+	if _, err := os.Stat(segPath); err != nil {
+		t.Errorf("deleting the channel removed its segments from disk: %v", err)
+	}
+}
+
+func TestAdminDeleteUnknownChannelIs404(t *testing.T) {
+	admin := newTestAdminServer(t)
+
+	w := adminExec(admin, http.MethodDelete, "/admin/api/channels/nope", nil,
+		map[string]string{"channelID": "nope"})
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (body %s)", w.Code, w.Body.String())
+	}
+}
+
+// A running channel has to be stopped before its config goes away, or its
+// ingest goroutines keep writing for a channel nothing can serve.
+func TestAdminDeleteStopsARunningChannel(t *testing.T) {
+	origin := startClearDASHOrigin(t)
+	admin := newTestAdminServer(t)
+
+	if w := adminExec(admin, http.MethodPost, "/admin/api/channels", map[string]any{
+		"id":      "running",
+		"mpd_url": origin.URL + "/manifest.mpd",
+		"enabled": true,
+	}, nil); w.Code != http.StatusCreated {
+		t.Fatalf("create: status %d, body %s", w.Code, w.Body.String())
+	}
+	if admin.manager.Get("running") == nil {
+		t.Fatal("creating an enabled channel did not start it")
+	}
+
+	w := adminExec(admin, http.MethodDelete, "/admin/api/channels/running", nil,
+		map[string]string{"channelID": "running"})
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("delete: status %d, body %s", w.Code, w.Body.String())
+	}
+
+	if rt := admin.manager.Get("running"); rt != nil {
+		t.Error("the channel is still running after its config was deleted")
+	}
+}
+
+// The manual transition is the escape hatch for an upstream that never signals
+// the end of the stream. Its refusals are the operator's feedback, so they must
+// arrive as a 400 carrying the reason rather than a generic failure.
+func TestAdminTransitionToVODRejectsAChannelThatIsNotRunning(t *testing.T) {
+	admin := newTestAdminServer(t)
+
+	w := adminCall(admin.handleTransitionToVOD, http.MethodPost,
+		"/admin/api/channels/idle/transition-to-vod", map[string]string{"channelID": "idle"})
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body %s)", w.Code, w.Body.String())
+	}
+	if body := w.Body.String(); !strings.Contains(body, "not running") {
+		t.Errorf("body = %q, want it to say why the transition was refused", body)
+	}
+}
+
+func TestAdminTransitionToVODAcceptsARunningChannel(t *testing.T) {
+	origin := startClearDASHOrigin(t)
+	admin := newTestAdminServer(t)
+
+	if w := adminExec(admin, http.MethodPost, "/admin/api/channels", map[string]any{
+		"id":      "live",
+		"mpd_url": origin.URL + "/manifest.mpd",
+		"enabled": true,
+	}, nil); w.Code != http.StatusCreated {
+		t.Fatalf("create: status %d, body %s", w.Code, w.Body.String())
+	}
+	t.Cleanup(func() { _ = admin.manager.Stop("live") })
+
+	w := adminCall(admin.handleTransitionToVOD, http.MethodPost,
+		"/admin/api/channels/live/transition-to-vod", map[string]string{"channelID": "live"})
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (body %s)", w.Code, w.Body.String())
+	}
+	var got map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode body %q: %v", w.Body.String(), err)
+	}
+	if got["id"] != "live" || got["status"] != "transitioning" {
+		t.Errorf("body = %v, want the channel id and a transitioning status", got)
 	}
 }
