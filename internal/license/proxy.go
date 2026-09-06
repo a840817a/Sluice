@@ -8,6 +8,7 @@ package license
 import (
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -77,7 +78,14 @@ func (p *Proxy) Handler() http.HandlerFunc {
 		}
 
 		if p.forwardClientIP {
+			// X-Forwarded-For carries addresses, not address:port. RemoteAddr
+			// is host:port, so a license server matching an allowlist against
+			// the raw value matches nothing. SplitHostPort also strips the
+			// brackets Go puts around an IPv6 host.
 			ip := r.RemoteAddr
+			if host, _, err := net.SplitHostPort(ip); err == nil {
+				ip = host
+			}
 			if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 				ip = xff + ", " + ip
 			}
