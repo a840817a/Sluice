@@ -330,7 +330,11 @@ table.tracks tr:last-child td { border-bottom: none; }
 }
 .inline-checkbox.top { align-items: flex-start; }
 .inline-checkbox input[type="checkbox"] {
-  appearance: none; width: 16px; height: 16px; margin: 0; flex-shrink: 0;
+  /* padding: 0 is load-bearing. A checkbox inside .field also matches
+     ".field input", which sets padding: 0 12px for text inputs; under
+     box-sizing: border-box that padding becomes the box's minimum width, so
+     the 16px below is ignored and the box renders 26px wide by 16px tall. */
+  appearance: none; width: 16px; height: 16px; margin: 0; padding: 0; flex-shrink: 0;
   border: 1px solid #3a4658; border-radius: 4px; background: var(--surface-2); cursor: pointer;
   display: grid; place-content: center;
 }
