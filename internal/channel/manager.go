@@ -345,10 +345,60 @@ func (m *Manager) restoreVODState(rt *Runtime, id string) {
 // Every goroutine is counted in rt.wg, which is what lets Stop join them rather
 // than merely cancel them — see Stop for why that matters.
 func (m *Manager) launchIngest(ctx context.Context, rt *Runtime, cfg Config, pl *ingestPipeline) {
-	rt.wg.Add(3)
+	rt.wg.Add(4)
 	go func() { defer rt.wg.Done(); pl.pool.Run(ctx) }()
 	go func() { defer rt.wg.Done(); pl.processor.Run(ctx, pl.pool) }()
 	go func() { defer rt.wg.Done(); m.superviseSource(ctx, rt, cfg, pl) }()
+	go func() { defer rt.wg.Done(); m.awaitStaticUpstream(ctx, rt) }()
+}
+
+// staticUpstreamPollInterval is how often a running channel is asked whether
+// its upstream turned out to be a finished asset.
+const staticUpstreamPollInterval = time.Second
+
+// awaitStaticUpstream moves a channel into ModeStaticIngesting as soon as the
+// watcher has seen that the upstream is a finished asset.
+//
+// superviseSource also sets that mode, but only once the source returns, and
+// the two used to be the same instant: enumeration was a tight push loop that
+// returned in milliseconds. A paced producer does not return until every
+// segment it named has been queued, which for an asset much larger than the
+// queue is most of the way through the download — so the channel spent that
+// whole time reporting itself as live, and the admin page showed LIVE for an
+// asset that was plainly being fetched.
+//
+// This only promotes; the transition itself still waits for the source to
+// return and the pipeline to drain, because that is what says the work is done.
+// A channel whose auto-VOD is suppressed is left alone, matching the same
+// exemption in superviseSource.
+func (m *Manager) awaitStaticUpstream(ctx context.Context, rt *Runtime) {
+	if rt.Watcher == nil {
+		return // HLS reports its end per playlist, not as an upstream type
+	}
+	ticker := time.NewTicker(staticUpstreamPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !staticIngestVisible(rt.Watcher.UpstreamType(), rt.autoVODAllowed()) {
+				continue
+			}
+			if rt.mode.CompareAndSwap(int32(ModeLive), int32(ModeStaticIngesting)) {
+				rt.setStaticIngestStart(time.Now())
+				slog.Info("upstream is a finished asset, ingesting", "channel", rt.ID)
+			}
+			return
+		}
+	}
+}
+
+// staticIngestVisible reports whether a live channel should already be shown as
+// ingesting a finished asset: the upstream has said it is static, and this
+// channel is not one whose auto-VOD was deliberately suppressed.
+func staticIngestVisible(upstreamType string, autoVODAllowed bool) bool {
+	return upstreamType == string(imdp.PresentationStatic) && autoVODAllowed
 }
 
 // superviseSource runs the channel's source, restarting it with backoff until

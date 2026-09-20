@@ -56,3 +56,29 @@ func TestStaticIngestShortfall(t *testing.T) {
 		})
 	}
 }
+
+// A paced producer does not return from the source until the whole asset is
+// queued, so "the source returned" is no longer the moment a static upstream
+// becomes known. These are the cases that decide whether the channel is shown
+// as ingesting a finished asset while it is still downloading it.
+func TestStaticIngestVisible(t *testing.T) {
+	tests := []struct {
+		name           string
+		upstreamType   string
+		autoVODAllowed bool
+		want           bool
+	}{
+		{"static upstream, ordinary channel", "static", true, true},
+		{"live upstream", "dynamic", true, false},
+		{"upstream not seen yet", "", true, false},
+		{"static, but auto-VOD suppressed by a restore", "static", false, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := staticIngestVisible(tc.upstreamType, tc.autoVODAllowed); got != tc.want {
+				t.Errorf("staticIngestVisible(%q, %v) = %v, want %v",
+					tc.upstreamType, tc.autoVODAllowed, got, tc.want)
+			}
+		})
+	}
+}

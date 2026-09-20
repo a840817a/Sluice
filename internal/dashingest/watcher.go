@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -249,6 +250,20 @@ func (w *Watcher) processMPD(ctx context.Context, p *imdp.ParsedMPD) {
 			w.prog.MarkCapped()
 		}
 	}
+
+	// Feed the broker in presentation order rather than one representation at a
+	// time. Discovery walks period → AdaptationSet → Representation, so its
+	// natural output is every segment of the first representation, then the
+	// next — and while the whole asset fits in the queue that does not matter,
+	// because the broker is a priority queue and pops by segment number anyway.
+	//
+	// A bounded queue removes that safety net: what has not been pushed cannot
+	// be chosen, so a representation-at-a-time feed leaves the queue holding
+	// only the first representation while the rest of the asset waits. Audio,
+	// discovered last, would not start until the video was nearly done — and
+	// with no audio to align against, the A/V barrier publishes nothing, so an
+	// ingest that is visibly progressing stays unplayable until the end.
+	sort.SliceStable(tasks, func(i, j int) bool { return tasks[i].Priority < tasks[j].Priority })
 
 	// A static MPD names its whole asset in one pass, and every segment it names
 	// is required: there is no later poll to pick up what the broker shed, the
