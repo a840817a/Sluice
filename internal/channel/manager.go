@@ -459,12 +459,38 @@ func (m *Manager) awaitStaticIngestComplete(ctx context.Context, rt *Runtime, br
 			return
 		case <-ticker.C:
 			if broker.Idle() {
+				if short, stored, expected := staticIngestShortfall(rt.Progress.Snapshot(), broker.Dropped()); short {
+					// An idle broker means no work is left, not that the work
+					// was done: a task shed under load leaves the queue just as
+					// empty as a task fetched. The VOD is built from what
+					// reached disk, so say plainly that it is incomplete rather
+					// than let a partial asset pass for a finished one.
+					slog.Error("static ingest finished short of the source's segment count",
+						"channel", rt.ID,
+						"stored", stored,
+						"expected", expected,
+						"dropped", broker.Dropped(),
+					)
+				}
 				slog.Info("static ingest complete, transitioning to VOD", "channel", rt.ID)
 				m.transitionToVOD(rt, parsedMPD)
 				return
 			}
 		}
 	}
+}
+
+// staticIngestShortfall reports whether a finished static ingest holds fewer
+// segments than the source named, and the two counts behind that judgement.
+//
+// A total the source never stated (a live stream) or one the enumeration capped
+// cannot be compared against, so neither counts as short.
+func staticIngestShortfall(snap progress.Snapshot, dropped uint64) (short bool, stored, expected uint64) {
+	stored, expected = snap.SegmentsStored, snap.ExpectedSegments
+	if !snap.TotalKnown || snap.TotalCapped || expected == 0 {
+		return false, stored, expected
+	}
+	return stored < expected || dropped > 0, stored, expected
 }
 
 // transitionToVOD rebuilds a full-history index from disk using unbounded ring

@@ -2,6 +2,7 @@ package queue
 
 import (
 	"container/heap"
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -144,6 +145,37 @@ func (b *Broker) Len() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return len(b.pq)
+}
+
+// awaitRoomPollInterval is how often AwaitRoom re-checks for queue room. It
+// only ever runs while the broker is full, so it costs nothing on a channel
+// whose pipeline keeps up.
+const awaitRoomPollInterval = 5 * time.Millisecond
+
+// AwaitRoom blocks until the queue has room for more tasks, reporting false if
+// ctx ended first. An unbounded broker never waits.
+//
+// It exists for producers that cannot afford to have work shed: the single
+// enumeration of a finished asset, where nothing comes back for a second look.
+// Push drops the overflow instead, which is right for a live stream falling
+// behind and silent data loss for a VOD.
+//
+// Once the queue is full it waits for it to drain to half capacity rather than
+// for a single free slot, so the producer refills in bursts instead of trading
+// one task per poll with the consumer.
+func (b *Broker) AwaitRoom(ctx context.Context) bool {
+	if b.maxSize <= 0 || b.Len() < b.maxSize {
+		return true
+	}
+	lowWater := b.maxSize / 2
+	for b.Len() > lowWater {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(awaitRoomPollInterval):
+		}
+	}
+	return true
 }
 
 // Dropped returns the cumulative number of tasks abandoned without being

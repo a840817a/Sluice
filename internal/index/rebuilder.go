@@ -207,15 +207,27 @@ func rebuildFromDisk(ci *ChannelIndex, dataDir, channelID string, capacity int) 
 				})
 
 				// Second pass: commit each segment so the A/V barrier can run.
+				//
+				// lastGoodDur is the most recent duration measured between two
+				// segments that are actually adjacent. A delta taken across a
+				// hole measures the hole, not the segment: a channel that shed
+				// segments, or an ingest that fetched stragglers far past its
+				// contiguous run, otherwise leaves the segment before the hole
+				// claiming every second of it — and that duration goes straight
+				// into the VOD's SegmentTimeline and presentation duration.
+				var lastGoodDur int64
 				for i, se := range segs {
 					endPTS := se.startPTS
 					switch {
-					case i+1 < len(segs):
-						// End time = start of next segment.
+					case i+1 < len(segs) && segs[i+1].segNo == se.segNo+1:
+						// End time = start of the next segment, which is only
+						// this segment's end when the two really do adjoin.
 						endPTS = segs[i+1].startPTS
-					case i > 0:
-						// Last segment: estimate from previous segment's duration.
-						endPTS = se.startPTS + (segs[i].startPTS - segs[i-1].startPTS)
+						lastGoodDur = segs[i+1].startPTS - se.startPTS
+					case lastGoodDur > 0:
+						// Last segment, or one whose successor is missing:
+						// estimate from the last adjacent pair seen.
+						endPTS = se.startPTS + lastGoodDur
 					}
 					st := SegmentState{
 						SegNo:     se.segNo,
