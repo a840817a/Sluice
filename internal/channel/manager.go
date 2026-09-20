@@ -372,8 +372,8 @@ const staticUpstreamPollInterval = time.Second
 // A channel whose auto-VOD is suppressed is left alone, matching the same
 // exemption in superviseSource.
 func (m *Manager) awaitStaticUpstream(ctx context.Context, rt *Runtime) {
-	if rt.Watcher == nil {
-		return // HLS reports its end per playlist, not as an upstream type
+	if rt.Watcher == nil && rt.HLS == nil {
+		return
 	}
 	ticker := time.NewTicker(staticUpstreamPollInterval)
 	defer ticker.Stop()
@@ -382,7 +382,7 @@ func (m *Manager) awaitStaticUpstream(ctx context.Context, rt *Runtime) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if !staticIngestVisible(rt.Watcher.UpstreamType(), rt.autoVODAllowed()) {
+			if !staticIngestVisible(rt.upstreamIsFinishedAsset(), rt.autoVODAllowed()) {
 				continue
 			}
 			if rt.mode.CompareAndSwap(int32(ModeLive), int32(ModeStaticIngesting)) {
@@ -394,11 +394,25 @@ func (m *Manager) awaitStaticUpstream(ctx context.Context, rt *Runtime) {
 	}
 }
 
+// upstreamIsFinishedAsset reports whether this channel's source has said it is
+// serving a completed asset rather than a live stream. Each protocol says it
+// differently: DASH in the manifest's presentation type, HLS by every polled
+// playlist carrying EXT-X-ENDLIST on its first poll.
+func (rt *Runtime) upstreamIsFinishedAsset() bool {
+	switch {
+	case rt.Watcher != nil:
+		return rt.Watcher.UpstreamType() == string(imdp.PresentationStatic)
+	case rt.HLS != nil:
+		return rt.HLS.UpstreamIsVOD()
+	}
+	return false
+}
+
 // staticIngestVisible reports whether a live channel should already be shown as
-// ingesting a finished asset: the upstream has said it is static, and this
-// channel is not one whose auto-VOD was deliberately suppressed.
-func staticIngestVisible(upstreamType string, autoVODAllowed bool) bool {
-	return upstreamType == string(imdp.PresentationStatic) && autoVODAllowed
+// ingesting a finished asset: the upstream has said so, and this channel is not
+// one whose auto-VOD was deliberately suppressed.
+func staticIngestVisible(upstreamFinished, autoVODAllowed bool) bool {
+	return upstreamFinished && autoVODAllowed
 }
 
 // superviseSource runs the channel's source, restarting it with backoff until

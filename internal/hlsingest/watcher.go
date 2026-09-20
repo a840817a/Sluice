@@ -362,6 +362,26 @@ func (w *Watcher) publishVODTotal(pollTargets int) {
 	}
 }
 
+// PollTargets reports how many playlists Run is currently waiting on.
+func (w *Watcher) PollTargets() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.pollTargets
+}
+
+// UpstreamIsVOD reports whether every playlist this watcher polls announced
+// itself as a finished asset on its first poll.
+//
+// This is what the channel's mode is promoted on. It is deliberately not
+// EndListProgress: that counts variants whose *ingest* has finished, which a
+// paced producer does not reach until the asset is queued — far too late to say
+// what the channel has been doing all along.
+func (w *Watcher) UpstreamIsVOD() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.pollTargets > 0 && len(w.vodVariantTotals) == w.pollTargets
+}
+
 // EndListProgress reports how many of the playlists this watcher polls have
 // reached EXT-X-ENDLIST, out of how many there are.
 //
@@ -573,6 +593,20 @@ func (w *Watcher) pollVariant(ctx context.Context, v variant) {
 			// be trusted as a total — captured before enqueueNew, which sets seen.
 			firstPoll := !st.seen
 
+			// Record a finished playlist's length before queueing it, not after.
+			// Both the channel's mode and its segment total are derived from
+			// this, and enqueueNew now paces itself against the broker — so it
+			// does not return until the whole asset is queued, which for a large
+			// one is most of the way through the download. Reading it afterwards
+			// meant a VOD ingest reported itself as live, with no total and so no
+			// progress bar, for nearly all of the time it was running.
+			if firstPoll && media.EndList {
+				w.mu.Lock()
+				w.vodVariantTotals[v.RepID] = len(media.Segments)
+				w.mu.Unlock()
+				w.publishVODTotal(w.PollTargets())
+			}
+
 			added := w.enqueueNew(ctx, v, st, media)
 
 			if media.TargetDuration > 0 {
@@ -589,6 +623,9 @@ func (w *Watcher) pollVariant(ctx context.Context, v variant) {
 				w.mu.Lock()
 				w.endedTargets[v.RepID] = true
 				if firstPoll {
+					// Already recorded above for a first-poll VOD playlist; kept
+					// for the playlist that only ends on a later poll, whose
+					// length is a DVR window and deliberately not a total.
 					w.vodVariantTotals[v.RepID] = len(media.Segments)
 				}
 				w.mu.Unlock()
