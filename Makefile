@@ -98,6 +98,18 @@ logs:
 	@echo '    $$EDITOR .env      # SLUICE_ADMIN_PASSWORD must not be empty'
 	@exit 1
 
+# -v removes named volumes. With the default bind mount (./data) that costs
+# nothing, but DATA_MOUNT pointing at a named volume makes this delete every
+# segment the gateway holds — and "clean" reads like build output, not like
+# that. Ask first in the one case where it matters.
 clean:
+	@if [ -n "$(DATA_MOUNT)" ] && [ "$(CONFIRM)" != "1" ]; then \
+		echo 'DATA_MOUNT=$(DATA_MOUNT) is set, so `compose down -v` would delete that'; \
+		echo 'volume and every segment in it.'; \
+		echo; \
+		echo '    make down                 # stop, keep the data'; \
+		echo '    make clean CONFIRM=1      # delete it, if that is what you meant'; \
+		exit 1; \
+	fi
 	$(ENGINE) compose down -v 2>/dev/null || true
 	rm -f sluice

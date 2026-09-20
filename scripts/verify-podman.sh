@@ -246,12 +246,23 @@ head_ "Rootless low ports"
 if [ "$ROOTLESS" = "true" ]; then
 	# Must test the port binding alone. Running the gateway with a bad flag
 	# also exits non-zero, and that would read as a binding failure.
-	out=$(podman run --rm -p 443:8080 --entrypoint sh "$PROBE_IMG" -c true 2>&1)
-	if [ $? -eq 0 ]; then
+	#
+	# A non-zero exit is not by itself the documented refusal. If 443 is simply
+	# occupied — by this host's own gateway serving TLS, most likely — the run
+	# fails too, and reporting that as "refused, as documented" states a fact
+	# about the host that was never established. Only the privileged-port error
+	# proves anything; anything else is a question this check cannot answer.
+	if out=$(podman run --rm -p 443:8080 --entrypoint sh "$PROBE_IMG" -c true 2>&1); then
 		ok "this host binds 443 rootless (ip_unprivileged_port_start is lowered)"
 		printf '        %s\n' "so addr: \":443\" works here; it does not on a default host"
-	else
+	elif printf '%s' "$out" | grep -qiE 'privileged port|permission denied|operation not permitted'; then
 		ok "binding 443 rootless is refused, as documented"
+		printf '        %s\n' "${out##*: }"
+	elif printf '%s' "$out" | grep -qiE 'address already in use|address in use|port is already allocated'; then
+		meh "443 is already in use here, so this host's low-port policy is untested"
+		printf '        %s\n' "free it (or stop the gateway) and re-run to learn the answer"
+	else
+		meh "binding 443 failed for a reason this check does not recognise"
 		printf '        %s\n' "${out##*: }"
 	fi
 else
