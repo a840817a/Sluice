@@ -186,6 +186,17 @@ systemctl --user restart sluice
 Or, if the unit was installed by `bootstrap.sh` at `:latest`, re-run it — the
 restart on its own will not pull a newer image.
 
+Re-running `bootstrap.sh` upgrades the host rather than reinstalling it. It
+reads the unit already on disk and keeps whatever that run does not name — the
+published port, the data directory, the state directory — so an upgrade cannot
+silently move a host's data directory back to the default and leave the gateway
+running, healthy, against an empty one. A pinned tag is kept for the same
+reason; pass a tag (or `latest`) to move it. The outgoing unit is saved as
+`sluice.container.bak`.
+
+`scripts/test-bootstrap-resolve.sh` covers that resolution against fake units;
+it needs neither podman nor systemd.
+
 Rolling back is the same edit with the previous tag. Every push to `main` also
 publishes an immutable `sha-<short>` tag if you need to pin something that was
 never released.

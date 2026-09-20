@@ -5,17 +5,33 @@
 #   curl -fsSL <raw-url>/deploy/bootstrap.sh | sudo bash -s -- 0.1.1
 #   sudo SLUICE_DIR=/srv/sluice SLUICE_ADMIN_PASSWORD=... bash bootstrap.sh
 #
+# Re-running it upgrades a host rather than reinstalling one: the settings in
+# the unit already on disk are kept unless this run names replacements, and a
+# pinned tag is kept unless a tag is passed. The outgoing unit is saved beside
+# the new one as sluice.container.bak.
+#
 # Unlike deploy/install-quadlet.sh this carries the unit inline, so nothing is
 # read from the repository — that is the point of it, and why it stays runnable
 # on its own after a curl. The two must be kept in step: if sluice.container
 # changes, change the heredoc below too.
 set -euo pipefail
 
-# :latest by default so a re-run is an upgrade. Pass a tag to pin — a host you
-# want to be predictable should pin, and rolling back is then one argument.
-TAG="${1:-latest}"
-IMAGE="${IMAGE:-ghcr.io/a840817a/sluice}:${TAG}"
-HTTP_PORT="${SLUICE_HTTP_PORT:-8080}"
+# What this run was actually told, captured before any default is applied.
+#
+# A re-run is an upgrade of a host that is already configured, not a fresh
+# install, so every setting below resolves as: what this run named, else what
+# the installed unit says, else the built-in default. Without the middle step a
+# bare `bash bootstrap.sh` rewrites a host installed with a custom port or data
+# directory back to 8080 and $SLUICE_DIR/data — and in the data directory's
+# case the gateway then starts healthy against an empty directory, with every
+# channel apparently gone.
+ARG_TAG="${1:-}"
+ARG_IMAGE_REPO="${IMAGE:-}"
+ARG_HTTP_PORT="${SLUICE_HTTP_PORT:-}"
+ARG_SLUICE_DIR="${SLUICE_DIR:-}"
+ARG_DATA_DIR="${SLUICE_DATA_DIR:-}"
+
+IMAGE_REPO_DEFAULT="ghcr.io/a840817a/sluice"
 
 # TLS is off unless asked for. It matters for more than eavesdropping: browsers
 # expose EME only in a secure context, so a DRM channel served over plain HTTP
@@ -41,26 +57,95 @@ ROOTLESS=$(podman info --format '{{.Host.Security.Rootless}}')
 SELINUX=$(podman info --format '{{.Host.Security.SELinuxEnabled}}')
 
 if [ "$ROOTLESS" = "true" ]; then
-	SLUICE_DIR="${SLUICE_DIR:-$HOME/sluice}"
+	SLUICE_DIR_DEFAULT="$HOME/sluice"
 	UNIT_DIR="$HOME/.config/containers/systemd"
 	SYSTEMCTL=(systemctl --user)
 else
-	SLUICE_DIR="${SLUICE_DIR:-/srv/sluice}"
+	SLUICE_DIR_DEFAULT="/srv/sluice"
 	UNIT_DIR="/etc/containers/systemd"
 	SYSTEMCTL=(systemctl)
 	[ "$(id -u)" -eq 0 ] || { echo "rootful podman: run this as root"; exit 1; }
 fi
+UNIT_FILE="$UNIT_DIR/sluice.container"
+
+# --- settings already on this host ----------------------------------------
+# The installed unit is where a configured host's settings live; read them back
+# so an upgrade can leave alone whatever this run said nothing about.
+#
+# The markers below delimit the block scripts/test-bootstrap-resolve.sh extracts
+# and exercises against fake units. It reads a file and shell variables and
+# nothing else, which is what makes it testable without podman — keep it that
+# way, and keep the markers where they are.
+# >>> settings-resolution
+
+# Last assignment wins, as systemd itself resolves a repeated key.
+unit_field() {
+	[ -f "$UNIT_FILE" ] || return 0
+	sed -n "s/^$1=//p" "$UNIT_FILE" | tail -1
+}
+
+# A tag is the part after the last colon, but only when that colon belongs to
+# the tag rather than to a registry port: ghcr.io:5000/sluice carries no tag.
+image_tag() {
+	case "${1##*/}" in *:*) printf '%s' "${1##*:}" ;; *) printf '%s' "" ;; esac
+}
+image_repo() {
+	case "${1##*/}" in *:*) printf '%s' "${1%:*}" ;; *) printf '%s' "$1" ;; esac
+}
+
+INSTALLED_IMAGE=$(unit_field Image)
+INSTALLED_VOLUME=$(unit_field Volume)
+INSTALLED_ENVFILE=$(unit_field EnvironmentFile)
+
+# PublishPort is "[<bind address>:]<host port>:<container port>". Drop the
+# container port, then take the last field, so a unit that names a bind address
+# does not yield the address as the port.
+INSTALLED_PORT=$(unit_field PublishPort)
+INSTALLED_PORT="${INSTALLED_PORT%:8080}"
+INSTALLED_PORT="${INSTALLED_PORT##*:}"
+
+# Volume is "<host path>:/data[:Z]" — cut at the container path rather than at
+# the first colon, so a host path is never truncated.
+INSTALLED_DATA_DIR="${INSTALLED_VOLUME%%:/data*}"
+[ "$INSTALLED_DATA_DIR" = "$INSTALLED_VOLUME" ] && INSTALLED_DATA_DIR=""
+
+INSTALLED_SLUICE_DIR=""
+[ -n "$INSTALLED_ENVFILE" ] && INSTALLED_SLUICE_DIR=$(dirname "$INSTALLED_ENVFILE")
+
+if [ -f "$UNIT_FILE" ]; then
+	echo "found    $UNIT_FILE"
+	echo "         upgrading in place; settings this run did not name are kept"
+fi
+
+# given > installed > default, each setting independently.
+SLUICE_DIR="${ARG_SLUICE_DIR:-${INSTALLED_SLUICE_DIR:-$SLUICE_DIR_DEFAULT}}"
+# Segments only grow (store.cleanup defaults to "disabled"), so the data
+# directory is the one thing worth putting on its own disk.
+DATA_DIR="${ARG_DATA_DIR:-${INSTALLED_DATA_DIR:-$SLUICE_DIR/data}}"
+HTTP_PORT="${ARG_HTTP_PORT:-${INSTALLED_PORT:-8080}}"
+
+INSTALLED_TAG=$(image_tag "$INSTALLED_IMAGE")
+INSTALLED_REPO=$(image_repo "$INSTALLED_IMAGE")
+IMAGE_REPO="${ARG_IMAGE_REPO:-${INSTALLED_REPO:-$IMAGE_REPO_DEFAULT}}"
+if [ -n "$ARG_TAG" ]; then
+	TAG="$ARG_TAG"
+elif [ -n "$INSTALLED_TAG" ] && [ "$INSTALLED_TAG" != "latest" ]; then
+	# Pinning is a deliberate act, so a bare re-run must not undo it. Behind a
+	# moving tag a re-run still upgrades, which is the documented behaviour;
+	# what it may not do is quietly un-pin a host chosen to be predictable.
+	TAG="$INSTALLED_TAG"
+	echo "kept     pinned tag $TAG (pass a tag, or 'latest', to move it)"
+else
+	TAG=latest
+fi
+IMAGE="${IMAGE_REPO}:${TAG}"
+# <<< settings-resolution
 
 # Rootless below 1024 is refused by pasta with EPERM, and the error names the
 # port rather than the reason.
 if [ "$ROOTLESS" = "true" ] && [ "$HTTP_PORT" -lt 1024 ]; then
 	echo "rootless podman cannot publish port $HTTP_PORT (<1024)"; exit 1
 fi
-
-# Segments only grow (store.cleanup defaults to "disabled"), so the data
-# directory is the one thing worth putting on its own disk. Defaults to living
-# under SLUICE_DIR, which is right for a single-disk host.
-DATA_DIR="${SLUICE_DATA_DIR:-$SLUICE_DIR/data}"
 
 # A self-signed certificate covers every address the gateway can see, but it
 # runs in a network namespace: net.InterfaceAddrs() returns the container's
@@ -77,7 +162,7 @@ echo "podman   $ver rootless=$ROOTLESS selinux=$SELINUX"
 echo "image    $IMAGE"
 echo "state    $SLUICE_DIR"
 echo "data     $DATA_DIR"
-echo "unit     $UNIT_DIR/sluice.container"
+echo "unit     $UNIT_FILE"
 
 mkdir -p "$SLUICE_DIR" "$DATA_DIR" "$UNIT_DIR"
 
@@ -265,7 +350,14 @@ TimeoutStartSec=900
 [Install]
 WantedBy=default.target
 EOF
-install -m 0644 "$tmp" "$UNIT_DIR/sluice.container"
+# Keep the outgoing unit. This file is the only record of settings a host was
+# given by hand, and a re-run that gets something wrong is otherwise not
+# recoverable without knowing what was there before.
+if [ -f "$UNIT_FILE" ]; then
+	cp -p "$UNIT_FILE" "$UNIT_FILE.bak"
+	echo "backup   $UNIT_FILE.bak"
+fi
+install -m 0644 "$tmp" "$UNIT_FILE"
 rm -f "$tmp"
 
 # Rootless units die with the last session unless lingering is on.
@@ -309,7 +401,7 @@ probe=(curl -fsS)
 
 echo "  ${SCHEME}://<this host>:${HTTP_PORT}/    # player"
 echo "  ${SYSTEMCTL[*]} stop sluice        # stop"
-echo "  bash bootstrap.sh                  # re-run to upgrade (:latest)"
+echo "  bash bootstrap.sh                  # re-run to upgrade, keeping this host's settings"
 echo "  ${SYSTEMCTL[*]} restart sluice     # after editing Image= to pin or roll back"
 
 # Last, so it survives a curl | bash that scrolled everything else away.
