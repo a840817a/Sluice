@@ -5,9 +5,17 @@
 # started rootless under systemd: healthy, serving, and back within five seconds
 # of `podman kill -s KILL`.
 #
-# One thing left open: whether journald captures its output. The test user could
-# not read the journal (not in adm/systemd-journal/wheel, no persistent journal
-# on that host), which says nothing either way about the unit.
+# journald does capture its output (confirmed 2026-09-20), but `journalctl -u
+# sluice` will not show it. Podman's conmon writes container stdout to the
+# journal tagged with CONTAINER_NAME/CONTAINER_ID, not with the unit fields that
+# `-u` matches, so that query returns only systemd's own start/stop lines — and
+# with `-f` it simply sits there looking hung. Read the gateway's logs with:
+#
+#   journalctl CONTAINER_NAME=sluice -f
+#
+# Add `-o cat` to get the raw JSON lines back out of MESSAGE for piping to jq.
+# `--user` may come up empty even rootless; the plain form worked on the test
+# host. Reading it as a non-root user still needs adm/systemd-journal/wheel.
 #
 # Install (rootless):
 #   mkdir -p ~/.config/containers/systemd

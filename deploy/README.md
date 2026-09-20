@@ -44,11 +44,14 @@ four of the assumptions it now guards were wrong the first time it ran.
       rather than on a `podman run` command line — `healthz` 200, and after
       `podman kill -s KILL` it was back and healthy within five seconds, so
       `Restart=always` works.
-- [ ] Reading its logs with `journalctl --user -u sluice` returned "insufficient
-      permissions" on the test host: that user was in none of `adm`,
-      `systemd-journal` or `wheel`, and the host has no persistent journal. That
-      is journal configuration, not a defect in the unit — confirm from root
-      with `journalctl _SYSTEMD_USER_UNIT=sluice.service` if it matters to you.
+- [x] **Logs reach journald** — but not under the unit name. Podman's conmon
+      tags container output with `CONTAINER_NAME`/`CONTAINER_ID` rather than the
+      unit fields `-u` matches, so `journalctl --user -u sluice` shows only
+      systemd's start/stop lines and, with `-f`, looks like it hung. Use
+      `journalctl CONTAINER_NAME=sluice -f` (add `-o cat` to pipe the JSON into
+      jq). Separately, reading the journal at all needs membership in `adm`,
+      `systemd-journal` or `wheel` — the original test user had none of them,
+      which is journal configuration, not a defect in the unit.
 
 ## Setup
 
