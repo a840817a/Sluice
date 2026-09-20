@@ -378,7 +378,7 @@ export function renderCards(container, data) {
   const domOrder = Array.from(container.children)
     .filter(el => el.dataset && el.dataset.channelId)
     .map(el => el.dataset.channelId);
-  if (domOrder.join(' ') !== ids.join(' ')) {
+  if (domOrder.join('\0') !== ids.join('\0')) {
     ids.forEach(id => container.appendChild(cards.get(id).root));
   }
 }
