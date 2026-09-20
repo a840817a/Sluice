@@ -573,7 +573,7 @@ func (w *Watcher) pollVariant(ctx context.Context, v variant) {
 			// be trusted as a total — captured before enqueueNew, which sets seen.
 			firstPoll := !st.seen
 
-			added := w.enqueueNew(v, st, media)
+			added := w.enqueueNew(ctx, v, st, media)
 
 			if media.TargetDuration > 0 {
 				interval = time.Duration(media.TargetDuration) * time.Second
@@ -609,7 +609,14 @@ func (w *Watcher) pollVariant(ctx context.Context, v variant) {
 
 // enqueueNew pushes every segment the playlist advertises that has not been
 // enqueued yet, and returns how many were added.
-func (w *Watcher) enqueueNew(v variant, st *variantState, m *hlssrc.Media) int {
+//
+// A finished playlist is enumerated exactly once — pollVariant returns as soon
+// as it sees EXT-X-ENDLIST — so every segment it names has one chance to be
+// queued and the producer must pace itself against the pipeline rather than
+// hand the broker more than it holds. A live playlist keeps the old behaviour:
+// shedding is how a channel survives an upstream it cannot keep up with, and
+// the next poll re-advertises whatever is still in the window.
+func (w *Watcher) enqueueNew(ctx context.Context, v variant, st *variantState, m *hlssrc.Media) int {
 	// An upstream restart rewinds the media sequence. Reconciling the new
 	// numbering against what is already indexed is not possible in general
 	// (segment N after the restart is unrelated to segment N before it), so the
@@ -675,6 +682,9 @@ func (w *Watcher) enqueueNew(v variant, st *variantState, m *hlssrc.Media) int {
 				"channel", w.channelID, "rep", v.RepID, "seg", seg.SeqNo)
 		}
 
+		if m.EndList && !w.broker.AwaitRoom(ctx) {
+			return added // context cancelled mid-enumeration
+		}
 		w.broker.Push(w.buildTask(v, seg, periodID, startPTS, durTicks, deadline))
 		added++
 	}

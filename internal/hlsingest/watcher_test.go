@@ -59,7 +59,7 @@ func TestEnqueueNewAccumulatesPTSFromEXTINF(t *testing.T) {
 	w := newTestWatcher()
 	st := &variantState{}
 
-	added := w.enqueueNew(testVariant(), st, mediaPlaylist(100, 3, 6.0))
+	added := w.enqueueNew(context.Background(), testVariant(), st, mediaPlaylist(100, 3, 6.0))
 	if added != 3 {
 		t.Fatalf("added = %d, want 3", added)
 	}
@@ -92,7 +92,7 @@ func TestEnqueueNewRoundTripsFractionalEXTINF(t *testing.T) {
 	// playlist re-derives it from StartPTS/EndPTS.
 	w := newTestWatcher()
 	st := &variantState{}
-	w.enqueueNew(testVariant(), st, mediaPlaylist(0, 1, 5.005))
+	w.enqueueNew(context.Background(), testVariant(), st, mediaPlaylist(0, 1, 5.005))
 
 	task := drain(w.broker)[0]
 	got := float64(task.Duration) / TSTimescale
@@ -106,13 +106,13 @@ func TestEnqueueNewDedupesAcrossReloads(t *testing.T) {
 	st := &variantState{}
 	v := testVariant()
 
-	if added := w.enqueueNew(v, st, mediaPlaylist(100, 3, 6.0)); added != 3 {
+	if added := w.enqueueNew(context.Background(), v, st, mediaPlaylist(100, 3, 6.0)); added != 3 {
 		t.Fatalf("first reload added %d, want 3", added)
 	}
 	drain(w.broker)
 
 	// The window slid by one: 101,102 are repeats and only 103 is new.
-	if added := w.enqueueNew(v, st, mediaPlaylist(101, 3, 6.0)); added != 1 {
+	if added := w.enqueueNew(context.Background(), v, st, mediaPlaylist(101, 3, 6.0)); added != 1 {
 		t.Fatalf("second reload added %d, want 1", added)
 	}
 	tasks := drain(w.broker)
@@ -130,10 +130,10 @@ func TestEnqueueNewIdenticalReloadAddsNothing(t *testing.T) {
 	st := &variantState{}
 	v := testVariant()
 
-	w.enqueueNew(v, st, mediaPlaylist(100, 3, 6.0))
+	w.enqueueNew(context.Background(), v, st, mediaPlaylist(100, 3, 6.0))
 	drain(w.broker)
 
-	if added := w.enqueueNew(v, st, mediaPlaylist(100, 3, 6.0)); added != 0 {
+	if added := w.enqueueNew(context.Background(), v, st, mediaPlaylist(100, 3, 6.0)); added != 0 {
 		t.Errorf("unchanged playlist added %d segments, want 0", added)
 	}
 }
@@ -147,13 +147,13 @@ func TestEnqueueNewTreatsSequenceRewindAsReset(t *testing.T) {
 	st := &variantState{}
 	v := testVariant()
 
-	w.enqueueNew(v, st, mediaPlaylist(500, 3, 6.0))
+	w.enqueueNew(context.Background(), v, st, mediaPlaylist(500, 3, 6.0))
 	tasks := drain(w.broker)
 	if tasks[500].PeriodID != "0" {
 		t.Fatalf("initial PeriodID = %q, want 0", tasks[500].PeriodID)
 	}
 
-	added := w.enqueueNew(v, st, mediaPlaylist(0, 3, 6.0))
+	added := w.enqueueNew(context.Background(), v, st, mediaPlaylist(0, 3, 6.0))
 	if added != 3 {
 		t.Fatalf("after reset added %d, want 3", added)
 	}
@@ -180,10 +180,10 @@ func TestEnqueueNewSurvivesWindowJump(t *testing.T) {
 	st := &variantState{}
 	v := testVariant()
 
-	w.enqueueNew(v, st, mediaPlaylist(100, 3, 6.0))
+	w.enqueueNew(context.Background(), v, st, mediaPlaylist(100, 3, 6.0))
 	drain(w.broker)
 
-	added := w.enqueueNew(v, st, mediaPlaylist(200, 3, 6.0))
+	added := w.enqueueNew(context.Background(), v, st, mediaPlaylist(200, 3, 6.0))
 	if added != 3 {
 		t.Fatalf("added = %d after a forward jump, want 3", added)
 	}
@@ -203,7 +203,7 @@ func TestEnqueueNewCarriesDiscontinuity(t *testing.T) {
 	m := mediaPlaylist(10, 3, 6.0)
 	m.Segments[1].Discontinuity = true
 
-	w.enqueueNew(testVariant(), st, m)
+	w.enqueueNew(context.Background(), testVariant(), st, m)
 	tasks := drain(w.broker)
 
 	if !tasks[11].Discontinuity {
@@ -220,7 +220,7 @@ func TestEnqueueNewDetectsFMP4ViaMap(t *testing.T) {
 	m := mediaPlaylist(0, 1, 4.0)
 	m.Segments[0].Map = &hlssrc.MapInfo{URI: "https://origin.example.com/live/init.mp4"}
 
-	w.enqueueNew(testVariant(), st, m)
+	w.enqueueNew(context.Background(), testVariant(), st, m)
 	task := drain(w.broker)[0]
 
 	if task.Format != queue.FormatFMP4 {
@@ -355,7 +355,7 @@ func TestEnqueueNewCarriesKeyMaterial(t *testing.T) {
 	const keyURI = "https://drm.example.com/k1.bin"
 	ivHex := "0123456789abcdef0123456789abcdef"
 
-	w.enqueueNew(testVariant(), st, encryptedPlaylist(5, 2, keyURI, ivHex))
+	w.enqueueNew(context.Background(), testVariant(), st, encryptedPlaylist(5, 2, keyURI, ivHex))
 	tasks := drain(w.broker)
 
 	task := tasks[5]
@@ -385,7 +385,7 @@ func TestEnqueueNewCarriesKeyMaterial(t *testing.T) {
 func TestEnqueueNewDerivesIVFromSequenceWhenAbsent(t *testing.T) {
 	w := newTestWatcher()
 	st := &variantState{}
-	w.enqueueNew(testVariant(), st, encryptedPlaylist(258, 1, "https://drm.example.com/k.bin", ""))
+	w.enqueueNew(context.Background(), testVariant(), st, encryptedPlaylist(258, 1, "https://drm.example.com/k.bin", ""))
 
 	task := drain(w.broker)[258]
 	if len(task.IV) != 16 {
@@ -401,7 +401,7 @@ func TestEnqueueNewHonoursDecryptMode(t *testing.T) {
 	w := NewWatcher(config.Config{}, "ch1", "https://o.example.com/m.m3u8", nil,
 		true, "", index.NewChannelIndex(), queue.NewBroker(64))
 	st := &variantState{}
-	w.enqueueNew(testVariant(), st, encryptedPlaylist(0, 1, "https://drm.example.com/k.bin", ""))
+	w.enqueueNew(context.Background(), testVariant(), st, encryptedPlaylist(0, 1, "https://drm.example.com/k.bin", ""))
 
 	if task := drain(w.broker)[0]; !task.DecryptOnIngest {
 		t.Error("DecryptOnIngest not set on a decrypt-mode channel")
@@ -416,7 +416,7 @@ func TestEnqueueNewIgnoresSampleAES(t *testing.T) {
 	m := mediaPlaylist(0, 1, 4.0)
 	m.Segments[0].Key = &hlssrc.Key{Method: "SAMPLE-AES", URI: "https://drm.example.com/fp"}
 
-	w.enqueueNew(testVariant(), st, m)
+	w.enqueueNew(context.Background(), testVariant(), st, m)
 	if task := drain(w.broker)[0]; task.Encrypted {
 		t.Error("SAMPLE-AES segment marked as AES-128 encrypted")
 	}
@@ -455,12 +455,12 @@ func TestEnqueueNewBackfillsInteriorGap(t *testing.T) {
 	v := testVariant()
 
 	// First poll: 100,101,102 all enqueue and commit to the index.
-	w.enqueueNew(v, st, mediaPlaylist(100, 3, 6.0))
+	w.enqueueNew(context.Background(), v, st, mediaPlaylist(100, 3, 6.0))
 	commitToIndex(w, drain(w.broker))
 
 	// Segment 103 was lost (never committed): simulate by committing only 104
 	// from the next window, leaving a hole at 103.
-	w.enqueueNew(v, st, mediaPlaylist(101, 4, 6.0)) // 101..104; 103 among them
+	w.enqueueNew(context.Background(), v, st, mediaPlaylist(101, 4, 6.0)) // 101..104; 103 among them
 	tasks := drain(w.broker)
 	// 103 and 104 are new (>lastSeq 102); commit only 104, dropping 103.
 	delete(tasks, 103)
@@ -468,7 +468,7 @@ func TestEnqueueNewBackfillsInteriorGap(t *testing.T) {
 
 	// A later poll still advertises 102..105. 103 is now an interior hole (below
 	// the high-water mark, still in the window) and must be re-enqueued.
-	added := w.enqueueNew(v, st, mediaPlaylist(102, 4, 6.0)) // 102,103,104,105
+	added := w.enqueueNew(context.Background(), v, st, mediaPlaylist(102, 4, 6.0)) // 102,103,104,105
 	got := drain(w.broker)
 
 	if _, ok := got[103]; !ok {
@@ -502,7 +502,7 @@ func TestEnqueueNewSkipsGapWithoutAnchor(t *testing.T) {
 	st := &variantState{}
 	v := testVariant()
 
-	w.enqueueNew(v, st, mediaPlaylist(100, 3, 6.0)) // 100,101,102
+	w.enqueueNew(context.Background(), v, st, mediaPlaylist(100, 3, 6.0)) // 100,101,102
 	tasks := drain(w.broker)
 	// Commit only 102, so 100 and 101 are holes with no committed predecessor.
 	for k := range tasks {
@@ -514,7 +514,7 @@ func TestEnqueueNewSkipsGapWithoutAnchor(t *testing.T) {
 
 	// Re-poll the same window; 100 has no anchor (99 absent) so it is skipped,
 	// 101's anchor 100 is also absent so it is skipped too.
-	w.enqueueNew(v, st, mediaPlaylist(100, 3, 6.0))
+	w.enqueueNew(context.Background(), v, st, mediaPlaylist(100, 3, 6.0))
 	got := drain(w.broker)
 	if _, ok := got[100]; ok {
 		t.Error("gap 100 backfilled despite no anchor")

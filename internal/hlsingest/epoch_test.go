@@ -1,6 +1,7 @@
 package hlsingest
 
 import (
+	"context"
 	"testing"
 
 	"github.com/a840817a/sluice/internal/hlsdesc"
@@ -45,14 +46,14 @@ func TestStreamResetPutsAllRenditionsInOnePeriod(t *testing.T) {
 	vState, aState := &variantState{}, &variantState{}
 
 	// Both renditions ingest normally in the initial period.
-	w.enqueueNew(video, vState, mediaPlaylist(100, 3, 6.0))
-	w.enqueueNew(audio, aState, mediaPlaylist(100, 3, 6.0))
+	w.enqueueNew(context.Background(), video, vState, mediaPlaylist(100, 3, 6.0))
+	w.enqueueNew(context.Background(), audio, aState, mediaPlaylist(100, 3, 6.0))
 	drain(w.broker)
 
 	// The upstream restarts. Video's poll loop notices first, audio's a moment
 	// later — the ordering here is the whole point.
-	w.enqueueNew(video, vState, mediaPlaylist(0, 3, 6.0))
-	w.enqueueNew(audio, aState, mediaPlaylist(0, 3, 6.0))
+	w.enqueueNew(context.Background(), video, vState, mediaPlaylist(0, 3, 6.0))
+	w.enqueueNew(context.Background(), audio, aState, mediaPlaylist(0, 3, 6.0))
 
 	got := periodsByRep(w.broker)
 	if len(got["v0"]) != 1 || len(got["a0"]) != 1 {
@@ -81,18 +82,18 @@ func TestSecondResetAdvancesThePeriodAgain(t *testing.T) {
 	video, audio := testVariant(), audioVariant()
 	vState, aState := &variantState{}, &variantState{}
 
-	w.enqueueNew(video, vState, mediaPlaylist(100, 3, 6.0))
-	w.enqueueNew(audio, aState, mediaPlaylist(100, 3, 6.0))
+	w.enqueueNew(context.Background(), video, vState, mediaPlaylist(100, 3, 6.0))
+	w.enqueueNew(context.Background(), audio, aState, mediaPlaylist(100, 3, 6.0))
 	drain(w.broker)
 
 	// First reset.
-	w.enqueueNew(video, vState, mediaPlaylist(50, 3, 6.0))
-	w.enqueueNew(audio, aState, mediaPlaylist(50, 3, 6.0))
+	w.enqueueNew(context.Background(), video, vState, mediaPlaylist(50, 3, 6.0))
+	w.enqueueNew(context.Background(), audio, aState, mediaPlaylist(50, 3, 6.0))
 	first := periodsByRep(w.broker)
 
 	// Second reset, some time later.
-	w.enqueueNew(video, vState, mediaPlaylist(10, 3, 6.0))
-	w.enqueueNew(audio, aState, mediaPlaylist(10, 3, 6.0))
+	w.enqueueNew(context.Background(), video, vState, mediaPlaylist(10, 3, 6.0))
+	w.enqueueNew(context.Background(), audio, aState, mediaPlaylist(10, 3, 6.0))
 	second := periodsByRep(w.broker)
 
 	firstPeriod, secondPeriod := onlyKey(t, first["v0"]), onlyKey(t, second["v0"])
