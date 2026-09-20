@@ -194,8 +194,9 @@ running, healthy, against an empty one. A pinned tag is kept for the same
 reason; pass a tag (or `latest`) to move it. The outgoing unit is saved as
 `sluice.container.bak`.
 
-`scripts/test-bootstrap-resolve.sh` covers that resolution against fake units;
-it needs neither podman nor systemd.
+`install-quadlet.sh` follows the same rule over the two settings it has, the
+state directory and the tag. `scripts/test-deploy-settings.sh` covers both
+scripts' resolution against fake units; it needs neither podman nor systemd.
 
 Rolling back is the same edit with the previous tag. Every push to `main` also
 publishes an immutable `sha-<short>` tag if you need to pin something that was

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Exercises deploy/bootstrap.sh's settings-resolution block against fake
+# Exercises the settings-resolution blocks in deploy/bootstrap.sh and deploy/install-quadlet.sh against fake
 # installed units. No podman and no systemd: that block reads a file and shell
 # variables and nothing else, which is the whole reason it can be tested here.
 #
@@ -9,23 +9,25 @@
 # SLUICE_DATA_DIR=/mnt/big/data came back pointing at $SLUICE_DIR/data, started
 # healthy against an empty directory, and appeared to have lost every channel.
 #
-#   bash scripts/test-bootstrap-resolve.sh
+#   bash scripts/test-deploy-settings.sh
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BOOTSTRAP="$REPO_ROOT/deploy/bootstrap.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# The block under test, taken between its markers in bootstrap.sh.
-sed -n '/^# >>> settings-resolution$/,/^# <<< settings-resolution$/p' "$BOOTSTRAP" > "$WORK/resolve.sh"
-if [ ! -s "$WORK/resolve.sh" ]; then
-	echo "could not find the settings-resolution markers in $BOOTSTRAP" >&2
-	exit 1
-fi
-
 SCRATCH="$WORK"
 fails=0
+
+# Extract the block under test from a script, between its markers.
+load_block() {
+	local script="$1"
+	sed -n '/^# >>> settings-resolution$/,/^# <<< settings-resolution$/p' "$script" > "$WORK/resolve.sh"
+	if [ ! -s "$WORK/resolve.sh" ]; then
+		echo "could not find the settings-resolution markers in $script" >&2
+		exit 1
+	fi
+}
 
 run_case() {
 	local name="$1" unit_body="$2"; shift 2
@@ -64,6 +66,9 @@ PublishPort=9000:8080
 Volume=/mnt/big/data:/data:Z
 EnvironmentFile=/opt/sluice/.env'
 
+echo "=== deploy/bootstrap.sh ==="
+load_block "$REPO_ROOT/deploy/bootstrap.sh"
+
 echo "--- A: nothing installed, nothing given -> built-in defaults"
 run_case "fresh install" ""
 expect image "$IMAGE" "ghcr.io/a840817a/sluice:latest"
@@ -100,6 +105,52 @@ expect port "$HTTP_PORT" "9000"
 echo "--- G: registry with a port and no tag"
 run_case "registry port, untagged" "$(printf '%s\n' 'Image=registry.local:5000/sluice' 'PublishPort=8080:8080' 'Volume=/srv/sluice/data:/data' 'EnvironmentFile=/srv/sluice/.env')"
 expect image "$IMAGE" "registry.local:5000/sluice:latest"
+
+# install-quadlet.sh carries the same rule over the two settings it has. It
+# takes the rest of the unit from deploy/sluice.container, so there is no port
+# or data directory of its own to preserve — SLUICE_DIR is what moves the data.
+echo
+echo "=== deploy/install-quadlet.sh ==="
+load_block "$REPO_ROOT/deploy/install-quadlet.sh"
+
+run_case_iq() { # same harness, minus the settings this script does not have
+	local name="$1" unit_body="$2"; shift 2
+	local tmp; tmp=$(mktemp -d)
+	UNIT_DIR="$tmp"
+	UNIT_FILE="$tmp/sluice.container"
+	[ -n "$unit_body" ] && printf '%s\n' "$unit_body" > "$tmp/sluice.container"
+	SLUICE_DIR_DEFAULT="$HOME/sluice"
+	IMAGE_REPO_DEFAULT="ghcr.io/a840817a/sluice"
+	ARG_TAG="" ARG_IMAGE_REPO="" ARG_SLUICE_DIR=""
+	while [ $# -gt 0 ]; do
+		case "$1" in *=*) eval "$1" ;; esac
+		shift
+	done
+	# shellcheck disable=SC1090
+	. "$SCRATCH/resolve.sh" >/dev/null
+	printf '%-42s image=%-38s sluice=%s\n' "$name" "$IMAGE" "$SLUICE_DIR"
+	rm -rf "$tmp"
+}
+
+IQ_CUSTOM='[Container]
+Image=ghcr.io/a840817a/sluice:0.1.0
+Volume=/srv/sluice/data:/data:Z
+EnvironmentFile=/srv/sluice/.env'
+
+echo "--- H: nothing installed -> built-in defaults"
+run_case_iq "fresh install" ""
+expect image "$IMAGE" "ghcr.io/a840817a/sluice:latest"
+expect sluice "$SLUICE_DIR" "$HOME/sluice"
+
+echo "--- I: custom state dir, bare re-run -> preserved"
+run_case_iq "bare re-run over custom host" "$IQ_CUSTOM"
+expect image "$IMAGE" "ghcr.io/a840817a/sluice:0.1.0"
+expect sluice "$SLUICE_DIR" "/srv/sluice"
+
+echo "--- J: explicit tag moves the pin, state dir preserved"
+run_case_iq "install-quadlet.sh latest" "$IQ_CUSTOM" ARG_TAG=latest
+expect image "$IMAGE" "ghcr.io/a840817a/sluice:latest"
+expect sluice "$SLUICE_DIR" "/srv/sluice"
 
 echo
 if [ "$fails" -eq 0 ]; then echo "ALL CASES PASS"; else echo "$fails CHECKS FAILED"; exit 1; fi

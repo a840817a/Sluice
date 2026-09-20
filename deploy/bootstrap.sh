@@ -72,7 +72,7 @@ UNIT_FILE="$UNIT_DIR/sluice.container"
 # The installed unit is where a configured host's settings live; read them back
 # so an upgrade can leave alone whatever this run said nothing about.
 #
-# The markers below delimit the block scripts/test-bootstrap-resolve.sh extracts
+# The markers below delimit the block scripts/test-deploy-settings.sh extracts
 # and exercises against fake units. It reads a file and shell variables and
 # nothing else, which is what makes it testable without podman — keep it that
 # way, and keep the markers where they are.
