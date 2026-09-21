@@ -6,8 +6,10 @@ package channel
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 )
 
@@ -37,7 +39,7 @@ func (s *Store) List() map[string]Config {
 	defer s.mu.RUnlock()
 	out := make(map[string]Config, len(s.channels))
 	for id, cfg := range s.channels {
-		out[id] = *cfg
+		out[id] = cloneConfig(*cfg)
 	}
 	return out
 }
@@ -50,15 +52,17 @@ func (s *Store) Get(id string) (Config, bool) {
 	if !ok {
 		return Config{}, false
 	}
-	return *cfg, true
+	return cloneConfig(*cfg), true
 }
 
 // Put creates or replaces the config for channelID and persists to disk.
 func (s *Store) Put(id string, cfg Config) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.channels[id] = &cfg
-	return s.save()
+	next := maps.Clone(s.channels)
+	cfg = cloneConfig(cfg)
+	next[id] = &cfg
+	return s.commit(next)
 }
 
 // Update applies fn to the stored config for id and persists the result,
@@ -75,8 +79,16 @@ func (s *Store) Update(id string, fn func(*Config)) (Config, error) {
 	if !ok {
 		return Config{}, fmt.Errorf("channel %q not found", id)
 	}
-	fn(cfg)
-	return *cfg, s.save()
+	updated := cloneConfig(*cfg)
+	fn(&updated)
+	next := maps.Clone(s.channels)
+	// The callback may retain its argument or assign caller-owned slices.
+	stored := cloneConfig(updated)
+	next[id] = &stored
+	if err := s.commit(next); err != nil {
+		return Config{}, err
+	}
+	return updated, nil
 }
 
 // Delete removes the channel config and persists to disk.
@@ -86,8 +98,26 @@ func (s *Store) Delete(id string) error {
 	if _, ok := s.channels[id]; !ok {
 		return fmt.Errorf("channel %q not found", id)
 	}
-	delete(s.channels, id)
-	return s.save()
+	next := maps.Clone(s.channels)
+	delete(next, id)
+	return s.commit(next)
+}
+
+// cloneConfig keeps mutable fields private to the store, including while an
+// Update callback prepares a candidate that may fail to reach disk.
+func cloneConfig(cfg Config) Config {
+	cfg.FetchHeaders = slices.Clone(cfg.FetchHeaders)
+	cfg.LicenseHeaders = slices.Clone(cfg.LicenseHeaders)
+	if cfg.EnablePlayReady != nil {
+		cfg.EnablePlayReady = BoolPtr(*cfg.EnablePlayReady)
+	}
+	if cfg.EnableWidevine != nil {
+		cfg.EnableWidevine = BoolPtr(*cfg.EnableWidevine)
+	}
+	if cfg.KeepAllSegments != nil {
+		cfg.KeepAllSegments = BoolPtr(*cfg.KeepAllSegments)
+	}
+	return cfg
 }
 
 func (s *Store) load() error {
@@ -101,8 +131,18 @@ func (s *Store) load() error {
 	return json.Unmarshal(data, &s.channels)
 }
 
-func (s *Store) save() error {
-	data, err := json.MarshalIndent(s.channels, "", "  ")
+// commit persists a candidate before publishing it to readers. The caller
+// holds mu throughout so concurrent updates cannot lose each other's changes.
+func (s *Store) commit(next map[string]*Config) error {
+	if err := s.save(next); err != nil {
+		return err
+	}
+	s.channels = next
+	return nil
+}
+
+func (s *Store) save(channels map[string]*Config) error {
+	data, err := json.MarshalIndent(channels, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -116,16 +156,16 @@ func (s *Store) save() error {
 		return err
 	}
 	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	defer tmp.Close()
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
 		return err
 	}
-	tmp.Close()
+	if err := tmp.Close(); err != nil {
+		return err
+	}
 	return os.Rename(tmpName, s.path)
 }
