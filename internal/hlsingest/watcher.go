@@ -719,10 +719,14 @@ func (w *Watcher) enqueueNew(ctx context.Context, v variant, st *variantState, m
 				"channel", w.channelID, "rep", v.RepID, "seg", seg.SeqNo)
 		}
 
-		if m.EndList && !w.broker.AwaitRoom(ctx) {
-			return added // context cancelled mid-enumeration
+		task := w.buildTask(v, seg, periodID, startPTS, durTicks, deadline)
+		if m.EndList {
+			if !w.broker.PushPreserving(ctx, task) {
+				return added // context cancelled mid-enumeration
+			}
+		} else {
+			w.broker.Push(task)
 		}
-		w.broker.Push(w.buildTask(v, seg, periodID, startPTS, durTicks, deadline))
 		added++
 	}
 

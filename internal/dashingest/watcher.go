@@ -265,20 +265,14 @@ func (w *Watcher) processMPD(ctx context.Context, p *imdp.ParsedMPD) {
 	// ingest that is visibly progressing stays unplayable until the end.
 	sort.SliceStable(tasks, func(i, j int) bool { return tasks[i].Priority < tasks[j].Priority })
 
-	// A static MPD names its whole asset in one pass, and every segment it names
-	// is required: there is no later poll to pick up what the broker shed, the
-	// way a live window gets one. Push sheds by design — correct for a live
-	// stream falling behind, silent data loss for a finished asset — so the
-	// producer paces itself against the pipeline instead of handing the broker
-	// more than it can hold. A dynamic MPD keeps the old behaviour: shedding is
-	// how a live channel survives an upstream it cannot keep up with.
-	paced := p.Type == imdp.PresentationStatic
-
 	for _, t := range tasks {
-		if paced && !w.broker.AwaitRoom(ctx) {
-			return // context cancelled mid-enumeration; Run reports it
+		if p.Type == imdp.PresentationStatic {
+			if !w.broker.PushPreserving(ctx, t) {
+				return // context cancelled mid-enumeration; Run reports it
+			}
+		} else {
+			w.broker.Push(t)
 		}
-		w.broker.Push(t)
 		// Update lastKnown using the same rep-level key format as DiscoverTasks.
 		rk := t.RepKey()
 		w.mu.Lock()

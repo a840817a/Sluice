@@ -32,8 +32,9 @@ type Broker struct {
 	outstanding int
 }
 
-// NewBroker creates a Broker with the given capacity limit.
-// When full, the lowest-priority (highest number) pending task is dropped.
+// NewBroker creates a Broker with the given pending-work capacity limit.
+// Push sheds live work when full; PushPreserving waits instead. Protected
+// retries may temporarily exceed this limit by already in-flight work.
 func NewBroker(maxSize int) *Broker {
 	return &Broker{
 		seen:    make(map[string]struct{}),
@@ -41,8 +42,8 @@ func NewBroker(maxSize int) *Broker {
 	}
 }
 
-// Push enqueues a task. Duplicate keys are ignored.
-// If the queue is over capacity, the task with lowest urgency is evicted.
+// Push enqueues a live task. Duplicate keys are ignored. If the queue is over
+// capacity, the lowest-priority live task is evicted.
 func (b *Broker) Push(t *SegmentTask) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -59,9 +60,10 @@ func (b *Broker) Push(t *SegmentTask) {
 		return
 	}
 
-	// Evict lowest-priority entry if over capacity
+	// Evict the lowest-priority live entry if over capacity. Completed-source
+	// tasks are protected from shedding; a live source may be dropped instead.
 	if b.maxSize > 0 && len(b.pq) >= b.maxSize {
-		worst := b.pq.worstIndex()
+		worst := b.pq.worstLiveIndex()
 		if worst >= 0 && b.pq[worst].Priority >= t.Priority {
 			evicted := b.pq[worst]
 			heap.Remove(&b.pq, worst)
@@ -75,6 +77,60 @@ func (b *Broker) Push(t *SegmentTask) {
 
 	b.seen[key] = struct{}{}
 	heap.Push(&b.pq, t)
+}
+
+// PushPreserving admits a task from a finite source. It atomically performs
+// duplicate detection, expiry checking, capacity handling, and insertion. It
+// waits while the pending queue is full, regardless of which tasks occupy it.
+// It returns false only when ctx is cancelled; an expired task is accounted as
+// dropped and returns true so a finite producer can continue enumerating.
+func (b *Broker) PushPreserving(ctx context.Context, t *SegmentTask) bool {
+	for {
+		b.mu.Lock()
+		if ctx.Err() != nil {
+			b.mu.Unlock()
+			return false
+		}
+		key := t.Key()
+		if _, ok := b.seen[key]; ok {
+			// Upgrade the already queued copy when a finite source rediscovers
+			// work previously admitted as live.
+			for _, queued := range b.pq {
+				if queued.Key() == key {
+					queued.preserve = true
+					break
+				}
+			}
+			b.mu.Unlock()
+			return true
+		}
+		if t.Expired() {
+			b.dropped.Add(1)
+			b.mu.Unlock()
+			return true
+		}
+		if b.maxSize <= 0 || len(b.pq) < b.maxSize {
+			t.preserve = true
+			b.seen[key] = struct{}{}
+			heap.Push(&b.pq, t)
+			b.mu.Unlock()
+			return true
+		}
+		b.mu.Unlock()
+
+		timer := time.NewTimer(awaitRoomPollInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return false
+		case <-timer.C:
+		}
+	}
 }
 
 // Pop removes and returns the highest-priority non-expired task that is ready
@@ -147,36 +203,9 @@ func (b *Broker) Len() int {
 	return len(b.pq)
 }
 
-// awaitRoomPollInterval is how often AwaitRoom re-checks for queue room. It
-// only ever runs while the broker is full, so it costs nothing on a channel
-// whose pipeline keeps up.
+// awaitRoomPollInterval is how often PushPreserving re-checks for queue room.
+// It only polls while the broker is full.
 const awaitRoomPollInterval = 5 * time.Millisecond
-
-// AwaitRoom blocks until the queue has room for more tasks, reporting false if
-// ctx ended first. An unbounded broker never waits.
-//
-// It exists for producers that cannot afford to have work shed: the single
-// enumeration of a finished asset, where nothing comes back for a second look.
-// Push drops the overflow instead, which is right for a live stream falling
-// behind and silent data loss for a VOD.
-//
-// Once the queue is full it waits for it to drain to half capacity rather than
-// for a single free slot, so the producer refills in bursts instead of trading
-// one task per poll with the consumer.
-func (b *Broker) AwaitRoom(ctx context.Context) bool {
-	if b.maxSize <= 0 || b.Len() < b.maxSize {
-		return true
-	}
-	lowWater := b.maxSize / 2
-	for b.Len() > lowWater {
-		select {
-		case <-ctx.Done():
-			return false
-		case <-time.After(awaitRoomPollInterval):
-		}
-	}
-	return true
-}
 
 // Dropped returns the cumulative number of tasks abandoned without being
 // fetched — expired, evicted to stay under capacity, or out of retries.
@@ -204,7 +233,31 @@ func (b *Broker) Requeue(t *SegmentTask, maxRetries int, backoff time.Duration) 
 	t.NextRetry = time.Now().Add(wait)
 	// Lower urgency on retry
 	t.Priority++
-	b.Push(t)
+	// Only protected work may bypass capacity. Live retries retain Push's
+	// shedding semantics after releasing the lock.
+	b.mu.Lock()
+	if !t.preserve {
+		b.mu.Unlock()
+		b.Push(t)
+		return true
+	}
+	// The processor is the sole result consumer: waiting here for capacity
+	// could stall the fetch workers behind its full result channel. This task
+	// was already admitted, so move it back to pending without shedding. New
+	// preserving admissions wait while pending >= maxSize; overflow is bounded
+	// by the work already in flight, not the size of the asset.
+	if _, exists := b.seen[t.Key()]; !exists {
+		b.seen[t.Key()] = struct{}{}
+		heap.Push(&b.pq, t)
+	} else {
+		for _, queued := range b.pq {
+			if queued.Key() == t.Key() {
+				queued.preserve = true
+				break
+			}
+		}
+	}
+	b.mu.Unlock()
 	return true
 }
 
@@ -229,14 +282,13 @@ func (h *taskHeap) Pop() any {
 	return t
 }
 
-// worstIndex returns the index of the highest Priority (least urgent) entry.
-func (h taskHeap) worstIndex() int {
-	if len(h) == 0 {
-		return -1
-	}
-	worst := 0
-	for i := 1; i < len(h); i++ {
-		if h[i].Priority > h[worst].Priority {
+func (h taskHeap) worstLiveIndex() int {
+	worst := -1
+	for i, t := range h {
+		if t.preserve {
+			continue
+		}
+		if worst < 0 || t.Priority > h[worst].Priority {
 			worst = i
 		}
 	}

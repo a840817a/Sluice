@@ -118,6 +118,10 @@ type SegmentTask struct {
 	// Retry state
 	Retries   int
 	NextRetry time.Time
+
+	// preserve marks tasks admitted by a finite (completed) source. It is
+	// broker-owned state: callers must use PushPreserving to set it.
+	preserve bool
 }
 
 // Expired returns true if the task has passed its usefulness deadline.
