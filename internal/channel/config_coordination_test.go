@@ -62,7 +62,13 @@ func TestUpdateConfigRestartJoinsPendingVODTransition(t *testing.T) {
 	go func() {
 		defer rt.wg.Done()
 		<-stopping
-		m.transitionToVOD(rt, nil)
+		// This fixture models the already-quiescent publication phase. The
+		// production finalizer observes cancellation while stopping source and
+		// draining the pipeline; publication itself remains joinable by Stop so
+		// its store update is visible before Restart reads the configuration.
+		if m.claimVODTransition(rt) {
+			m.publishVODTransition(rt, nil)
+		}
 	}()
 
 	next := deadChannel()

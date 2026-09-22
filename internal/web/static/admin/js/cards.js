@@ -107,10 +107,10 @@ function renderProgress(refs, status) {
       refs.progBar.classList.toggle('done', stored >= total);
     }
   } else if (mode === 'transitioning') {
-    patchText(refs.progMain, '正在重建 VOD 索引…');
+    patchText(refs.progMain, '正在完成 VOD…');
     patchText(refs.progUnit, '');
-    // No value attribute: an indeterminate bar, because the rebuild reports no
-    // intermediate progress and a fake percentage would be worse than none.
+    // Completion includes draining downloads and rebuilding the index; there
+    // is no reliable percentage for the whole operation.
     patchHidden(refs.progBar, false);
     refs.progBar.removeAttribute('value');
     refs.progBar.classList.remove('done');

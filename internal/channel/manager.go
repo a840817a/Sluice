@@ -51,7 +51,15 @@ type Runtime struct {
 	// headers is the provider shared by Keys, Source and the fetch pool. Holding
 	// it here is what lets UpdateConfig rotate upstream credentials in place.
 	headers *fetch.AtomicHeaders
-	cancel  context.CancelFunc
+	// cancel ends the whole runtime. Source and pipeline have child contexts so
+	// finalization can stop admitting work while allowing work already admitted
+	// to finish.
+	cancel       context.CancelFunc
+	lifecycleCtx context.Context
+	sourceCancel context.CancelFunc
+	poolCancel   context.CancelFunc
+	sourceDone   chan struct{} // closed after Source.Run has returned for good
+	pipelineDone chan struct{} // closed after the pool and processor have exited
 	// wg counts every goroutine started on this channel's behalf, so Stop can
 	// join them instead of merely cancelling. Each Add happens either before
 	// Start returns or inside a goroutine that is itself already counted, so it
@@ -275,22 +283,29 @@ func (m *Manager) start(parentCtx context.Context, id string, cfg Config) (*Runt
 		return rt, nil // already running
 	}
 
-	ctx, cancel := context.WithCancel(parentCtx)
+	lifecycleCtx, cancel := context.WithCancel(parentCtx)
+	sourceCtx, sourceCancel := context.WithCancel(lifecycleCtx)
+	poolCtx, poolCancel := context.WithCancel(lifecycleCtx)
 
 	pl := newIngestPipeline(m.gwCfg, id, cfg)
 
 	rt := &Runtime{
-		ID:       id,
-		Index:    pl.index,
-		Watcher:  pl.watcher,
-		HLS:      pl.hls,
-		Keys:     pl.keys,
-		Source:   pl.source,
-		Progress: pl.progress,
-		Broker:   pl.broker,
-		headers:  pl.headers,
-		cancel:   cancel,
-		vodDone:  make(chan struct{}),
+		ID:           id,
+		Index:        pl.index,
+		Watcher:      pl.watcher,
+		HLS:          pl.hls,
+		Keys:         pl.keys,
+		Source:       pl.source,
+		Progress:     pl.progress,
+		Broker:       pl.broker,
+		headers:      pl.headers,
+		cancel:       cancel,
+		lifecycleCtx: lifecycleCtx,
+		sourceCancel: sourceCancel,
+		poolCancel:   poolCancel,
+		sourceDone:   make(chan struct{}),
+		pipelineDone: make(chan struct{}),
+		vodDone:      make(chan struct{}),
 	}
 	rt.setConfig(cfg)
 
@@ -315,7 +330,7 @@ func (m *Manager) start(parentCtx context.Context, id string, cfg Config) (*Runt
 		return rt, nil
 	}
 
-	m.launchIngest(ctx, rt, cfg, pl)
+	m.launchIngest(sourceCtx, poolCtx, lifecycleCtx, rt, cfg, pl)
 
 	slog.Info("channel started", "id", id)
 	return rt, nil
@@ -345,12 +360,22 @@ func (m *Manager) restoreVODState(rt *Runtime, id string) {
 //
 // Every goroutine is counted in rt.wg, which is what lets Stop join them rather
 // than merely cancel them — see Stop for why that matters.
-func (m *Manager) launchIngest(ctx context.Context, rt *Runtime, cfg Config, pl *ingestPipeline) {
-	rt.wg.Add(4)
-	go func() { defer rt.wg.Done(); pl.pool.Run(ctx) }()
-	go func() { defer rt.wg.Done(); pl.processor.Run(ctx, pl.pool) }()
-	go func() { defer rt.wg.Done(); m.superviseSource(ctx, rt, cfg, pl) }()
-	go func() { defer rt.wg.Done(); m.awaitStaticUpstream(ctx, rt) }()
+func (m *Manager) launchIngest(sourceCtx, poolCtx, processorCtx context.Context, rt *Runtime, cfg Config, pl *ingestPipeline) {
+	// pipelineWG lets finalization join just the pool and processor. It must not
+	// wait on rt.wg: finalization itself is counted there, so that would make a
+	// Stop racing a finalization deadlock.
+	var pipelineWG sync.WaitGroup
+	pipelineWG.Add(2)
+	rt.wg.Add(5)
+	go func() { defer rt.wg.Done(); defer pipelineWG.Done(); pl.pool.Run(poolCtx) }()
+	go func() { defer rt.wg.Done(); defer pipelineWG.Done(); pl.processor.Run(processorCtx, pl.pool) }()
+	go func() { defer rt.wg.Done(); m.superviseSource(sourceCtx, rt, cfg, pl) }()
+	go func() { defer rt.wg.Done(); m.awaitStaticUpstream(sourceCtx, rt) }()
+	go func() {
+		defer rt.wg.Done()
+		pipelineWG.Wait()
+		close(rt.pipelineDone)
+	}()
 }
 
 // staticUpstreamPollInterval is how often a running channel is asked whether
@@ -419,10 +444,18 @@ func staticIngestVisible(upstreamFinished, autoVODAllowed bool) bool {
 // superviseSource runs the channel's source, restarting it with backoff until
 // the context is cancelled or ingestion completes.
 func (m *Manager) superviseSource(ctx context.Context, rt *Runtime, cfg Config, pl *ingestPipeline) {
+	defer close(rt.sourceDone)
 	backoff := 2 * time.Second
 	for {
 		err := rt.Source.Run(ctx)
 		if err == nil {
+			// A cancellation-aware source can race the manual transition and
+			// return nil after its context has been cancelled. That is not an
+			// end-of-stream signal, and in particular must not overwrite the
+			// mode the manual path already claimed.
+			if ctx.Err() != nil {
+				return
+			}
 			// Source returned cleanly: ingestion is complete — a static MPD, or
 			// an HLS playlist that reached EXT-X-ENDLIST. Enter StaticIngesting
 			// mode and wait for the broker to drain before doing the full VOD
@@ -446,14 +479,14 @@ func (m *Manager) superviseSource(ctx context.Context, rt *Runtime, cfg Config, 
 				}
 				continue
 			}
-			if !cfg.IsVOD {
-				rt.setStaticIngestStart(time.Now())
-				rt.mode.Store(int32(ModeStaticIngesting))
-				parsed := rt.ParsedMPD()
+			if !cfg.IsVOD && (rt.mode.CompareAndSwap(int32(ModeLive), int32(ModeStaticIngesting)) || rt.Mode() == ModeStaticIngesting) {
+				if rt.StaticIngestStartTime().IsZero() {
+					rt.setStaticIngestStart(time.Now())
+				}
 				rt.wg.Add(1)
 				go func() {
 					defer rt.wg.Done()
-					m.awaitStaticIngestComplete(ctx, rt, pl.broker, parsed)
+					m.awaitStaticIngestComplete(rt)
 				}()
 			}
 			return
@@ -489,15 +522,16 @@ func (m *Manager) TransitionToVOD(id string) error {
 	if !ok {
 		return fmt.Errorf("channel %q not running", id)
 	}
-	mode := rt.Mode()
-	if mode != ModeLive && mode != ModeStaticIngesting {
+	// Claim before launching the goroutine. Besides making the operation's
+	// acceptance truthful, this is what makes a simultaneous clean source
+	// completion and a manual request have exactly one winner.
+	if !m.claimVODTransition(rt) {
 		return fmt.Errorf("channel %q is not in live or static-ingesting mode", id)
 	}
 	// An explicit operator action overrides a restore's suppression.
 	rt.vodSuppressed.Store(false)
-	parsed := rt.ParsedMPD()
 	rt.wg.Add(1)
-	go func() { defer rt.wg.Done(); m.transitionToVOD(rt, parsed) }()
+	go func() { defer rt.wg.Done(); m.finalizeVODTransition(rt) }()
 	return nil
 }
 
@@ -508,40 +542,52 @@ func (m *Manager) TransitionToVOD(id string) error {
 // empty queue was mistaken for a finished ingest.
 const drainCheckInterval = 100 * time.Millisecond
 
-// awaitStaticIngestComplete waits for the channel's pipeline to go idle — no
-// task queued and none in flight — then triggers a VOD transition so that the
-// channel is persisted as VOD and restartable from disk.
-//
-// The distinction matters because the transition rebuilds from disk: a segment
-// that has been popped but not yet written is not merely late, it is missing
-// from the finished asset.
-func (m *Manager) awaitStaticIngestComplete(ctx context.Context, rt *Runtime, broker *queue.Broker, parsedMPD *imdp.ParsedMPD) {
+// awaitPipelineDrain waits for every task admitted before source shutdown to
+// reach a terminal state, including any retries the processor requeues. An idle
+// broker is stronger than an empty queue: it also excludes a fetch, result, or
+// write still in flight.
+func (m *Manager) awaitPipelineDrain(rt *Runtime, broker *queue.Broker) bool {
+	if broker == nil {
+		return !runtimeCancelled(rt)
+	}
 	ticker := time.NewTicker(drainCheckInterval)
 	defer ticker.Stop()
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if broker.Idle() {
-				if short, stored, expected := staticIngestShortfall(rt.Progress.Snapshot(), broker.Dropped()); short {
-					// An idle broker means no work is left, not that the work
-					// was done: a task shed under load leaves the queue just as
-					// empty as a task fetched. The VOD is built from what
-					// reached disk, so say plainly that it is incomplete rather
-					// than let a partial asset pass for a finished one.
-					slog.Error("static ingest finished short of the source's segment count",
-						"channel", rt.ID,
-						"stored", stored,
-						"expected", expected,
-						"dropped", broker.Dropped(),
-					)
-				}
-				slog.Info("static ingest complete, transitioning to VOD", "channel", rt.ID)
-				m.transitionToVOD(rt, parsedMPD)
-				return
-			}
+		if broker.Idle() {
+			return true
 		}
+		select {
+		case <-runtimeDone(rt):
+			return false
+		case <-ticker.C:
+		}
+	}
+}
+
+// awaitStaticIngestComplete keeps a completed source visibly static-ingesting
+// while the already admitted work drains. The final compare-and-swap is the
+// automatic side of the manual/automatic race: a manual request can claim the
+// transition during this wait and thereby becomes the only finalizer.
+func (m *Manager) awaitStaticIngestComplete(rt *Runtime) {
+	if !m.awaitPipelineDrain(rt, rt.Broker) || !m.claimVODTransition(rt) {
+		return
+	}
+	m.finalizeVODTransition(rt)
+}
+
+func runtimeDone(rt *Runtime) <-chan struct{} {
+	if rt.lifecycleCtx == nil {
+		return nil
+	}
+	return rt.lifecycleCtx.Done()
+}
+
+func runtimeCancelled(rt *Runtime) bool {
+	select {
+	case <-runtimeDone(rt):
+		return true
+	default:
+		return false
 	}
 }
 
@@ -558,20 +604,87 @@ func staticIngestShortfall(snap progress.Snapshot, dropped uint64) (short bool, 
 	return stored < expected || dropped > 0, stored, expected
 }
 
-// transitionToVOD rebuilds a full-history index from disk using unbounded ring
-// buffers, runs the A/V barrier, and switches the runtime to ModeVOD.
-// Accepts channels in ModeLive or ModeStaticIngesting as the source state.
-func (m *Manager) transitionToVOD(rt *Runtime, finalMPD *imdp.ParsedMPD) {
+func logStaticIngestShortfall(rt *Runtime) {
+	if rt.Broker == nil {
+		return
+	}
+	if short, stored, expected := staticIngestShortfall(rt.Progress.Snapshot(), rt.Broker.Dropped()); short {
+		// An idle broker means no work is left, not that the work was done: a
+		// task shed under load leaves the queue just as empty as a task fetched.
+		// The VOD is built from what reached disk, so say plainly that it is
+		// incomplete rather than let a partial asset pass for a finished one.
+		slog.Error("static ingest finished short of the source's segment count",
+			"channel", rt.ID,
+			"stored", stored,
+			"expected", expected,
+			"dropped", rt.Broker.Dropped(),
+		)
+	}
+}
+
+// claimVODTransition changes the visible lifecycle state before any waiting.
+// It is deliberately a separate operation because a manual request must be
+// rejected synchronously when automatic completion won the same race.
+func (m *Manager) claimVODTransition(rt *Runtime) bool {
+	if rt.mode.CompareAndSwap(int32(ModeLive), int32(ModeTransitioning)) ||
+		rt.mode.CompareAndSwap(int32(ModeStaticIngesting), int32(ModeTransitioning)) {
+		slog.Info("channel transitioning to VOD", "id", rt.ID)
+		return true
+	}
+	return false
+}
+
+// finalizeVODTransition turns a claimed transition into VOD. It first closes
+// source admission, then drains and joins the pipeline, so the disk rebuild
+// sees every task that was already accepted when the transition was requested.
+func (m *Manager) finalizeVODTransition(rt *Runtime) {
+	if rt.sourceCancel != nil {
+		rt.sourceCancel()
+	}
+	if rt.sourceDone != nil {
+		select {
+		case <-rt.sourceDone:
+		case <-runtimeDone(rt):
+			return
+		}
+	}
+	// The last successful source poll may have updated the parsed MPD just
+	// before Source.Run returned. Capture it only after source exit so the final
+	// duration reflects that last observation.
+	finalMPD := rt.ParsedMPD()
+	if runtimeCancelled(rt) || !m.awaitPipelineDrain(rt, rt.Broker) {
+		return
+	}
+	logStaticIngestShortfall(rt)
+
+	// No work remains. Stop the pool so it closes Results. The processor then
+	// exits naturally after its final result and waits for key warming under the
+	// still-live runtime context; cancelling it here would abandon a
+	// passthrough key cache just before the VOD needs to serve it offline.
+	// Waiting only for pipelineDone avoids waiting for this finalizer through
+	// rt.wg itself.
+	if rt.poolCancel != nil {
+		rt.poolCancel()
+	}
+	if rt.pipelineDone != nil {
+		select {
+		case <-rt.pipelineDone:
+		case <-runtimeDone(rt):
+			return
+		}
+	}
+	if runtimeCancelled(rt) {
+		return
+	}
+	m.publishVODTransition(rt, finalMPD)
+}
+
+// publishVODTransition rebuilds a full-history index from disk and publishes
+// it after its caller has made the ingest pipeline quiescent.
+func (m *Manager) publishVODTransition(rt *Runtime, finalMPD *imdp.ParsedMPD) {
 	if finalMPD != nil && finalMPD.MediaPresentationDuration > 0 {
 		rt.finalDuration.Store(int64(finalMPD.MediaPresentationDuration))
 	}
-
-	// Accept transition from either ModeLive or ModeStaticIngesting.
-	if !rt.mode.CompareAndSwap(int32(ModeLive), int32(ModeTransitioning)) &&
-		!rt.mode.CompareAndSwap(int32(ModeStaticIngesting), int32(ModeTransitioning)) {
-		return // already transitioning or in VOD
-	}
-	slog.Info("channel transitioning to VOD", "id", rt.ID)
 
 	// Rebuild from disk with unbounded ring buffers so the VOD covers the whole
 	// recorded history rather than just what the live ring still held. fMP4
@@ -580,7 +693,9 @@ func (m *Manager) transitionToVOD(rt *Runtime, finalMPD *imdp.ParsedMPD) {
 	vodCI := index.NewChannelIndex()
 	if err := index.RebuildFromDiskForVOD(vodCI, m.gwCfg.Store.DataDir, rt.ID); err != nil {
 		slog.Error("VOD rebuild failed", "channel", rt.ID, "err", err)
-		rt.mode.Store(int32(ModeLive)) // rollback
+		// Source admission and the pipeline have already stopped. Reporting live
+		// here would promise an ingest that no longer exists, so leave the
+		// runtime transitioning for an operator to restart or inspect.
 		return
 	}
 
@@ -628,7 +743,7 @@ func (m *Manager) transitionToVOD(rt *Runtime, finalMPD *imdp.ParsedMPD) {
 			// Counted like every other channel goroutine: the callback snapshots
 			// the final manifest into this channel's own data directory, so Stop
 			// must not return while it is still writing there. Adding here is
-			// safe because every path into transitionToVOD already runs inside a
+			// safe because every path into publishVODTransition already runs inside a
 			// counted goroutine.
 			rt.wg.Add(1)
 			go func() { defer rt.wg.Done(); cb(rt) }()
