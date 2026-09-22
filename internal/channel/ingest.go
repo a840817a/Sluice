@@ -98,7 +98,7 @@ func newIngestPipeline(gwCfg gocfg.Config, id string, cfg Config) *ingestPipelin
 	ci := restoreIndex(chGwCfg, id, cfg)
 
 	// One provider shared by the fetcher, the watcher and the key cache, so a
-	// credential rotation applied via ApplyConfig reaches all three at once.
+	// credential rotation applied via UpdateConfig reaches all three at once.
 	headers := fetch.NewAtomicHeaders(HeaderMap(cfg.FetchHeaders))
 
 	broker := queue.NewBroker(4096)

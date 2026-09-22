@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"regexp"
 
@@ -69,17 +70,13 @@ func (a *AdminServer) handleCreateChannel(w http.ResponseWriter, r *http.Request
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, exists := a.store.Get(req.ID); exists {
-		writeErr(w, http.StatusConflict, "channel already exists")
-		return
-	}
 	req.Config.Enabled = true
-	if err := a.store.Put(req.ID, req.Config); err != nil {
-		writeErr(w, http.StatusInternalServerError, "store error: "+err.Error())
-		return
-	}
-	if _, err := a.manager.Start(a.ctx, req.ID, req.Config); err != nil {
-		writeErr(w, http.StatusInternalServerError, "start error: "+err.Error())
+	if err := a.manager.Create(a.ctx, req.ID, req.Config); err != nil {
+		if errors.Is(err, ch.ErrChannelExists) {
+			writeErr(w, http.StatusConflict, "channel already exists")
+		} else {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+		}
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"id": req.ID, "title": req.Config.Title})
@@ -106,8 +103,9 @@ type updateResponse struct {
 // PUT /admin/api/channels/{channelID}
 func (a *AdminServer) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "channelID")
-	oldCfg, exists := a.store.Get(id)
-	if !exists {
+	// Keep the established 404 precedence without using this snapshot for the
+	// commit: UpdateConfig re-reads under its operation lock.
+	if _, exists := a.store.Get(id); !exists {
 		writeErr(w, http.StatusNotFound, "channel not found")
 		return
 	}
@@ -121,34 +119,19 @@ func (a *AdminServer) handleUpdateChannel(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Fields the client does not get to set. Applied before the restart decision
-	// so that a value the client could not have changed is never mistaken for an
-	// edit that needs a restart.
-	cfg.Enabled = true
-	cfg.IsVOD = oldCfg.IsVOD
-
-	if blockers := a.manager.ApplyConfig(id, cfg); len(blockers) == 0 {
-		// Applied to the running channel already; persist it so a gateway
-		// restart keeps the change.
-		if err := a.store.Put(id, cfg); err != nil {
-			// Put the runtime back to what is actually on disk, so the running
-			// channel and the store never disagree.
-			_ = a.manager.ApplyConfig(id, oldCfg)
-			writeErr(w, http.StatusInternalServerError, "store error: "+err.Error())
-			return
+	result, err := a.manager.UpdateConfig(a.ctx, id, cfg)
+	if err != nil {
+		if errors.Is(err, ch.ErrChannelNotFound) {
+			writeErr(w, http.StatusNotFound, "channel not found")
+		} else {
+			writeErr(w, http.StatusInternalServerError, err.Error())
 		}
-		writeJSON(w, http.StatusOK, updateResponse{ID: id, Restarted: false})
 		return
-	} else if err := a.manager.RestartWithConfig(a.ctx, id, cfg, oldCfg); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	} else {
-		writeJSON(w, http.StatusOK, updateResponse{
-			ID:            id,
-			Restarted:     true,
-			RestartFields: userFacingRestartFields(blockers),
-		})
 	}
+	writeJSON(w, http.StatusOK, updateResponse{
+		ID: id, Restarted: result.Restarted,
+		RestartFields: result.RestartFields,
+	})
 }
 
 // handleRestartChannel stops and starts a channel with its stored config,
@@ -158,29 +141,15 @@ func (a *AdminServer) handleUpdateChannel(w http.ResponseWriter, r *http.Request
 // POST /admin/api/channels/{channelID}/restart
 func (a *AdminServer) handleRestartChannel(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "channelID")
-	cfg, exists := a.store.Get(id)
-	if !exists {
-		writeErr(w, http.StatusNotFound, "channel not found")
-		return
-	}
-	_ = a.manager.Stop(id)
-	if _, err := a.manager.Start(a.ctx, id, cfg); err != nil {
-		writeErr(w, http.StatusInternalServerError, "start error: "+err.Error())
+	if err := a.manager.Restart(a.ctx, id); err != nil {
+		if errors.Is(err, ch.ErrChannelNotFound) {
+			writeErr(w, http.StatusNotFound, "channel not found")
+		} else {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, updateResponse{ID: id, Restarted: true})
-}
-
-// userFacingRestartFields drops the not-running sentinel, which names no field
-// the operator edited: the channel was simply started rather than restarted.
-func userFacingRestartFields(blockers []string) []string {
-	out := make([]string, 0, len(blockers))
-	for _, b := range blockers {
-		if b != ch.NotRunning {
-			out = append(out, b)
-		}
-	}
-	return out
 }
 
 // handleDeleteChannel removes a channel (does not delete disk data).
@@ -188,13 +157,12 @@ func userFacingRestartFields(blockers []string) []string {
 // DELETE /admin/api/channels/{channelID}
 func (a *AdminServer) handleDeleteChannel(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "channelID")
-	if _, exists := a.store.Get(id); !exists {
-		writeErr(w, http.StatusNotFound, "channel not found")
-		return
-	}
-	_ = a.manager.Stop(id)
-	if err := a.store.Delete(id); err != nil {
-		writeErr(w, http.StatusInternalServerError, "store error: "+err.Error())
+	if err := a.manager.Delete(id); err != nil {
+		if errors.Is(err, ch.ErrChannelNotFound) {
+			writeErr(w, http.StatusNotFound, "channel not found")
+		} else {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

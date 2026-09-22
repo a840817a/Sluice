@@ -51,7 +51,7 @@ type Runtime struct {
 	// downloading" and "stalled because work was thrown away".
 	Broker *queue.Broker
 	// headers is the provider shared by Keys, Source and the fetch pool. Holding
-	// it here is what lets ApplyConfig rotate upstream credentials in place.
+	// it here is what lets UpdateConfig rotate upstream credentials in place.
 	headers *fetch.AtomicHeaders
 	cancel  context.CancelFunc
 	// wg counts every goroutine started on this channel's behalf, so Stop can
@@ -62,10 +62,14 @@ type Runtime struct {
 
 	// cfg is the channel's configuration. It is behind an atomic because the
 	// admin API swaps it while HTTP handlers read it — see Config below.
-	cfg     atomic.Pointer[Config]
-	mode    atomic.Int32 // ChannelMode
-	vodOnce sync.Once
-	vodDone chan struct{} // closed when VOD index is ready
+	// configMu coordinates the store commit and runtime publication with VOD
+	// finalization. It is deliberately never held while stopping a runtime:
+	// Stop waits for the goroutines that can need this mutex.
+	configMu sync.Mutex
+	cfg      atomic.Pointer[Config]
+	mode     atomic.Int32 // ChannelMode
+	vodOnce  sync.Once
+	vodDone  chan struct{} // closed when VOD index is ready
 
 	// These three are written by the watcher and VOD-transition goroutines while
 	// HTTP handlers read them concurrently, so they are atomics rather than
@@ -94,14 +98,17 @@ type Runtime struct {
 // cannot leave them mixing fields from two different configurations.
 func (rt *Runtime) Config() Config {
 	if c := rt.cfg.Load(); c != nil {
-		return *c
+		return cloneConfig(*c)
 	}
 	return Config{}
 }
 
 // setConfig replaces the channel's configuration. It stores a copy so the
 // caller cannot mutate what readers see afterwards.
-func (rt *Runtime) setConfig(cfg Config) { rt.cfg.Store(&cfg) }
+func (rt *Runtime) setConfig(cfg Config) {
+	stored := cloneConfig(cfg)
+	rt.cfg.Store(&stored)
+}
 
 // Mode returns the current channel mode.
 func (rt *Runtime) Mode() ChannelMode { return ChannelMode(rt.mode.Load()) }
@@ -198,11 +205,14 @@ func (rt *Runtime) ParsedMPDBytes() []byte {
 
 // Manager starts and stops channels at runtime.
 type Manager struct {
-	mu         sync.RWMutex
-	gwCfg      gocfg.Config // gateway-level config (data dir, worker counts, etc.)
-	runtimes   map[string]*Runtime
-	store      *Store            // optional; when set, VOD state is persisted on transition
-	onVODReady func(rt *Runtime) // optional; called after any successful VOD transition
+	mu sync.RWMutex
+	// operationMu serializes lifecycle writes. It is separate from mu so Get
+	// remains available while Stop joins goroutines during an admin operation.
+	operationMu sync.Mutex
+	gwCfg       gocfg.Config // gateway-level config (data dir, worker counts, etc.)
+	runtimes    map[string]*Runtime
+	store       *Store            // optional; when set, VOD state is persisted on transition
+	onVODReady  func(rt *Runtime) // optional; called after any successful VOD transition
 	// suppressVOD carries the "do not auto-transition" mark across the restart
 	// that RestoreToLive performs. It cannot live on the Runtime because that
 	// restart builds a new one; Start consumes the entry and clears it.
@@ -253,6 +263,13 @@ func (m *Manager) SetOnVODReady(fn func(rt *Runtime)) {
 // ingest starts, and a VOD channel returns before any ingest goroutine is
 // launched at all. What each piece is made of lives in newIngestPipeline.
 func (m *Manager) Start(parentCtx context.Context, id string, cfg Config) (*Runtime, error) {
+	m.operationMu.Lock()
+	defer m.operationMu.Unlock()
+	return m.start(parentCtx, id, cfg)
+}
+
+// start is Start with operationMu already held.
+func (m *Manager) start(parentCtx context.Context, id string, cfg Config) (*Runtime, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -610,6 +627,7 @@ func (m *Manager) transitionToVOD(rt *Runtime, finalMPD *imdp.ParsedMPD) {
 			// Merge under the store's lock rather than Get+Put: an operator can
 			// be saving an edit to this same channel right now, and a plain
 			// read-modify-write would silently drop whichever side lost.
+			rt.configMu.Lock()
 			merged, err := st.Update(rt.ID, func(c *Config) { c.IsVOD = true })
 			if err != nil {
 				slog.Warn("failed to persist VOD state", "channel", rt.ID, "err", err)
@@ -620,6 +638,7 @@ func (m *Manager) transitionToVOD(rt *Runtime, finalMPD *imdp.ParsedMPD) {
 				// handlers read the field without synchronisation.
 				rt.setConfig(merged)
 			}
+			rt.configMu.Unlock()
 		}
 		if cb != nil {
 			// Counted like every other channel goroutine: the callback snapshots
@@ -631,123 +650,6 @@ func (m *Manager) transitionToVOD(rt *Runtime, finalMPD *imdp.ParsedMPD) {
 			go func() { defer rt.wg.Done(); cb(rt) }()
 		}
 	})
-}
-
-// RestartWithConfig stops the channel, persists cfg, and starts it again,
-// restoring oldCfg in both the store and the manager if either step fails.
-//
-// It lives here rather than in the admin handler because it is a lifecycle
-// operation over the manager's own state: it has to stop, persist and start as
-// one unit, and decide what to roll back when a step in the middle fails.
-//
-// It requires SetStore. Persisting is half of what a restart means, so a
-// manager without a store returns an error rather than restarting the channel
-// and silently losing the new configuration on the next gateway restart.
-//
-// The manager's mutex is deliberately released before any of that runs. Stop
-// and Start take it themselves, so holding it across them would deadlock — and
-// even a lock held only for the duration would stall every HTTP handler, since
-// they all reach their channel through Get.
-func (m *Manager) RestartWithConfig(ctx context.Context, id string, cfg, oldCfg Config) error {
-	m.mu.RLock()
-	store := m.store
-	m.mu.RUnlock()
-	if store == nil {
-		return fmt.Errorf("no channel store attached")
-	}
-
-	_ = m.Stop(id)
-	if err := store.Put(id, cfg); err != nil {
-		if oldCfg.Enabled {
-			_, _ = m.Start(ctx, id, oldCfg)
-		}
-		return fmt.Errorf("store error: %w", err)
-	}
-	if _, err := m.Start(ctx, id, cfg); err != nil {
-		_ = store.Put(id, oldCfg)
-		if oldCfg.Enabled {
-			_, _ = m.Start(ctx, id, oldCfg)
-		}
-		return fmt.Errorf("start error: %w", err)
-	}
-	return nil
-}
-
-// RestoreToLive brings a channel that has transitioned to VOD back to live
-// ingest: it clears IsVOD, restarts the channel, and marks it so the automatic
-// VOD transition does not immediately undo the restore.
-//
-// Nothing on disk is touched. The segments recorded so far stay where they are
-// and the live index rebuilds from them, so a keep-all channel resumes with its
-// whole history intact. A channel that explicitly asked for the sliding window
-// comes back with only a window's worth of it — and, under
-// store.cleanup: on_expire, will start deleting what falls out. That is the
-// operator's call to make; the admin UI warns before asking for it.
-func (m *Manager) RestoreToLive(ctx context.Context, id string) error {
-	m.mu.RLock()
-	store := m.store
-	m.mu.RUnlock()
-	if store == nil {
-		return fmt.Errorf("no channel store attached")
-	}
-
-	cfg, ok := store.Get(id)
-	if !ok {
-		return fmt.Errorf("channel %q not found", id)
-	}
-	if !cfg.IsVOD {
-		return fmt.Errorf("channel %q is not in VOD mode", id)
-	}
-
-	next := cfg
-	next.IsVOD = false
-
-	m.mu.Lock()
-	m.suppressVOD[id] = true
-	m.mu.Unlock()
-
-	if err := m.RestartWithConfig(ctx, id, next, cfg); err != nil {
-		// The rollback restarted the channel as VOD, which never consults the
-		// mark — but leaving it set would suppress the transition of whatever
-		// starts this channel next.
-		m.mu.Lock()
-		delete(m.suppressVOD, id)
-		m.mu.Unlock()
-		return err
-	}
-	slog.Info("channel restored to live", "id", id)
-	return nil
-}
-
-// ApplyConfig applies cfg to a running channel without restarting it, and
-// reports the fields that prevented it from doing so.
-//
-// A non-empty result means the caller must stop and start the channel to make
-// the edit take effect; ApplyConfig itself changes nothing in that case. The
-// caller performs the restart rather than ApplyConfig, because Stop and Start
-// take the manager's write lock that this method holds for reading.
-//
-// A channel that is not running also reports restart-required: there is no
-// runtime to update, so the caller must Start it.
-func (m *Manager) ApplyConfig(id string, cfg Config) []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	rt, ok := m.runtimes[id]
-	if !ok {
-		return []string{NotRunning}
-	}
-	if blockers := RestartRequired(rt.Config(), cfg, rt.Mode()); len(blockers) > 0 {
-		return blockers
-	}
-
-	// Headers first: the provider is shared with the fetcher, watcher and key
-	// cache, and a request that reads the new config should not still be able to
-	// pick up the old credentials.
-	rt.headers.Store(HeaderMap(cfg.FetchHeaders))
-	rt.setConfig(cfg)
-	slog.Info("channel config hot-applied", "id", id)
-	return nil
 }
 
 // Stop shuts down the channel's goroutines and does not return until they have
@@ -765,6 +667,13 @@ func (m *Manager) ApplyConfig(id string, cfg Config) []string {
 // The runtime is removed from the map first, so nothing new can find it while it
 // is winding down.
 func (m *Manager) Stop(id string) error {
+	m.operationMu.Lock()
+	defer m.operationMu.Unlock()
+	return m.stop(id)
+}
+
+// stop is Stop with operationMu already held.
+func (m *Manager) stop(id string) error {
 	m.mu.Lock()
 	rt, ok := m.runtimes[id]
 	if !ok {
@@ -794,6 +703,8 @@ func (m *Manager) Get(id string) *Runtime {
 // then cancel and wait. Cancelling every channel before waiting on any of them
 // makes shutdown take as long as the slowest channel rather than their sum.
 func (m *Manager) StopAll() {
+	m.operationMu.Lock()
+	defer m.operationMu.Unlock()
 	m.mu.Lock()
 	stopping := make(map[string]*Runtime, len(m.runtimes))
 	for id, rt := range m.runtimes {

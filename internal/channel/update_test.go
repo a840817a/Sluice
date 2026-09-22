@@ -31,7 +31,7 @@ func TestRestartRequired(t *testing.T) {
 		vod    []string // blockers in VOD mode
 	}{
 		// Hot fields: read per request by the HTTP handlers, or (FetchHeaders)
-		// read through the provider ApplyConfig swaps.
+		// read through the provider UpdateConfig swaps.
 		{"title", func(c *Config) { c.Title = "new" }, nil, nil},
 		{"playready url", func(c *Config) { c.PlayReadyLicenseURL = "http://x" }, nil, nil},
 		{"widevine url", func(c *Config) { c.WidevineLicenseURL = "http://x" }, nil, nil},

@@ -1,11 +1,5 @@
 package channel
 
-// NotRunning is the pseudo-field ApplyConfig reports when the channel has no
-// runtime to update at all. It is not a config field: the caller must Start the
-// channel rather than restart it, so callers that surface the blocking fields
-// to a user should filter this one out.
-const NotRunning = "not_running"
-
 // RestartRequired reports which changed fields between old and next cannot be
 // applied to a running channel, and therefore force a stop/start cycle. An
 // empty result means the edit can be applied hot, with no interruption to
@@ -15,7 +9,7 @@ const NotRunning = "not_running"
 // buffer capacity, the choice of ingest driver, the key cache, and the source
 // URL baked into the watcher. Everything else is either read per request by the
 // HTTP handlers or, in the case of FetchHeaders, read through a provider that
-// ApplyConfig can swap atomically.
+// UpdateConfig can swap atomically.
 //
 // Restarting is not free — it re-scans the channel's segments from disk and
 // resets the HLS media sequence — so a field belongs in this list only when

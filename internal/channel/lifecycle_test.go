@@ -2,6 +2,7 @@ package channel
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -149,10 +150,19 @@ func TestManagerSetStoreBeforeStart(t *testing.T) {
 	}
 }
 
-func TestApplyConfigHotUpdatesRunningChannel(t *testing.T) {
-	m := NewManager(configForTest(t))
+func TestUpdateConfigHotUpdatesRunningChannel(t *testing.T) {
+	cfg := configForTest(t)
+	store, err := NewStore(filepath.Join(cfg.Store.DataDir, "channels.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(cfg)
+	m.SetStore(store)
 	t.Cleanup(m.StopAll)
 
+	if err := store.Put("ch1", deadChannel()); err != nil {
+		t.Fatal(err)
+	}
 	rt, err := m.Start(context.Background(), "ch1", deadChannel())
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -162,8 +172,12 @@ func TestApplyConfigHotUpdatesRunningChannel(t *testing.T) {
 	next.Title = "renamed"
 	next.FetchHeaders = []Header{{Name: "X-Token", Value: "rotated"}}
 
-	if blockers := m.ApplyConfig("ch1", next); len(blockers) != 0 {
-		t.Fatalf("title+header edit reported blockers %v, want none", blockers)
+	result, err := m.UpdateConfig(context.Background(), "ch1", next)
+	if err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+	if result.Restarted || len(result.RestartFields) != 0 {
+		t.Fatalf("result = %+v, want hot update", result)
 	}
 	if got := m.Get("ch1"); got != rt {
 		t.Error("hot update replaced the runtime; the channel was restarted")
@@ -176,34 +190,51 @@ func TestApplyConfigHotUpdatesRunningChannel(t *testing.T) {
 	}
 }
 
-func TestApplyConfigRefusesFrozenFields(t *testing.T) {
-	m := NewManager(configForTest(t))
+func TestUpdateConfigRestartsFrozenFields(t *testing.T) {
+	cfg := configForTest(t)
+	store, err := NewStore(filepath.Join(cfg.Store.DataDir, "channels.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(cfg)
+	m.SetStore(store)
 	t.Cleanup(m.StopAll)
 
-	if _, err := m.Start(context.Background(), "ch1", deadChannel()); err != nil {
+	if err := store.Put("ch1", deadChannel()); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := m.Start(context.Background(), "ch1", deadChannel())
+	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
 
 	next := deadChannel()
 	next.MPDURL = "http://127.0.0.1:2/other.m3u8"
 
-	blockers := m.ApplyConfig("ch1", next)
-	if len(blockers) != 1 || blockers[0] != "mpd_url" {
-		t.Fatalf("blockers = %v, want [mpd_url]", blockers)
+	result, err := m.UpdateConfig(context.Background(), "ch1", next)
+	if err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
 	}
-	// A refusal must change nothing: the caller decides whether to restart.
-	if got := m.Get("ch1").Config().MPDURL; got != deadChannel().MPDURL {
-		t.Errorf("MPDURL = %q after a refused update, want it unchanged", got)
+	if !result.Restarted || len(result.RestartFields) != 1 || result.RestartFields[0] != "mpd_url" {
+		t.Fatalf("result = %+v, want restarted [mpd_url]", result)
+	}
+	if got := m.Get("ch1"); got == rt || got.Config().MPDURL != next.MPDURL {
+		t.Error("frozen edit was not applied by a replacement runtime")
 	}
 }
 
-func TestApplyConfigOnMissingChannel(t *testing.T) {
-	m := NewManager(configForTest(t))
+func TestUpdateConfigOnMissingChannel(t *testing.T) {
+	cfg := configForTest(t)
+	store, err := NewStore(filepath.Join(cfg.Store.DataDir, "channels.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(cfg)
+	m.SetStore(store)
 	t.Cleanup(m.StopAll)
 
-	blockers := m.ApplyConfig("nope", deadChannel())
-	if len(blockers) != 1 || blockers[0] != NotRunning {
-		t.Errorf("blockers = %v, want [%s]", blockers, NotRunning)
+	if _, err := m.UpdateConfig(context.Background(), "nope", deadChannel()); !errors.Is(err, ErrChannelNotFound) {
+		t.Errorf("error = %v, want ErrChannelNotFound", err)
 	}
 }
 
