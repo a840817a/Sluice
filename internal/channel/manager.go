@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -337,21 +335,7 @@ func (m *Manager) restoreVODState(rt *Runtime, id string) {
 	rt.Progress.SetExpectedTotal(rt.Progress.Snapshot().SegmentsStored)
 	rt.Progress.Finalize()
 
-	// Inject the saved upstream MPD so ParsedMPD() is non-nil and handleManifest
-	// can serve requests without re-fetching. HLS channels have no MPD to
-	// restore; their playlists are rendered from the index.
-	if rt.Watcher != nil {
-		upPath := filepath.Join(m.gwCfg.Store.DataDir, id, "upstream.mpd")
-		if raw, err := os.ReadFile(upPath); err == nil {
-			if p, err := imdp.Parse(raw); err == nil {
-				rt.Watcher.SetParsedMPD(p, raw)
-			} else {
-				slog.Warn("VOD restore: upstream MPD parse failed", "channel", id, "err", err)
-			}
-		} else {
-			slog.Warn("VOD restore: upstream MPD not found, manifest will be unavailable until re-fetch", "channel", id)
-		}
-	}
+	m.restoreVODUpstreamMPD(rt)
 
 	slog.Info("channel restored in VOD mode", "id", id)
 }

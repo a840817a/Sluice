@@ -30,8 +30,7 @@ func TestVODTransitionWritesResolvableLocalManifest(t *testing.T) {
 	}
 
 	mgr := ch.NewManager(cfg)
-	srv := NewServer(cfg, mgr)
-	mgr.SetOnVODReady(srv.SaveVODManifest)
+	mgr.SetOnVODReady(mgr.SaveVODArtifacts)
 	t.Cleanup(func() { _ = mgr.Stop("localsnap") })
 
 	if _, err := mgr.Start(context.Background(), "localsnap", ch.Config{
@@ -51,7 +50,7 @@ func TestVODTransitionWritesResolvableLocalManifest(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("no local manifest at %s after 30s (channel mode %v). "+
-				"If manifest.mpd exists but this does not, SaveVODManifest is not "+
+				"If manifest.mpd exists but this does not, SaveVODArtifacts is not "+
 				"writing the local sibling.", localPath, mgr.Get("localsnap").Mode())
 		}
 		time.Sleep(100 * time.Millisecond)

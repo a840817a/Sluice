@@ -145,7 +145,7 @@ func writeChannelsJSON(t *testing.T, dataDir string, channels map[string]channel
 // empty after a restart.
 //
 // internal/httpapi's TestVODTransitionSnapshotsManifestToDisk proves
-// SaveVODManifest works as a callback, but it registers the callback itself.
+// Manager.SaveVODArtifacts works as a callback, but it registers the callback itself.
 // This test registers nothing: it seeds channels.json, hands the config to
 // newGateway, and lets the composed gateway restore and transition the channel
 // on its own. The manifest on disk therefore only appears if newGateway
@@ -192,7 +192,7 @@ func TestNewGatewayRegistersVODSnapshotCallback(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("no VOD manifest at %s after 30s (channel mode %v). "+
 				"If ingest worked but this file is missing, newGateway is not "+
-				"registering srv.SaveVODManifest via manager.SetOnVODReady "+
+				"registering manager.SaveVODArtifacts via manager.SetOnVODReady "+
 				"— see gateway.go.",
 				manifestPath, gw.manager.Get("gwvod").Mode())
 		}

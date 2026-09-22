@@ -84,7 +84,7 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 	} else {
 		p = sv.ParsedMPD
 		if p == nil && isVOD {
-			if path := s.savedVODManifestPath(channelID); path != "" {
+			if path := s.manager.SavedVODManifestPath(channelID); path != "" {
 				serveFile(w, r, path, "application/dash+xml")
 				return
 			}

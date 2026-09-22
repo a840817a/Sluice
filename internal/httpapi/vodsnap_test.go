@@ -16,7 +16,7 @@ import (
 // can serve the channel without reaching upstream again. That snapshot happens
 // through a callback the manager invokes; nothing in the serving path calls it.
 //
-// What this test covers: that SaveVODManifest is a working OnVODReady callback —
+// What this test covers: that Manager.SaveVODArtifacts is a working OnVODReady callback —
 // that a real transition invokes it and that it writes a restorable manifest.
 // It is wired here the same way cmd/gateway wires it.
 //
@@ -37,9 +37,8 @@ func TestVODTransitionSnapshotsManifestToDisk(t *testing.T) {
 	}
 
 	mgr := ch.NewManager(cfg)
-	srv := NewServer(cfg, mgr)
 	// The line under test, copied from cmd/gateway/main.go.
-	mgr.SetOnVODReady(srv.SaveVODManifest)
+	mgr.SetOnVODReady(mgr.SaveVODArtifacts)
 	t.Cleanup(func() { _ = mgr.Stop("vodsnap") })
 
 	if _, err := mgr.Start(context.Background(), "vodsnap", ch.Config{

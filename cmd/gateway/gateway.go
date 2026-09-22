@@ -68,11 +68,11 @@ func newGateway(ctx context.Context, cfg config.Config) (*gateway, error) {
 	manager.SetStore(chStore) // enables VOD state persistence across restarts
 	srv := httpapi.NewServer(cfg, manager)
 
-	// Snapshot the final MPD to disk after every VOD transition, so a restarted
-	// gateway can serve the channel without re-fetching upstream. This must be
+	// Persist VOD artifacts after every transition, so a restarted gateway can
+	// serve the channel without re-fetching upstream. This must be
 	// registered before any channel starts, or a transition that completes
 	// during startup writes nothing and the omission is silent until a restart.
-	manager.SetOnVODReady(srv.SaveVODManifest)
+	manager.SetOnVODReady(manager.SaveVODArtifacts)
 
 	// Start all previously persisted channels.
 	for id, chCfg := range chStore.List() {
