@@ -26,10 +26,8 @@ type Server struct {
 
 // NewServer creates a Server.
 //
-// It deliberately has no side effects. Registering the manager's OnVODReady
-// callback used to happen here, which buried a domain wiring decision inside a
-// constructor and made VOD persistence a property of having built an HTTP
-// server. main.go now wires it explicitly.
+// It deliberately has no side effects: VOD persistence belongs to the channel
+// manager, not to having built an HTTP server.
 func NewServer(cfg config.Config, manager *ch.Manager) *Server {
 	return &Server{cfg: cfg, manager: manager}
 }

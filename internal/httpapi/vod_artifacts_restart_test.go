@@ -16,10 +16,15 @@ import (
 // Directories at output filenames cause real write failures without depending
 // on permissions (which behave differently when tests run as root).
 func TestDASHArtifactsSurviveRestartWithOriginOffline(t *testing.T) {
-	for _, blocked := range []string{"", "local.mpd", "upstream.mpd"} {
-		name := blocked
-		if name == "" {
-			name = "all_outputs"
+	// A blocked artifact must not stop the channel completing as VOD. A
+	// required one is reported as a warning; the optional local export is
+	// isolated and reports nothing. "upstream_removed" writes everything, then
+	// loses the upstream snapshot before the restart, as a VOD written by an
+	// older gateway can: restore then serves the saved manifest.
+	for _, name := range []string{"all_outputs", "local.mpd", "upstream.mpd", "manifest.mpd", "upstream_removed"} {
+		blocked := name
+		if name == "all_outputs" || name == "upstream_removed" {
+			blocked = ""
 		}
 		t.Run(name, func(t *testing.T) {
 			origin := startClearDASHOrigin(t)
@@ -33,10 +38,7 @@ func TestDASHArtifactsSurviveRestartWithOriginOffline(t *testing.T) {
 			h1 := boot(t, dataDir)
 			t.Cleanup(h1.mgr.StopAll)
 			done := make(chan struct{})
-			h1.mgr.SetOnVODReady(func(rt *ch.Runtime) {
-				h1.mgr.SaveVODArtifacts(rt)
-				close(done)
-			})
+			h1.mgr.SetOnVODReady(func(*ch.Runtime) { close(done) })
 			if err := h1.store.Put(id, ch.Config{MPDURL: origin.URL + "/manifest.mpd", Enabled: true}); err != nil {
 				t.Fatal(err)
 			}
@@ -44,7 +46,15 @@ func TestDASHArtifactsSurviveRestartWithOriginOffline(t *testing.T) {
 			select {
 			case <-done:
 			case <-time.After(20 * time.Second):
-				t.Fatal("VOD artifact callback did not finish")
+				t.Fatalf("VOD completion observer did not run (mode %v)", h1.mgr.Get(id).Mode())
+			}
+			status, _ := h1.mgr.StatusFor(id)
+			if status.Mode != "vod" {
+				t.Fatalf("mode = %q, want vod", status.Mode)
+			}
+			wantWarning := blocked == "manifest.mpd" || blocked == "upstream.mpd"
+			if got := len(status.VODWarnings) > 0; got != wantWarning {
+				t.Fatalf("vod_warnings = %q, want warning: %v", status.VODWarnings, wantWarning)
 			}
 			h1.stop(id)
 			for _, file := range []string{"manifest.mpd", "local.mpd", "upstream.mpd"} {
@@ -56,6 +66,12 @@ func TestDASHArtifactsSurviveRestartWithOriginOffline(t *testing.T) {
 					t.Fatalf("artifact %s missing or empty: %v", file, err)
 				}
 			}
+			noUpstream := blocked == "upstream.mpd" || name == "upstream_removed"
+			if name == "upstream_removed" {
+				if err := os.Remove(filepath.Join(dataDir, id, "upstream.mpd")); err != nil {
+					t.Fatal(err)
+				}
+			}
 			origin.Close()
 			h2 := boot(t, dataDir)
 			t.Cleanup(h2.mgr.StopAll)
@@ -65,10 +81,10 @@ func TestDASHArtifactsSurviveRestartWithOriginOffline(t *testing.T) {
 			if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `type="static"`) {
 				t.Fatalf("manifest after offline restart: %d %s", w.Code, w.Body.String())
 			}
-			if blocked != "upstream.mpd" && h2.mgr.Get(id).Serving().ParsedMPD == nil {
+			if !noUpstream && h2.mgr.Get(id).Serving().ParsedMPD == nil {
 				t.Fatal("saved upstream MPD was not restored")
 			}
-			if blocked == "upstream.mpd" {
+			if noUpstream {
 				saved, err := os.ReadFile(filepath.Join(dataDir, id, "manifest.mpd"))
 				if err != nil || !bytes.Equal(saved, w.Body.Bytes()) {
 					t.Fatal("missing upstream MPD did not fall back to the saved served manifest")
@@ -103,10 +119,7 @@ func TestHLSArtifactFailureDoesNotPublishMaster(t *testing.T) {
 	h := boot(t, dataDir)
 	t.Cleanup(h.mgr.StopAll)
 	done := make(chan struct{})
-	h.mgr.SetOnVODReady(func(rt *ch.Runtime) {
-		h.mgr.SaveVODArtifacts(rt)
-		close(done)
-	})
+	h.mgr.SetOnVODReady(func(*ch.Runtime) { close(done) })
 	if err := h.store.Put(id, ch.Config{SourceType: ch.SourceHLS, MPDURL: origin.URL + "/master.m3u8", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +127,7 @@ func TestHLSArtifactFailureDoesNotPublishMaster(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(20 * time.Second):
-		t.Fatal("VOD artifact callback did not finish")
+		t.Fatal("VOD completion observer did not run")
 	}
 	if data, err := os.ReadFile(filepath.Join(dataDir, id, "local_0.m3u8")); err != nil || len(data) == 0 {
 		t.Fatalf("first rendition was not written: %v", err)

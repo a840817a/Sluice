@@ -41,38 +41,22 @@ func TestUpdateConfigRestartJoinsPendingVODTransition(t *testing.T) {
 	}
 	m := NewManager(gwCfg)
 	m.SetStore(store)
-	if err := store.Put("ch", deadChannel()); err != nil {
+	base := deadChannel()
+	base.SourceType = SourceDASH
+	if err := store.Put("ch", base); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	rt, err := m.Start(ctx, "ch", deadChannel())
+	rt, err := m.Start(ctx, "ch", base)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	stopping := make(chan struct{})
-	cancelRuntime := rt.cancel
-	var once sync.Once
-	rt.cancel = func() {
-		cancelRuntime()
-		once.Do(func() { close(stopping) })
-	}
-	rt.wg.Add(1)
-	go func() {
-		defer rt.wg.Done()
-		<-stopping
-		// This fixture models the already-quiescent publication phase. The
-		// production finalizer observes cancellation while stopping source and
-		// draining the pipeline; publication itself remains joinable by Stop so
-		// its store update is visible before Restart reads the configuration.
-		if m.claimVODTransition(rt) {
-			m.publishVODTransition(rt, nil)
-		}
-	}()
+	completeVODWhenStopped(t, m, rt)
 
 	next := deadChannel()
-	next.SourceType = SourceDASH // frozen in both live and VOD modes
+	next.SourceType = SourceHLS // frozen in both live and VOD modes
 	done := make(chan struct{})
 	var result UpdateResult
 	go func() {
@@ -108,8 +92,69 @@ func TestUpdateConfigRestartJoinsPendingVODTransition(t *testing.T) {
 	if got == nil {
 		t.Fatal("replacement runtime missing")
 	}
-	if !got.Config().IsVOD || got.Config().SourceType != SourceDASH {
-		t.Fatalf("replacement runtime config = %+v, want VOD DASH", got.Config())
+	if !got.Config().IsVOD || got.Config().SourceType != SourceHLS {
+		t.Fatalf("replacement runtime config = %+v, want VOD HLS", got.Config())
+	}
+}
+
+// completeVODWhenStopped makes rt finish a VOD transition only once Stop
+// cancels it, so the transition commits while Stop is joining it.
+func completeVODWhenStopped(t *testing.T, m *Manager, rt *Runtime) {
+	t.Helper()
+	seedVODSource(t, rt)
+	stopping := make(chan struct{})
+	cancelRuntime := rt.cancel
+	var once sync.Once
+	rt.cancel = func() {
+		cancelRuntime()
+		once.Do(func() { close(stopping) })
+	}
+	rt.wg.Add(1)
+	go func() {
+		defer rt.wg.Done()
+		<-stopping
+		// This fixture models the already-quiescent publication phase. The
+		// production finalizer observes cancellation while stopping source and
+		// draining the pipeline; publication itself remains joinable by Stop so
+		// its store update is visible before Restart reads the configuration.
+		if m.claimVODTransition(rt) {
+			m.publishVODTransition(rt, nil)
+		}
+	}()
+}
+
+// Restart reads the configuration after Stop, so a VOD transition that
+// commits while Stop joins it brings the channel back as VOD, not live.
+// This is a deliberate change from reading before Stop (accepted 2026-09-23).
+func TestRestartAdoptsVODCompletedDuringStop(t *testing.T) {
+	gwCfg := configForTest(t)
+	store, err := NewStore(filepath.Join(gwCfg.Store.DataDir, "channels.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(gwCfg)
+	m.SetStore(store)
+	t.Cleanup(m.StopAll)
+	base := deadChannel()
+	base.SourceType = SourceDASH
+	if err := store.Put("ch", base); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := m.Start(context.Background(), "ch", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeVODWhenStopped(t, m, rt)
+
+	if err := m.Restart(context.Background(), "ch"); err != nil {
+		t.Fatal(err)
+	}
+	got := m.Get("ch")
+	if got == nil || got == rt {
+		t.Fatal("Restart did not replace the runtime")
+	}
+	if !got.Config().IsVOD {
+		t.Fatalf("replacement runtime config = %+v, want the VOD committed during Stop", got.Config())
 	}
 }
 

@@ -76,7 +76,6 @@ func TestVODTransitionWritesResolvableLocalPlaylists(t *testing.T) {
 	}
 
 	mgr := ch.NewManager(cfg)
-	mgr.SetOnVODReady(mgr.SaveVODArtifacts)
 	t.Cleanup(func() { _ = mgr.Stop("hlslocal") })
 
 	if _, err := mgr.Start(context.Background(), "hlslocal", ch.Config{

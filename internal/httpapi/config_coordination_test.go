@@ -39,6 +39,8 @@ func TestConfigEditPreservesVODCompletedDuringRequest(t *testing.T) {
 	admin := newTestAdminServer(t)
 	t.Cleanup(admin.manager.StopAll)
 	cfg := liveChannel()
+	origin := startEmptyLiveHLSOrigin(t)
+	cfg.MPDURL = origin.URL + "/master.m3u8"
 	if err := admin.store.Put("edit", cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -48,6 +50,7 @@ func TestConfigEditPreservesVODCompletedDuringRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	waitForHLSDiscovery(t, rt)
 	cfg.Title = "edited while finishing"
 	cfg.FetchHeaders = []ch.Header{{Name: "X-Token", Value: "rotated"}}
 	data, err := json.Marshal(cfg)

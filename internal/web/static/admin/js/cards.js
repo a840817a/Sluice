@@ -74,6 +74,18 @@ function renderProgress(refs, status) {
   const p = status.progress;
   const mode = status.mode || 'live';
 
+  // A VOD completes even when a restart-safety step fails; say what a restart
+  // may lose rather than hiding it behind a finished progress line. A failed
+  // attempt keeps its warnings too, since they may explain the failure.
+  const vodWarnings = status.running ? status.vod_warnings || [] : [];
+  patchHidden(refs.vodWarning, vodWarnings.length === 0);
+  if (vodWarnings.length) {
+    const lead = mode === 'vod_failed'
+      ? 'VOD 建立失敗，過程中的問題'
+      : 'VOD 已完成，但重啟後可能缺少部分資料';
+    patchText(refs.vodWarning, `${lead}：${vodWarnings.join('；')}`);
+  }
+
   if (!status.running || !p) {
     refs.progMain.className = 'prog-idle';
     patchText(refs.progMain, '—');
@@ -90,7 +102,7 @@ function renderProgress(refs, status) {
 
   refs.progMain.classList.toggle('prog-done', mode === 'vod' || !!p.finalized);
   refs.progMain.classList.toggle('prog-idle', false);
-  refs.progMain.classList.toggle('prog-text', mode === 'transitioning');
+  refs.progMain.classList.toggle('prog-text', mode === 'transitioning' || mode === 'vod_failed');
 
   if (mode === 'static_ingesting' && p.total_known && total > 0) {
     // A capped total is a floor, so it is shown with a ≥ and drives no bar.
@@ -106,6 +118,10 @@ function renderProgress(refs, status) {
       patchAttr(refs.progBar, 'value', Math.min(stored, total));
       refs.progBar.classList.toggle('done', stored >= total);
     }
+  } else if (mode === 'vod_failed') {
+    patchText(refs.progMain, 'VOD 建立失敗，可重試');
+    patchText(refs.progUnit, '');
+    patchHidden(refs.progBar, true);
   } else if (mode === 'transitioning') {
     patchText(refs.progMain, '正在完成 VOD…');
     patchText(refs.progUnit, '');
@@ -244,7 +260,7 @@ function renderCard(card, id, cfg, status) {
   patchText(refs.sourceBadge, fmt.sourceLabel(cfg.source_type));
 
   const mode = status.mode || 'live';
-  const degraded = !!(status.running && status.progress && status.progress.source_error);
+  const degraded = !!(status.running && (mode === 'vod_failed' || status.progress?.source_error));
 
   // One tag carries the whole state: a stopped channel has no mode worth
   // showing, and a degraded one is still running, so the warning replaces the
@@ -252,7 +268,7 @@ function renderCard(card, id, cfg, status) {
   let tagClass, tagText;
   if (!status.running) {
     tagClass = 'stopped'; tagText = fmt.modeLabel('stopped');
-  } else if (degraded) {
+  } else if (degraded && mode !== 'vod_failed') {
     tagClass = 'degraded'; tagText = fmt.modeLabel('degraded');
   } else {
     tagClass = fmt.modeClass(mode); tagText = fmt.modeLabel(mode);
@@ -281,9 +297,9 @@ function renderCard(card, id, cfg, status) {
   patchVariantClass(refs.restartBtn, 'btn',
     !status.running ? 'btn-start' : (degraded ? 'btn-warn' : ''));
 
-  // Manual VOD conversion only applies to a running live channel; restoring to
-  // live, only to one that has already transitioned.
-  patchHidden(refs.vodBtn, !(status.running && mode === 'live'));
+  // A failed rebuild retries with the same stopped ingest and recorded files.
+  patchText(refs.vodBtn, mode === 'vod_failed' ? '重試 VOD' : '轉 VOD');
+  patchHidden(refs.vodBtn, !(status.running && (mode === 'live' || mode === 'vod_failed')));
   patchHidden(refs.restoreBtn, !(status.running && mode === 'vod'));
 
   renderProgress(refs, status);
@@ -312,7 +328,7 @@ export function summarize(data) {
     else if (mode === 'static_ingesting') s.ingesting++;
     else if (mode === 'vod') s.vod++;
     else if (mode === 'transitioning') s.transition++;
-    if (p.source_error) {
+    if (p.source_error || mode === 'vod_failed') {
       s.degraded++;
       s.degradedNames.push(cfg.title || id);
     }

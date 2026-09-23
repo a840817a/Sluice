@@ -7,10 +7,14 @@ package channel
 // their consumer is VOD restore, not HTTP request handling.
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/a840817a/sluice/internal/gwurl"
 	"github.com/a840817a/sluice/internal/hlsdesc"
@@ -18,6 +22,7 @@ import (
 	"github.com/a840817a/sluice/internal/index"
 	"github.com/a840817a/sluice/internal/manifest"
 	imdp "github.com/a840817a/sluice/internal/mpd"
+	"github.com/a840817a/sluice/internal/store"
 )
 
 const (
@@ -26,47 +31,126 @@ const (
 )
 
 // vodArtifacts is a single capture of all state needed to write a completed
-// channel. Capturing before any I/O prevents a long local-artifact write from
-// combining a later index or watcher update with the served manifest.
+// channel. Capturing before any I/O prevents a long artifact write from
+// combining a later hot configuration update with the served manifest.
 type vodArtifacts struct {
 	id       string
 	dir      string
+	baseURL  string
 	serving  Serving
 	snapshot index.Snapshot
 	rawMPD   []byte
 	variants []hlsdesc.Variant
 }
 
-func (m *Manager) captureVODArtifacts(rt *Runtime) (vodArtifacts, bool) {
-	sv := rt.Serving()
-	vodIndex := rt.VODIndex()
-	if vodIndex == nil {
-		return vodArtifacts{}, false
+// captureVODArtifacts freezes the candidate index the finalizer just rebuilt.
+// The runtime has not been published as VOD yet, so it deliberately does not
+// consult rt.VODIndex: doing so would make durable artifacts depend on an
+// already-visible VOD state.
+func (m *Manager) captureVODArtifacts(rt *Runtime, candidate *index.ChannelIndex) (vodArtifacts, error) {
+	if candidate == nil {
+		return vodArtifacts{}, errors.New("missing VOD index")
 	}
+	sv := rt.Serving()
+	sv.Mode = ModeVOD
+	sv.Index = candidate
 
 	a := vodArtifacts{
 		id:       rt.ID,
 		dir:      m.vodArtifactDir(rt.ID),
+		baseURL:  m.gwCfg.Server.BaseURL,
 		serving:  sv,
-		snapshot: vodIndex.Snapshot(),
+		snapshot: candidate.Snapshot(),
 		rawMPD:   append([]byte(nil), rt.ParsedMPDBytes()...),
 	}
 	if rt.HLS != nil {
 		a.variants = rt.HLS.Variants()
 	}
-	return a, true
+	return a, nil
 }
 
-// SaveVODArtifacts persists the final VOD state after a successful transition.
-// It is suitable as an OnVODReady callback. The primary served MPD is written
-// before the optional local artifact; failures generating local output never
-// prevent the saved upstream MPD from being available for an offline restart.
-func (m *Manager) SaveVODArtifacts(rt *Runtime) {
-	a, ok := m.captureVODArtifacts(rt)
-	if !ok {
-		return
-	}
+// keyCheckpointTimeout bounds all key fetches of one VOD finalization. Each
+// fetch has its own client timeout, but a slow key server answering just
+// inside it could otherwise hold completion for that long per key.
+var keyCheckpointTimeout = 60 * time.Second
 
+// checkpointHLSSource makes an HLS channel's source state and key material
+// restart-safe. It runs before configMu is taken because key fetches go to the
+// network. Each failure is returned as a warning: the completed VOD is served
+// from the in-memory index either way, and only a later restart depends on
+// these files.
+func checkpointHLSSource(rt *Runtime, snapshot index.Snapshot) []string {
+	if rt.HLS == nil {
+		return nil
+	}
+	var warnings []string
+	if err := rt.HLS.Checkpoint(); err != nil {
+		warnings = append(warnings, fmt.Sprintf("checkpoint HLS source state: %v", err))
+	}
+	if rt.Keys == nil {
+		return warnings
+	}
+	ctx, cancel := context.WithTimeout(lifecycleContext(rt), keyCheckpointTimeout)
+	defer cancel()
+	if err := rt.Keys.Checkpoint(ctx, requiredKeyURIs(snapshot)); err != nil {
+		warnings = append(warnings, fmt.Sprintf("checkpoint HLS keys: %v", err))
+	}
+	return warnings
+}
+
+// persistDASHManifests writes the DASH files a VOD restart needs: the served
+// manifest and the raw upstream MPD. A failure is returned as a warning, not
+// an error, because a restart can still serve the VOD without either file: it
+// falls back to the saved manifest when the upstream snapshot is missing.
+// Optional local artifacts are written separately, after publication.
+func (a vodArtifacts) persistDASHManifests() []string {
+	if a.serving.IsHLSSource {
+		return nil
+	}
+	if a.serving.ParsedMPD == nil || len(a.rawMPD) == 0 {
+		return []string{"save VOD artifacts: no final MPD captured"}
+	}
+	var warnings []string
+	manifestData, err := generateServedVODManifest(a)
+	if err != nil {
+		warnings = append(warnings, fmt.Sprintf("generate served manifest: %v", err))
+	} else if err := store.WriteDurable(filepath.Join(a.dir, vodManifestFile), manifestData, 0o644); err != nil {
+		warnings = append(warnings, fmt.Sprintf("write served manifest: %v", err))
+	}
+	if err := store.WriteDurable(filepath.Join(a.dir, vodUpstreamFile), a.rawMPD, 0o644); err != nil {
+		warnings = append(warnings, fmt.Sprintf("write upstream MPD: %v", err))
+	}
+	if len(warnings) == 0 {
+		slog.Info("VOD artifacts saved", "channel", a.id, "dir", a.dir)
+	}
+	return warnings
+}
+
+// requiredKeyURIs returns the key material a passthrough HLS VOD still needs
+// after its upstream has gone away. The segment snapshot is the authority: a
+// URI merely observed during discovery but absent from the completed asset is
+// not required for its offline playback.
+func requiredKeyURIs(snapshot index.Snapshot) []string {
+	set := make(map[string]struct{})
+	snapshot.ForEachRep(func(_ index.RepRef, segments []index.SegmentState) {
+		for _, seg := range segments {
+			if seg.KeyURI != "" {
+				set[seg.KeyURI] = struct{}{}
+			}
+		}
+	})
+	uris := make([]string, 0, len(set))
+	for uri := range set {
+		uris = append(uris, uri)
+	}
+	sort.Strings(uris)
+	return uris
+}
+
+// writeOptional produces filesystem-relative exports after required state has
+// been committed. Its failures are deliberately contained: they cannot revoke
+// a completed VOD that is already restartable through the gateway.
+func (a vodArtifacts) writeOptional() {
 	if a.serving.IsHLSSource {
 		if err := os.MkdirAll(a.dir, 0o755); err != nil {
 			slog.Warn("local playlist: mkdir failed", "channel", a.id, "err", err)
@@ -75,37 +159,15 @@ func (m *Manager) SaveVODArtifacts(rt *Runtime) {
 		a.writeLocalPlaylists()
 		return
 	}
-	if a.serving.ParsedMPD == nil {
-		return
-	}
-	if err := os.MkdirAll(a.dir, 0o755); err != nil {
-		slog.Warn("save VOD artifacts: mkdir failed", "channel", a.id, "err", err)
-		return
-	}
-
-	if data, err := m.generateServedVODManifest(a); err != nil {
-		slog.Warn("save VOD artifacts: generate manifest failed", "channel", a.id, "err", err)
-		return
-	} else if err := os.WriteFile(filepath.Join(a.dir, vodManifestFile), data, 0o644); err != nil {
-		slog.Warn("save VOD artifacts: write manifest failed", "channel", a.id, "err", err)
-		return
-	} else {
-		slog.Info("VOD manifest saved", "channel", a.id, "path", filepath.Join(a.dir, vodManifestFile))
-	}
-
-	// The local manifest is useful outside the gateway, but the raw upstream
-	// MPD is what lets this channel recover its served manifest after restart.
-	// Keep those writes independent.
 	a.writeLocalManifest()
-	a.writeVODUpstreamMPD()
 }
 
-func (m *Manager) generateServedVODManifest(a vodArtifacts) ([]byte, error) {
+func generateServedVODManifest(a vodArtifacts) ([]byte, error) {
 	cfg := manifest.GeneratorConfig{
-		GatewayBaseURL:     m.gwCfg.Server.BaseURL,
+		GatewayBaseURL:     a.baseURL,
 		ChannelID:          a.id,
-		LicenseURL:         vodLicenseURL(m.gwCfg.Server.BaseURL, a.id, "playready", a.serving.Config.PlayReadyEnabled()),
-		WidevineLicenseURL: vodLicenseURL(m.gwCfg.Server.BaseURL, a.id, "widevine", a.serving.Config.WidevineEnabled()),
+		LicenseURL:         vodLicenseURL(a.baseURL, a.id, "playready", a.serving.Config.PlayReadyEnabled()),
+		WidevineLicenseURL: vodLicenseURL(a.baseURL, a.id, "widevine", a.serving.Config.WidevineEnabled()),
 		DisablePlayReady:   !a.serving.Config.PlayReadyEnabled(),
 		DisableWidevine:    !a.serving.Config.WidevineEnabled(),
 		VODMode:            true,
@@ -119,16 +181,6 @@ func vodLicenseURL(baseURL, channelID, drmType string, enabled bool) string {
 		return ""
 	}
 	return gwurl.LicenseURL(baseURL, channelID, drmType)
-}
-
-func (a vodArtifacts) writeVODUpstreamMPD() {
-	if len(a.rawMPD) == 0 {
-		return
-	}
-	path := filepath.Join(a.dir, vodUpstreamFile)
-	if err := os.WriteFile(path, a.rawMPD, 0o644); err != nil {
-		slog.Warn("save VOD artifacts: upstream write failed", "channel", a.id, "err", err)
-	}
 }
 
 func (a vodArtifacts) writeLocalManifest() {

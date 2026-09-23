@@ -27,6 +27,7 @@ const (
 	ModeTransitioning   ChannelMode = 1
 	ModeVOD             ChannelMode = 2
 	ModeStaticIngesting ChannelMode = 3 // static MPD discovered; segments downloading
+	ModeVODFailed       ChannelMode = 4 // ingest stopped; VOD finalization may be retried
 )
 
 // Runtime holds the live state for one running channel.
@@ -76,6 +77,10 @@ type Runtime struct {
 	mode     atomic.Int32 // ChannelMode
 	vodOnce  sync.Once
 	vodDone  chan struct{} // closed when VOD index is ready
+	// vodWarnings lists the restart-safety steps that failed during the last
+	// VOD finalization. They do not block completion, which is served from the
+	// in-memory index regardless; they tell an operator what a restart may lose.
+	vodWarnings atomic.Pointer[[]string]
 
 	// These three are written by the watcher and VOD-transition goroutines while
 	// HTTP handlers read them concurrently, so they are atomics rather than
@@ -249,19 +254,9 @@ func (m *Manager) SetStore(s *Store) {
 	m.mu.Unlock()
 }
 
-// SetOnVODReady registers a callback invoked after any successful VOD transition
-// (live→VOD or static-ingest-complete). Called in a separate goroutine.
-//
-// Must be set before any Start(): a channel that transitions before the callback
-// is registered writes nothing, and the omission is silent until a restart
-// serves an empty channel. Nothing enforces that ordering — the callback is a
-// field on a live Manager, so there is no point at which it could be required —
-// and no test covers it either. What is covered is the callback being absent
-// altogether (cmd/gateway.TestNewGatewayRegistersVODSnapshotCallback).
-//
-// In practice the window is wide: starting channels only launches goroutines,
-// so the restore loop finishes long before the first transition can complete.
-// Registering late is wrong, but it does not currently lose anything.
+// SetOnVODReady installs an optional completion observer. Required artifacts
+// and VOD configuration are persisted by the manager regardless of this hook.
+// The observer runs after optional exports and is joined by Stop.
 func (m *Manager) SetOnVODReady(fn func(rt *Runtime)) {
 	m.mu.Lock()
 	m.onVODReady = fn
@@ -517,7 +512,8 @@ func (m *Manager) superviseSource(ctx context.Context, rt *Runtime, cfg Config, 
 }
 
 // TransitionToVOD triggers a manual live→VOD transition for a channel.
-// Returns an error if the channel is not running or already in VOD/transitioning mode.
+// A failed rebuild can be retried without restarting ingest. Returns an error
+// if the channel is not running or already in VOD/transitioning mode.
 func (m *Manager) TransitionToVOD(id string) error {
 	// The whole check-and-launch runs under the read lock, because this is the
 	// one place a goroutine is added to a channel from outside that channel's
@@ -535,7 +531,8 @@ func (m *Manager) TransitionToVOD(id string) error {
 	// Claim before launching the goroutine. Besides making the operation's
 	// acceptance truthful, this is what makes a simultaneous clean source
 	// completion and a manual request have exactly one winner.
-	if !m.claimVODTransition(rt) {
+	if !m.claimVODTransition(rt) &&
+		!rt.mode.CompareAndSwap(int32(ModeVODFailed), int32(ModeTransitioning)) {
 		return fmt.Errorf("channel %q is not in live or static-ingesting mode", id)
 	}
 	// An explicit operator action overrides a restore's suppression.
@@ -585,11 +582,26 @@ func (m *Manager) awaitStaticIngestComplete(rt *Runtime) {
 	m.finalizeVODTransition(rt)
 }
 
-func runtimeDone(rt *Runtime) <-chan struct{} {
-	if rt.lifecycleCtx == nil {
-		return nil
+// recordVODWarnings logs a finalization attempt's warnings and publishes them
+// in the channel status.
+func recordVODWarnings(rt *Runtime, warnings []string) {
+	for _, w := range warnings {
+		slog.Warn("VOD finalization step failed", "channel", rt.ID, "warning", w)
 	}
-	return rt.lifecycleCtx.Done()
+	rt.vodWarnings.Store(&warnings)
+}
+
+// lifecycleContext is the runtime's lifecycle context, or Background for a
+// runtime built without one.
+func lifecycleContext(rt *Runtime) context.Context {
+	if rt.lifecycleCtx == nil {
+		return context.Background()
+	}
+	return rt.lifecycleCtx
+}
+
+func runtimeDone(rt *Runtime) <-chan struct{} {
+	return lifecycleContext(rt).Done()
 }
 
 func runtimeCancelled(rt *Runtime) bool {
@@ -696,6 +708,10 @@ func (m *Manager) publishVODTransition(rt *Runtime, finalMPD *imdp.ParsedMPD) {
 		rt.finalDuration.Store(int64(finalMPD.MediaPresentationDuration))
 	}
 
+	// Every exit below records this attempt's warnings, replacing those of an
+	// earlier failed attempt.
+	warnings := m.checkpointVODMedia(rt)
+
 	// Rebuild from disk with unbounded ring buffers so the VOD covers the whole
 	// recorded history rather than just what the live ring still held. fMP4
 	// timing comes from each segment's tfdt box and MPEG-TS timing from the
@@ -703,62 +719,70 @@ func (m *Manager) publishVODTransition(rt *Runtime, finalMPD *imdp.ParsedMPD) {
 	vodCI := index.NewChannelIndex()
 	if err := index.RebuildFromDiskForVOD(vodCI, m.gwCfg.Store.DataDir, rt.ID); err != nil {
 		slog.Error("VOD rebuild failed", "channel", rt.ID, "err", err)
-		// Source admission and the pipeline have already stopped. Reporting live
-		// here would promise an ingest that no longer exists, so leave the
-		// runtime transitioning for an operator to restart or inspect.
+		// Ingest is already stopped. Expose a retryable failure rather than
+		// claiming live ingest or leaving a completed attempt "transitioning".
+		// The checkpoint's warnings may explain the failure, so keep them.
+		recordVODWarnings(rt, warnings)
+		rt.mode.Store(int32(ModeVODFailed))
 		return
 	}
 
+	// Key fetches go to the network, so they happen before configMu: a hot
+	// edit must not wait on an unreachable key server.
+	warnings = append(warnings, checkpointHLSSource(rt, vodCI.Snapshot())...)
+
+	// A hot edit cannot change the configuration between manifest generation,
+	// the store commit, and runtime publication. Stop never acquires configMu.
+	rt.configMu.Lock()
+	a, err := m.captureVODArtifacts(rt, vodCI)
+	if err != nil {
+		rt.configMu.Unlock()
+		slog.Error("VOD artifact capture failed", "channel", rt.ID, "err", err)
+		recordVODWarnings(rt, warnings)
+		rt.mode.Store(int32(ModeVODFailed))
+		return
+	}
+	warnings = append(warnings, a.persistDASHManifests()...)
+	m.mu.RLock()
+	st, cb := m.store, m.onVODReady
+	m.mu.RUnlock()
+	if st != nil {
+		// Merge under the store's lock rather than Get+Put: an operator can
+		// be saving an edit to this same channel right now, and a plain
+		// read-modify-write would silently drop whichever side lost.
+		merged, syncErr, saveErr := st.update(rt.ID, func(c *Config) { c.IsVOD = true })
+		if saveErr != nil {
+			warnings = append(warnings, fmt.Sprintf("persist VOD state: %v", saveErr))
+		} else {
+			// The rename happened, so the new config is committed even when
+			// its directory sync failed.
+			rt.setConfig(merged)
+			if syncErr != nil {
+				warnings = append(warnings, fmt.Sprintf("sync VOD state: %v", syncErr))
+			}
+		}
+	}
+	recordVODWarnings(rt, warnings)
 	rt.vodOnce.Do(func() {
 		rt.vodIndex.Store(vodCI)
 		rt.mode.Store(int32(ModeVOD))
-		close(rt.vodDone)
-		slog.Info("channel VOD ready", "id", rt.ID)
-
-		// Ingest is over. The cumulative stored count is deliberately left alone —
-		// after a live→VOD transition, how much the channel actually recorded is
-		// precisely what an operator wants to see. Only a channel that never had a
-		// discovery total (a live one) adopts its stored count as the total, so a
-		// static ingest that lost segments still reports 500/512 rather than
-		// quietly rewriting itself as 500/500.
 		snap := rt.Progress.Snapshot()
 		if !snap.TotalKnown {
 			rt.Progress.SetExpectedTotal(snap.SegmentsStored)
 		}
 		rt.Progress.Finalize()
-
-		// Persist VOD state so the gateway restores VOD mode after a restart.
-		m.mu.RLock()
-		st := m.store
-		cb := m.onVODReady
-		m.mu.RUnlock()
-		if st != nil {
-			// Merge under the store's lock rather than Get+Put: an operator can
-			// be saving an edit to this same channel right now, and a plain
-			// read-modify-write would silently drop whichever side lost.
-			rt.configMu.Lock()
-			merged, err := st.Update(rt.ID, func(c *Config) { c.IsVOD = true })
-			if err != nil {
-				slog.Warn("failed to persist VOD state", "channel", rt.ID, "err", err)
-			} else {
-				// Adopt the merged result so the runtime reflects both this
-				// transition and any concurrent edit. Safe now that Config is
-				// behind an atomic; it used to be left alone because HTTP
-				// handlers read the field without synchronisation.
-				rt.setConfig(merged)
-			}
-			rt.configMu.Unlock()
-		}
-		if cb != nil {
-			// Counted like every other channel goroutine: the callback snapshots
-			// the final manifest into this channel's own data directory, so Stop
-			// must not return while it is still writing there. Adding here is
-			// safe because every path into publishVODTransition already runs inside a
-			// counted goroutine.
-			rt.wg.Add(1)
-			go func() { defer rt.wg.Done(); cb(rt) }()
-		}
+		close(rt.vodDone)
 	})
+	rt.configMu.Unlock()
+	slog.Info("channel VOD ready", "id", rt.ID)
+
+	// Optional exports use the same capture, but cannot revoke durable VOD.
+	// They remain inside this counted finalizer so Stop also joins their writes.
+	a.writeOptional()
+	if cb != nil {
+		rt.wg.Add(1)
+		go func() { defer rt.wg.Done(); cb(rt) }()
+	}
 }
 
 // Stop shuts down the channel's goroutines and does not return until they have
@@ -871,6 +895,9 @@ type ChannelStatus struct {
 	// Source reports how close the upstream is to being finished. A pointer so
 	// a status with nothing to say serialises to the same keys it always had.
 	Source *SourceStatus `json:"source_status,omitempty"`
+	// VODWarnings lists restart-safety steps that failed while this channel
+	// completed as VOD. Absent when there were none.
+	VODWarnings []string `json:"vod_warnings,omitempty"`
 }
 
 // SourceStatus reports the upstream's end-of-stream signal, which is what
@@ -941,6 +968,8 @@ func buildStatus(rt *Runtime) ChannelStatus {
 		modeStr = "vod"
 	case ModeStaticIngesting:
 		modeStr = "static_ingesting"
+	case ModeVODFailed:
+		modeStr = "vod_failed"
 	}
 	s := ChannelStatus{
 		ID:      rt.ID,
@@ -980,5 +1009,8 @@ func buildStatus(rt *Runtime) ChannelStatus {
 
 	s.Progress = buildProgress(rt)
 	s.Tracks = buildTracks(rt, ci)
+	if w := rt.vodWarnings.Load(); w != nil {
+		s.VODWarnings = *w
+	}
 	return s
 }

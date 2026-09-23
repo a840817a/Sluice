@@ -39,6 +39,7 @@ func TestServingResolvesIndex(t *testing.T) {
 			mode: ModeStaticIngesting, vodIndex: vod, want: live,
 		},
 		{"transitioning stays on the live index", ModeTransitioning, vod, live},
+		{"failed VOD keeps the recorded index", ModeVODFailed, nil, live},
 	}
 
 	for _, tc := range tests {
@@ -67,6 +68,7 @@ func TestServingModePredicates(t *testing.T) {
 		{ModeTransitioning, false, false},
 		{ModeVOD, true, false},
 		{ModeStaticIngesting, false, true},
+		{ModeVODFailed, false, false},
 	}
 
 	for _, tc := range tests {

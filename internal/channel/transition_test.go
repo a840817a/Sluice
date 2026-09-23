@@ -8,14 +8,15 @@ import (
 	"time"
 
 	gocfg "github.com/a840817a/sluice/internal/config"
+	"github.com/a840817a/sluice/internal/dashingest"
 	"github.com/a840817a/sluice/internal/index"
+	imdp "github.com/a840817a/sluice/internal/mpd"
 	"github.com/a840817a/sluice/internal/progress"
 )
 
 // registerRuntime puts a minimal running channel into the manager without going
 // through Start, which would need an upstream origin and an ingest pipeline.
-// TransitionToVOD only reads the mode, the index and the progress counters, so
-// this is the whole of what it touches.
+// A source snapshot supplies the required restart artifacts without network I/O.
 func registerRuntime(t *testing.T, m *Manager, id string, mode ChannelMode) *Runtime {
 	t.Helper()
 	_, cancel := context.WithCancel(context.Background())
@@ -28,6 +29,8 @@ func registerRuntime(t *testing.T, m *Manager, id string, mode ChannelMode) *Run
 		cancel:   cancel,
 		vodDone:  make(chan struct{}),
 	}
+	rt.Watcher = &dashingest.Watcher{}
+	seedVODSource(t, rt)
 	rt.setConfig(Config{})
 	rt.mode.Store(int32(mode))
 
@@ -169,4 +172,14 @@ func TestTransitionToVODRacesStopSafely(t *testing.T) {
 			t.Fatalf("iteration %d: channel still registered after Stop", i)
 		}
 	}
+}
+
+func seedVODSource(t *testing.T, rt *Runtime) {
+	t.Helper()
+	raw := []byte(`<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT0S"><Period id="0"/></MPD>`)
+	parsed, err := imdp.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Watcher.SetParsedMPD(parsed, raw)
 }

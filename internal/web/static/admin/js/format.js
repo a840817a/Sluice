@@ -73,6 +73,7 @@ export const MODE_LABEL = {
   vod: 'VOD',
   static_ingesting: 'INGEST',
   transitioning: 'FINALIZING',
+  vod_failed: 'VOD FAILED',
   degraded: 'DEGRADED',
   stopped: 'STOPPED',
 };
@@ -82,6 +83,7 @@ export const MODE_CLASS = {
   vod: 'vod',
   static_ingesting: 'ingesting',
   transitioning: 'transition',
+  vod_failed: 'degraded',
 };
 
 export function modeLabel(mode) {

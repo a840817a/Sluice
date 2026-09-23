@@ -6,11 +6,14 @@ package channel
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"sync"
+
+	"github.com/a840817a/sluice/internal/store"
 )
 
 // Store is a thread-safe persistent store for channel configurations.
@@ -62,7 +65,7 @@ func (s *Store) Put(id string, cfg Config) error {
 	next := maps.Clone(s.channels)
 	cfg = cloneConfig(cfg)
 	next[id] = &cfg
-	return s.commit(next)
+	return s.commitLoggingSync(next)
 }
 
 // Update applies fn to the stored config for id and persists the result,
@@ -73,11 +76,20 @@ func (s *Store) Put(id string, cfg Config) error {
 // admin API. Read-modify-write via Get + Put would drop whichever side lost the
 // race; holding the lock across the mutation makes the merge atomic instead.
 func (s *Store) Update(id string, fn func(*Config)) (Config, error) {
+	merged, syncErr, err := s.update(id, fn)
+	s.logSync(syncErr)
+	return merged, err
+}
+
+// update is Update that returns a failed directory sync separately instead of
+// logging it. The rename has happened by then, so the update is committed and
+// the new config is visible; syncErr only says it may not survive a crash.
+func (s *Store) update(id string, fn func(*Config)) (merged Config, syncErr, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cfg, ok := s.channels[id]
 	if !ok {
-		return Config{}, fmt.Errorf("channel %q not found", id)
+		return Config{}, nil, fmt.Errorf("channel %q not found", id)
 	}
 	updated := cloneConfig(*cfg)
 	fn(&updated)
@@ -85,10 +97,11 @@ func (s *Store) Update(id string, fn func(*Config)) (Config, error) {
 	// The callback may retain its argument or assign caller-owned slices.
 	stored := cloneConfig(updated)
 	next[id] = &stored
-	if err := s.commit(next); err != nil {
-		return Config{}, err
+	syncErr, err = s.commit(next)
+	if err != nil {
+		return Config{}, nil, err
 	}
-	return updated, nil
+	return updated, syncErr, nil
 }
 
 // Delete removes the channel config and persists to disk.
@@ -100,7 +113,7 @@ func (s *Store) Delete(id string) error {
 	}
 	next := maps.Clone(s.channels)
 	delete(next, id)
-	return s.commit(next)
+	return s.commitLoggingSync(next)
 }
 
 // cloneConfig keeps mutable fields private to the store, including while an
@@ -133,39 +146,60 @@ func (s *Store) load() error {
 
 // commit persists a candidate before publishing it to readers. The caller
 // holds mu throughout so concurrent updates cannot lose each other's changes.
-func (s *Store) commit(next map[string]*Config) error {
-	if err := s.save(next); err != nil {
-		return err
+//
+// A failed directory sync after the rename is returned as syncErr, not err:
+// the new file is already what a reader or a restart sees, so treating the
+// commit as failed would leave memory disagreeing with disk.
+func (s *Store) commit(next map[string]*Config) (syncErr, err error) {
+	syncErr, err = s.save(next)
+	if err != nil {
+		return nil, err
 	}
 	s.channels = next
-	return nil
+	return syncErr, nil
 }
 
-func (s *Store) save(channels map[string]*Config) error {
+func (s *Store) commitLoggingSync(next map[string]*Config) error {
+	syncErr, err := s.commit(next)
+	s.logSync(syncErr)
+	return err
+}
+
+func (s *Store) logSync(syncErr error) {
+	if syncErr != nil {
+		slog.Warn("channel store: directory sync failed", "path", s.path, "err", syncErr)
+	}
+}
+
+func (s *Store) save(channels map[string]*Config) (syncErr, err error) {
 	data, err := json.MarshalIndent(channels, "", "  ")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// Atomic write: temp file in same directory then rename.
 	dir := filepath.Dir(s.path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+		return nil, err
 	}
 	tmp, err := os.CreateTemp(dir, ".channels-*.json")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 	defer tmp.Close()
 	if _, err := tmp.Write(data); err != nil {
-		return err
+		return nil, err
 	}
 	if err := tmp.Sync(); err != nil {
-		return err
+		return nil, err
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		return nil, err
 	}
-	return os.Rename(tmpName, s.path)
+	if err := os.Rename(tmpName, s.path); err != nil {
+		return nil, err
+	}
+	// The rename is only durable once its directory entry is.
+	return store.SyncDir(dir), nil
 }

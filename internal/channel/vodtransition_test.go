@@ -177,6 +177,9 @@ func TestRestoreToLiveSuppressesImmediateRetransition(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	waitForMode(t, rt, ModeVOD, 15*time.Second)
+	// Optional local exports follow VOD publication. Join the completed
+	// finalizer before taking a baseline of every file, including exports.
+	rt.wg.Wait()
 	before := filesUnder(t, filepath.Join(dataDir, "ch"))
 
 	if err := m.RestoreToLive(context.Background(), "ch"); err != nil {

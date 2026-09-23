@@ -20,7 +20,7 @@ import (
 // It exists so that composition is testable. main() adds only what a test
 // cannot meaningfully assert on — flag parsing, logging, TLS selection,
 // ListenAndServe and shutdown — so anything that can silently go missing
-// (see newGateway's OnVODReady note) lives here instead.
+// lives here instead.
 type gateway struct {
 	cfg     config.Config
 	store   *channel.Store
@@ -31,17 +31,12 @@ type gateway struct {
 }
 
 // newGateway builds the gateway from cfg: it opens the channel store, wires the
-// manager to it, registers the VOD snapshot callback, starts every enabled
-// stored channel, and builds the router with the embedded web UI handlers.
+// manager to it, starts every enabled stored channel, and builds the router
+// with the embedded web UI handlers.
 //
 // ctx governs the channels started here and the admin server's restarts; it
 // outlives newGateway. Cancelling it stops ingest, so callers that keep serving
 // must keep it alive for the process lifetime.
-//
-// Order matters: OnVODReady is registered before any channel starts. A
-// transition that completes during the restore loop would otherwise write
-// nothing, and the omission stays silent until a restart serves an empty
-// channel.
 func newGateway(ctx context.Context, cfg config.Config) (*gateway, error) {
 	// --- Data directory ---
 	//
@@ -67,12 +62,6 @@ func newGateway(ctx context.Context, cfg config.Config) (*gateway, error) {
 	manager := channel.NewManager(cfg)
 	manager.SetStore(chStore) // enables VOD state persistence across restarts
 	srv := httpapi.NewServer(cfg, manager)
-
-	// Persist VOD artifacts after every transition, so a restarted gateway can
-	// serve the channel without re-fetching upstream. This must be
-	// registered before any channel starts, or a transition that completes
-	// during startup writes nothing and the omission is silent until a restart.
-	manager.SetOnVODReady(manager.SaveVODArtifacts)
 
 	// Start all previously persisted channels.
 	for id, chCfg := range chStore.List() {

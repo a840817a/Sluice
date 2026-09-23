@@ -12,19 +12,8 @@ import (
 	"github.com/a840817a/sluice/internal/config"
 )
 
-// A VOD transition snapshots the final manifest to disk so a restarted gateway
-// can serve the channel without reaching upstream again. That snapshot happens
-// through a callback the manager invokes; nothing in the serving path calls it.
-//
-// What this test covers: that Manager.SaveVODArtifacts is a working OnVODReady callback —
-// that a real transition invokes it and that it writes a restorable manifest.
-// It is wired here the same way cmd/gateway wires it.
-//
-// What it does NOT cover: the gateway's registration line itself. This test
-// registers the callback, so deleting that line would leave this test green.
-// The registration is covered separately by
-// cmd/gateway.TestNewGatewayRegistersVODSnapshotCallback, which seeds
-// channels.json and lets the composed gateway wire itself.
+// A VOD transition synchronously snapshots its required manifest state before
+// it publishes VOD, so a restarted gateway can serve without reaching upstream.
 func TestVODTransitionSnapshotsManifestToDisk(t *testing.T) {
 	origin := startClearDASHOrigin(t)
 
@@ -37,8 +26,6 @@ func TestVODTransitionSnapshotsManifestToDisk(t *testing.T) {
 	}
 
 	mgr := ch.NewManager(cfg)
-	// The line under test, copied from cmd/gateway/main.go.
-	mgr.SetOnVODReady(mgr.SaveVODArtifacts)
 	t.Cleanup(func() { _ = mgr.Stop("vodsnap") })
 
 	if _, err := mgr.Start(context.Background(), "vodsnap", ch.Config{
@@ -55,13 +42,13 @@ func TestVODTransitionSnapshotsManifestToDisk(t *testing.T) {
 
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		if _, err := os.Stat(manifestPath); err == nil {
+		// VOD publication guarantees both required files are ready. Observing
+		// just the first rename would race the second required write.
+		if mgr.Get("vodsnap").Mode() == ch.ModeVOD {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("no VOD manifest at %s after 30s (channel mode %v). "+
-				"If ingest worked but this file is missing, the OnVODReady callback "+
-				"is not registered — see cmd/gateway/main.go.",
+			t.Fatalf("no VOD manifest at %s after 30s (channel mode %v)",
 				manifestPath, mgr.Get("vodsnap").Mode())
 		}
 		time.Sleep(100 * time.Millisecond)

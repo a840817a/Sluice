@@ -64,7 +64,7 @@ func gatedFinishChannel(t *testing.T, finished bool) (*Manager, *Runtime, *Store
 	m.SetStore(st)
 	t.Cleanup(m.StopAll)
 	done := make(chan struct{})
-	m.SetOnVODReady(func(rt *Runtime) { m.SaveVODArtifacts(rt); close(done) })
+	m.SetOnVODReady(func(rt *Runtime) { close(done) })
 	cc := Config{SourceType: SourceHLS, MPDURL: origin.URL + "/master.m3u8", Enabled: true}
 	if err := st.Put("finish", cc); err != nil {
 		t.Fatal(err)
@@ -201,7 +201,8 @@ func TestRestartInterruptsManualVODDrain(t *testing.T) {
 	}
 }
 
-func TestVODRebuildFailureCanBeRecoveredByRestart(t *testing.T) {
+func failedVODRebuild(t *testing.T) (*Manager, *Runtime, *Store, string) {
+	t.Helper()
 	m := managerForTransition(t)
 	t.Cleanup(m.StopAll)
 	st, err := NewStore(filepath.Join(m.gwCfg.Store.DataDir, "channels.json"))
@@ -225,7 +226,7 @@ func TestVODRebuildFailureCanBeRecoveredByRestart(t *testing.T) {
 	}
 	// The public request has registered its finalizer before returning.
 	rt.wg.Wait()
-	if rt.Mode() != ModeTransitioning || rt.VODIndex() != nil {
+	if rt.Mode() != ModeVODFailed || rt.VODIndex() != nil {
 		t.Fatal("failed rebuild advertised live ingest or a completed VOD")
 	}
 	select {
@@ -236,6 +237,11 @@ func TestVODRebuildFailureCanBeRecoveredByRestart(t *testing.T) {
 	if saved, _ := st.Get(rt.ID); saved.IsVOD {
 		t.Fatal("failed rebuild persisted VOD")
 	}
+	return m, rt, st, blocker
+}
+
+func TestVODRebuildFailureCanBeRecoveredByRestart(t *testing.T) {
+	m, rt, _, blocker := failedVODRebuild(t)
 	if err := os.Remove(blocker); err != nil {
 		t.Fatal(err)
 	}
@@ -244,6 +250,44 @@ func TestVODRebuildFailureCanBeRecoveredByRestart(t *testing.T) {
 	}
 	if next := m.Get(rt.ID); next == nil || next == rt || next.Mode() != ModeLive {
 		t.Fatal("Restart did not recover the failed transition")
+	}
+}
+
+func TestVODRebuildFailureCanBeRetried(t *testing.T) {
+	m, rt, st, blocker := failedVODRebuild(t)
+	if status, ok := m.StatusFor(rt.ID); !ok || status.Mode != "vod_failed" {
+		t.Fatalf("status = %+v, want visible retryable failure", status)
+	}
+	// Retrying before the disk problem is resolved must remain retryable.
+	if err := m.TransitionToVOD(rt.ID); err != nil {
+		t.Fatal(err)
+	}
+	rt.wg.Wait()
+	if rt.Mode() != ModeVODFailed {
+		t.Fatalf("retry of broken disk mode = %v", rt.Mode())
+	}
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	m.SetOnVODReady(func(*Runtime) { close(done) })
+	if err := m.TransitionToVOD(rt.ID); err != nil {
+		t.Fatalf("retry rejected: %v", err)
+	}
+	rt.wg.Wait()
+	if m.Get(rt.ID) != rt || rt.Mode() != ModeVOD || rt.VODIndex() == nil {
+		t.Fatal("retry did not publish VOD on the existing runtime")
+	}
+	select {
+	case <-done:
+	default:
+		t.Fatal("retry did not invoke VOD callback")
+	}
+	if saved, _ := st.Get(rt.ID); !saved.IsVOD {
+		t.Fatal("successful retry did not persist VOD")
+	}
+	if err := m.TransitionToVOD(rt.ID); err == nil {
+		t.Fatal("completed VOD accepted another retry")
 	}
 }
 

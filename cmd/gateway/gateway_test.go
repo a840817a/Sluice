@@ -139,26 +139,10 @@ func writeChannelsJSON(t *testing.T, dataDir string, channels map[string]channel
 	}
 }
 
-// The VOD snapshot is the one piece of gateway wiring whose absence is
-// invisible: drop manager.SetOnVODReady and every request still succeeds, the
-// suite stays green, and the only symptom is a VOD channel that comes back
-// empty after a restart.
-//
-// internal/httpapi's TestVODTransitionSnapshotsManifestToDisk proves
-// Manager.SaveVODArtifacts works as a callback, but it registers the callback itself.
-// This test registers nothing: it seeds channels.json, hands the config to
-// newGateway, and lets the composed gateway restore and transition the channel
-// on its own. The manifest on disk therefore only appears if newGateway
-// registered the callback at all.
-//
-// It does NOT pin the registration's position relative to the restore loop.
-// Starting a channel only launches goroutines, so the restore loop returns in
-// microseconds while the transition needs at least one drain-check tick plus the
-// ingest itself — registering after the loop still lands in time (verified by
-// moving the line). That ordering requirement — SetOnVODReady's "must be set
-// before any Start()" — stays a code-reading constraint, documented at the call
-// site in gateway.go.
-func TestNewGatewayRegistersVODSnapshotCallback(t *testing.T) {
+// VOD persistence belongs to the channel lifecycle, so a fully composed
+// gateway needs no callback wiring for a restarted gateway to serve a finished
+// channel with its origin offline.
+func TestNewGatewayPersistsVODArtifacts(t *testing.T) {
 	origin := startClearDASHOrigin(t)
 	dataDir := t.TempDir()
 	writeChannelsJSON(t, dataDir, map[string]channel.Config{
@@ -190,10 +174,7 @@ func TestNewGatewayRegistersVODSnapshotCallback(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("no VOD manifest at %s after 30s (channel mode %v). "+
-				"If ingest worked but this file is missing, newGateway is not "+
-				"registering manager.SaveVODArtifacts via manager.SetOnVODReady "+
-				"— see gateway.go.",
+			t.Fatalf("no VOD manifest at %s after 30s (channel mode %v)",
 				manifestPath, gw.manager.Get("gwvod").Mode())
 		}
 		time.Sleep(100 * time.Millisecond)
