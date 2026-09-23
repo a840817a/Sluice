@@ -224,7 +224,7 @@ func failedVODRebuild(t *testing.T) (*Manager, *Runtime, *Store, string) {
 	if err := m.TransitionToVOD(rt.ID); err != nil {
 		t.Fatal(err)
 	}
-	// The public request has registered its finalizer before returning.
+	// The public request has registered its VOD transition before returning.
 	rt.wg.Wait()
 	if rt.Mode() != ModeVODFailed || rt.VODIndex() != nil {
 		t.Fatal("failed rebuild advertised live ingest or a completed VOD")

@@ -33,9 +33,6 @@ type ProgressStats struct {
 	TotalSegments uint64 `json:"total_segments"`
 	TotalKnown    bool   `json:"total_known"`
 	TotalCapped   bool   `json:"total_capped"`
-	// Finalized reports that ingest is over, which is what separates
-	// "500 of 512, still working" from "finished, 12 never arrived".
-	Finalized bool `json:"finalized"`
 
 	// QueueDepth is how many segments are waiting to be fetched right now. It is
 	// the clearest single signal of whether a channel is actually moving.
@@ -74,7 +71,6 @@ func buildProgress(rt *Runtime) *ProgressStats {
 		TotalSegments:    snap.ExpectedSegments,
 		TotalKnown:       snap.TotalKnown,
 		TotalCapped:      snap.TotalCapped,
-		Finalized:        snap.Finalized,
 		SegmentsPerSec:   snap.SegmentsPerSec,
 		BytesPerSec:      snap.BytesPerSec,
 		StartedAt:        snap.StartedAt,

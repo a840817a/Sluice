@@ -43,7 +43,8 @@ type vodArtifacts struct {
 	variants []hlsdesc.Variant
 }
 
-// captureVODArtifacts freezes the candidate index the finalizer just rebuilt.
+// captureVODArtifacts freezes the candidate index the VOD transition just
+// rebuilt.
 // The runtime has not been published as VOD yet, so it deliberately does not
 // consult rt.VODIndex: doing so would make durable artifacts depend on an
 // already-visible VOD state.
@@ -69,7 +70,7 @@ func (m *Manager) captureVODArtifacts(rt *Runtime, candidate *index.ChannelIndex
 	return a, nil
 }
 
-// keyCheckpointTimeout bounds all key fetches of one VOD finalization. Each
+// keyCheckpointTimeout bounds all key fetches of one VOD transition. Each
 // fetch has its own client timeout, but a slow key server answering just
 // inside it could otherwise hold completion for that long per key.
 var keyCheckpointTimeout = 60 * time.Second

@@ -178,7 +178,7 @@ func TestRestoreToLiveSuppressesImmediateRetransition(t *testing.T) {
 	}
 	waitForMode(t, rt, ModeVOD, 15*time.Second)
 	// Optional local exports follow VOD publication. Join the completed
-	// finalizer before taking a baseline of every file, including exports.
+	// VOD transition before taking a baseline of every file, including exports.
 	rt.wg.Wait()
 	before := filesUnder(t, filepath.Join(dataDir, "ch"))
 

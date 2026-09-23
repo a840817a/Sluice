@@ -68,10 +68,10 @@ type Counters struct {
 	// set. It is deliberately not overwritten when ingest completes: keeping
 	// "what we expected" separate from "what we stored" is what lets the UI say
 	// 500/512 with 12 failures rather than silently rewriting history as 500/500.
-	expected    atomic.Uint64
-	expectedSet atomic.Bool
-	capped      atomic.Bool
-	finalized   atomic.Bool
+	expected       atomic.Uint64
+	expectedSet    atomic.Bool
+	capped         atomic.Bool
+	ingestComplete atomic.Bool
 
 	startedAt    atomic.Int64 // unix nanos
 	lastStoredAt atomic.Int64 // unix nanos; 0 = nothing stored yet
@@ -203,14 +203,14 @@ func (c *Counters) MarkCapped() {
 	c.capped.Store(true)
 }
 
-// Finalize marks ingest complete: no further segments are coming. This is what
+// MarkIngestComplete records that no further segments are coming. This is what
 // distinguishes "downloaded 500 of 512, still working" from "finished, 12 never
 // arrived".
-func (c *Counters) Finalize() {
+func (c *Counters) MarkIngestComplete() {
 	if c == nil {
 		return
 	}
-	c.finalized.Store(true)
+	c.ingestComplete.Store(true)
 }
 
 // Snapshot is a consistent read of the counters at one instant.
@@ -222,7 +222,7 @@ type Snapshot struct {
 	ExpectedSegments uint64
 	TotalKnown       bool
 	TotalCapped      bool
-	Finalized        bool
+	IngestComplete   bool
 
 	StartedAt     time.Time
 	LastSegmentAt time.Time // zero if nothing has been stored
@@ -252,7 +252,7 @@ func (c *Counters) Snapshot() Snapshot {
 		ExpectedSegments: c.expected.Load(),
 		TotalKnown:       c.expectedSet.Load(),
 		TotalCapped:      c.capped.Load(),
-		Finalized:        c.finalized.Load(),
+		IngestComplete:   c.ingestComplete.Load(),
 		SegmentsPerSec:   segRate,
 		BytesPerSec:      byteRate,
 		LastSegmentError: c.lastSegErr.Load(),
@@ -272,7 +272,7 @@ func (c *Counters) Snapshot() Snapshot {
 // total (a capped total is a floor), without forward progress, or once ingest
 // has finished.
 func (s Snapshot) ETA() (time.Duration, bool) {
-	if !s.TotalKnown || s.TotalCapped || s.Finalized {
+	if !s.TotalKnown || s.TotalCapped || s.IngestComplete {
 		return 0, false
 	}
 	if s.SegmentsPerSec <= 0 || s.SegmentsStored >= s.ExpectedSegments {

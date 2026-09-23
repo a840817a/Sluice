@@ -20,7 +20,7 @@ func TestNilReceiverIsANoOp(t *testing.T) {
 	c.ClearSourceError()
 	c.SetExpectedTotal(10)
 	c.MarkCapped()
-	c.Finalize()
+	c.MarkIngestComplete()
 
 	got := c.Snapshot()
 	if got != (Snapshot{}) {
@@ -181,22 +181,22 @@ func TestSetExpectedTotalLargestWins(t *testing.T) {
 	}
 }
 
-func TestExpectedTotalSurvivesFinalize(t *testing.T) {
+func TestExpectedTotalSurvivesIngestComplete(t *testing.T) {
 	// The point of keeping expected and stored separate: a finished channel that
 	// lost 12 segments must still be able to say 500/512, not 500/500.
 	c := New()
 	c.SetExpectedTotal(512)
 	c.AddStored(500, 0)
 	c.AddFailed(12)
-	c.Finalize()
+	c.MarkIngestComplete()
 
 	s := c.Snapshot()
 	if s.ExpectedSegments != 512 || s.SegmentsStored != 500 || s.SegmentsFailed != 12 {
 		t.Errorf("got stored=%d expected=%d failed=%d, want 500/512/12",
 			s.SegmentsStored, s.ExpectedSegments, s.SegmentsFailed)
 	}
-	if !s.Finalized {
-		t.Error("Finalized = false")
+	if !s.IngestComplete {
+		t.Error("IngestComplete = false")
 	}
 }
 
@@ -209,7 +209,7 @@ func TestETAConditions(t *testing.T) {
 		{"healthy", Snapshot{TotalKnown: true, ExpectedSegments: 100, SegmentsStored: 50, SegmentsPerSec: 5}, true},
 		{"no total (live)", Snapshot{ExpectedSegments: 0, SegmentsStored: 50, SegmentsPerSec: 5}, false},
 		{"capped total is a floor", Snapshot{TotalKnown: true, TotalCapped: true, ExpectedSegments: 100, SegmentsStored: 50, SegmentsPerSec: 5}, false},
-		{"finalized", Snapshot{TotalKnown: true, Finalized: true, ExpectedSegments: 100, SegmentsStored: 50, SegmentsPerSec: 5}, false},
+		{"ingest complete", Snapshot{TotalKnown: true, IngestComplete: true, ExpectedSegments: 100, SegmentsStored: 50, SegmentsPerSec: 5}, false},
 		{"stalled", Snapshot{TotalKnown: true, ExpectedSegments: 100, SegmentsStored: 50, SegmentsPerSec: 0}, false},
 		{"already past total", Snapshot{TotalKnown: true, ExpectedSegments: 100, SegmentsStored: 100, SegmentsPerSec: 5}, false},
 	}

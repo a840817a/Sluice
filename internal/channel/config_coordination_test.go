@@ -114,7 +114,7 @@ func completeVODWhenStopped(t *testing.T, m *Manager, rt *Runtime) {
 		defer rt.wg.Done()
 		<-stopping
 		// This fixture models the already-quiescent publication phase. The
-		// production finalizer observes cancellation while stopping source and
+		// production VOD transition observes cancellation while stopping source and
 		// draining the pipeline; publication itself remains joinable by Stop so
 		// its store update is visible before Restart reads the configuration.
 		if m.claimVODTransition(rt) {

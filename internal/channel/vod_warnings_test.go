@@ -173,7 +173,7 @@ func TestHotEditDoesNotWaitForVODKeyCheckpoint(t *testing.T) {
 	select {
 	case <-checkpointFetch:
 	case <-time.After(10 * time.Second):
-		t.Fatal("VOD finalization never refetched the key")
+		t.Fatal("VOD transition never refetched the key")
 	}
 
 	edited := cfg

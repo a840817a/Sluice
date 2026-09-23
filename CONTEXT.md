@@ -38,10 +38,6 @@ The segment index rebuilt from disk during the VOD transition, which a VOD chann
 
 ## Lifecycle
 
-**Ingest complete**:
-The point after which no further segments will arrive for a channel. It says nothing about whether VOD has been published.
-_Avoid_: Finalized, finished, done
-
 **VOD transition**:
 The move of a channel from ingesting to VOD, which ends when the finished asset is published or fails.
 _Avoid_: Finalization, rebuild

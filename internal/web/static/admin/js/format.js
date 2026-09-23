@@ -72,7 +72,7 @@ export const MODE_LABEL = {
   live: 'LIVE',
   vod: 'VOD',
   static_ingesting: 'INGEST',
-  transitioning: 'FINALIZING',
+  transitioning: 'TO VOD',
   vod_failed: 'VOD FAILED',
   degraded: 'DEGRADED',
   stopped: 'STOPPED',

@@ -37,7 +37,7 @@ func TestVODConfigFailureCompletesWithWarning(t *testing.T) {
 	rt.wg.Wait()
 	// A failed store write only costs VOD mode across a restart, which is
 	// what it cost before completion waited for required artifacts.
-	if calls.Load() != 1 || !rt.Progress.Snapshot().Finalized {
+	if calls.Load() != 1 || !rt.Progress.Snapshot().IngestComplete {
 		t.Fatal("config failure did not publish exactly once")
 	}
 	status, _ := m.StatusFor("ch")

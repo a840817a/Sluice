@@ -100,7 +100,7 @@ function renderProgress(refs, status) {
   const total = p.total_segments || 0;
   const hasTotal = !!p.total_known && total > 0 && !p.total_capped;
 
-  refs.progMain.classList.toggle('prog-done', mode === 'vod' || !!p.finalized);
+  refs.progMain.classList.toggle('prog-done', mode === 'vod');
   refs.progMain.classList.toggle('prog-idle', false);
   refs.progMain.classList.toggle('prog-text', mode === 'transitioning' || mode === 'vod_failed');
 

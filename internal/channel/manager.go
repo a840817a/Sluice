@@ -27,7 +27,7 @@ const (
 	ModeTransitioning   ChannelMode = 1
 	ModeVOD             ChannelMode = 2
 	ModeStaticIngesting ChannelMode = 3 // static MPD discovered; segments downloading
-	ModeVODFailed       ChannelMode = 4 // ingest stopped; VOD finalization may be retried
+	ModeVODFailed       ChannelMode = 4 // ingest stopped; the VOD transition failed and may be retried
 )
 
 // Runtime holds the live state for one running channel.
@@ -53,7 +53,7 @@ type Runtime struct {
 	// it here is what lets UpdateConfig rotate upstream credentials in place.
 	headers *fetch.AtomicHeaders
 	// cancel ends the whole runtime. Source and pipeline have child contexts so
-	// finalization can stop admitting work while allowing work already admitted
+	// the VOD transition can stop admitting work while allowing work already admitted
 	// to finish.
 	cancel       context.CancelFunc
 	lifecycleCtx context.Context
@@ -69,8 +69,8 @@ type Runtime struct {
 
 	// cfg is the channel's configuration. It is behind an atomic because the
 	// admin API swaps it while HTTP handlers read it — see Config below.
-	// configMu coordinates the store commit and runtime publication with VOD
-	// finalization. It is deliberately never held while stopping a runtime:
+	// configMu coordinates the store commit and runtime publication with the
+	// VOD transition. It is deliberately never held while stopping a runtime:
 	// Stop waits for the goroutines that can need this mutex.
 	configMu sync.Mutex
 	cfg      atomic.Pointer[Config]
@@ -78,7 +78,7 @@ type Runtime struct {
 	vodOnce  sync.Once
 	vodDone  chan struct{} // closed when VOD index is ready
 	// vodWarnings lists the restart-safety steps that failed during the last
-	// VOD finalization. They do not block completion, which is served from the
+	// VOD transition. They do not block completion, which is served from the
 	// in-memory index regardless; they tell an operator what a restart may lose.
 	vodWarnings atomic.Pointer[[]string]
 
@@ -353,7 +353,7 @@ func (m *Manager) restoreVODState(rt *Runtime, id string) {
 	// render "finished" rather than an empty progress bar. The original
 	// discovery total is not on disk, so the restored count stands in for it.
 	rt.Progress.SetExpectedTotal(rt.Progress.Snapshot().SegmentsStored)
-	rt.Progress.Finalize()
+	rt.Progress.MarkIngestComplete()
 
 	m.restoreVODUpstreamMPD(rt)
 
@@ -366,9 +366,9 @@ func (m *Manager) restoreVODState(rt *Runtime, id string) {
 // Every goroutine is counted in rt.wg, which is what lets Stop join them rather
 // than merely cancel them — see Stop for why that matters.
 func (m *Manager) launchIngest(sourceCtx, poolCtx, processorCtx context.Context, rt *Runtime, cfg Config, pl *ingestPipeline) {
-	// pipelineWG lets finalization join just the pool and processor. It must not
-	// wait on rt.wg: finalization itself is counted there, so that would make a
-	// Stop racing a finalization deadlock.
+	// pipelineWG lets the VOD transition join just the pool and processor. It
+	// must not wait on rt.wg: the transition itself is counted there, so that
+	// would make a Stop racing a VOD transition deadlock.
 	var pipelineWG sync.WaitGroup
 	pipelineWG.Add(2)
 	rt.wg.Add(5)
@@ -574,7 +574,7 @@ func (m *Manager) awaitPipelineDrain(rt *Runtime, broker *queue.Broker) bool {
 // awaitStaticIngestComplete keeps a completed source visibly static-ingesting
 // while the already admitted work drains. The final compare-and-swap is the
 // automatic side of the manual/automatic race: a manual request can claim the
-// transition during this wait and thereby becomes the only finalizer.
+// transition during this wait and thereby becomes the only one to run it.
 func (m *Manager) awaitStaticIngestComplete(rt *Runtime) {
 	if !m.awaitPipelineDrain(rt, rt.Broker) || !m.claimVODTransition(rt) {
 		return
@@ -582,11 +582,11 @@ func (m *Manager) awaitStaticIngestComplete(rt *Runtime) {
 	m.finalizeVODTransition(rt)
 }
 
-// recordVODWarnings logs a finalization attempt's warnings and publishes them
+// recordVODWarnings logs a VOD transition attempt's warnings and publishes them
 // in the channel status.
 func recordVODWarnings(rt *Runtime, warnings []string) {
 	for _, w := range warnings {
-		slog.Warn("VOD finalization step failed", "channel", rt.ID, "warning", w)
+		slog.Warn("VOD transition step failed", "channel", rt.ID, "warning", w)
 	}
 	rt.vodWarnings.Store(&warnings)
 }
@@ -683,8 +683,8 @@ func (m *Manager) finalizeVODTransition(rt *Runtime) {
 	// exits naturally after its final result and waits for key warming under the
 	// still-live runtime context; cancelling it here would abandon a
 	// passthrough key cache just before the VOD needs to serve it offline.
-	// Waiting only for pipelineDone avoids waiting for this finalizer through
-	// rt.wg itself.
+	// Waiting only for pipelineDone avoids waiting for this VOD transition
+	// through rt.wg itself.
 	if rt.poolCancel != nil {
 		rt.poolCancel()
 	}
@@ -770,14 +770,15 @@ func (m *Manager) publishVODTransition(rt *Runtime, finalMPD *imdp.ParsedMPD) {
 		if !snap.TotalKnown {
 			rt.Progress.SetExpectedTotal(snap.SegmentsStored)
 		}
-		rt.Progress.Finalize()
+		rt.Progress.MarkIngestComplete()
 		close(rt.vodDone)
 	})
 	rt.configMu.Unlock()
 	slog.Info("channel VOD ready", "id", rt.ID)
 
 	// Optional exports use the same capture, but cannot revoke durable VOD.
-	// They remain inside this counted finalizer so Stop also joins their writes.
+	// They remain inside this counted VOD transition so Stop also joins their
+	// writes.
 	a.writeOptional()
 	if cb != nil {
 		rt.wg.Add(1)

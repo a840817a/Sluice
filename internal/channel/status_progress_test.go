@@ -73,9 +73,6 @@ func TestBuildProgressLiveChannelHasNoDenominator(t *testing.T) {
 	if p.ETASeconds != nil {
 		t.Errorf("ETASeconds = %v, want nil for a live channel", *p.ETASeconds)
 	}
-	if p.Finalized {
-		t.Error("Finalized = true for a running live channel")
-	}
 	// The cumulative count must not be capped by the DVR ring: that plateau is
 	// exactly what the old display suffered from.
 	if p.SegmentsStored <= 120 {
