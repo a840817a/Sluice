@@ -45,7 +45,7 @@ func mergedOperatorConfig(requested, current Config, restoreLive bool) Config {
 // restartWithConfig stops, joins, then re-reads and persists the configuration
 // before starting. Stop may join a VOD transition, so reading before Stop
 // would allow an old IsVOD=false snapshot to overwrite its completed state.
-// operationMu must be held.
+// id's operation lock must be held.
 func (m *Manager) restartWithConfig(ctx context.Context, id string, requested Config, restoreLive bool) error {
 	store, err := m.storeForOperation()
 	if err != nil {
@@ -94,8 +94,7 @@ func (m *Manager) restartWithConfig(ctx context.Context, id string, requested Co
 // store.cleanup: on_expire, will start deleting what falls out. That is the
 // operator's call to make; the admin UI warns before asking for it.
 func (m *Manager) RestoreToLive(ctx context.Context, id string) error {
-	m.operationMu.Lock()
-	defer m.operationMu.Unlock()
+	defer m.lockOperation(id)()
 	store, err := m.storeForOperation()
 	if err != nil {
 		return err
@@ -132,8 +131,7 @@ func (m *Manager) RestoreToLive(ctx context.Context, id string) error {
 // UpdateConfig commits an operator edit and applies it without interruption
 // when possible. It is the sole owner of the persist/apply/restart protocol.
 func (m *Manager) UpdateConfig(ctx context.Context, id string, requested Config) (UpdateResult, error) {
-	m.operationMu.Lock()
-	defer m.operationMu.Unlock()
+	defer m.lockOperation(id)()
 
 	store, err := m.storeForOperation()
 	if err != nil {
@@ -183,8 +181,7 @@ func (m *Manager) UpdateConfig(ctx context.Context, id string, requested Config)
 
 // Create persists and starts a new channel as one lifecycle operation.
 func (m *Manager) Create(ctx context.Context, id string, cfg Config) error {
-	m.operationMu.Lock()
-	defer m.operationMu.Unlock()
+	defer m.lockOperation(id)()
 	store, err := m.storeForOperation()
 	if err != nil {
 		return err
@@ -204,8 +201,7 @@ func (m *Manager) Create(ctx context.Context, id string, cfg Config) error {
 // Restart stops and starts a channel from the configuration current at the
 // end of Stop. That read includes any VOD transition Stop had to join.
 func (m *Manager) Restart(ctx context.Context, id string) error {
-	m.operationMu.Lock()
-	defer m.operationMu.Unlock()
+	defer m.lockOperation(id)()
 	store, err := m.storeForOperation()
 	if err != nil {
 		return err
@@ -227,8 +223,7 @@ func (m *Manager) Restart(ctx context.Context, id string) error {
 // Delete stops a channel before removing its configuration. Segment data is
 // intentionally left in place.
 func (m *Manager) Delete(id string) error {
-	m.operationMu.Lock()
-	defer m.operationMu.Unlock()
+	defer m.lockOperation(id)()
 	store, err := m.storeForOperation()
 	if err != nil {
 		return err

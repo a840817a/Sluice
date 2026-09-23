@@ -212,13 +212,19 @@ func (rt *Runtime) ParsedMPDBytes() []byte {
 // Manager starts and stops channels at runtime.
 type Manager struct {
 	mu sync.RWMutex
-	// operationMu serializes lifecycle writes. It is separate from mu so Get
-	// remains available while Stop joins goroutines during an admin operation.
-	operationMu sync.Mutex
-	gwCfg       gocfg.Config // gateway-level config (data dir, worker counts, etc.)
-	runtimes    map[string]*Runtime
-	store       *Store            // optional; when set, VOD state is persisted on transition
-	onVODReady  func(rt *Runtime) // optional; called after any successful VOD transition
+	// operationGate admits ordinary single-channel lifecycle operations. StopAll
+	// takes it exclusively so shutdown neither misses a start in progress nor
+	// permits a new one while it is draining the runtimes it detached.
+	operationGate sync.RWMutex
+	// operationLocks serializes lifecycle operations for one channel without
+	// making an unrelated channel wait for a slow Stop callback. Entries are
+	// removed after their last holder or waiter leaves.
+	operationLocksMu sync.Mutex
+	operationLocks   map[string]*channelOperationLock
+	gwCfg            gocfg.Config // gateway-level config (data dir, worker counts, etc.)
+	runtimes         map[string]*Runtime
+	store            *Store            // optional; when set, VOD state is persisted on transition
+	onVODReady       func(rt *Runtime) // optional; called after any successful VOD transition
 	// suppressVOD carries the "do not auto-transition" mark across the restart
 	// that RestoreToLive performs. It cannot live on the Runtime because that
 	// restart builds a new one; Start consumes the entry and clears it.
@@ -228,9 +234,10 @@ type Manager struct {
 // NewManager creates a Manager. gwCfg supplies gateway-level defaults.
 func NewManager(gwCfg gocfg.Config) *Manager {
 	return &Manager{
-		gwCfg:       gwCfg,
-		runtimes:    make(map[string]*Runtime),
-		suppressVOD: make(map[string]bool),
+		gwCfg:          gwCfg,
+		runtimes:       make(map[string]*Runtime),
+		suppressVOD:    make(map[string]bool),
+		operationLocks: make(map[string]*channelOperationLock),
 	}
 }
 
@@ -269,19 +276,18 @@ func (m *Manager) SetOnVODReady(fn func(rt *Runtime)) {
 // ingest starts, and a VOD channel returns before any ingest goroutine is
 // launched at all. What each piece is made of lives in newIngestPipeline.
 func (m *Manager) Start(parentCtx context.Context, id string, cfg Config) (*Runtime, error) {
-	m.operationMu.Lock()
-	defer m.operationMu.Unlock()
+	defer m.lockOperation(id)()
 	return m.start(parentCtx, id, cfg)
 }
 
-// start is Start with operationMu already held.
+// start is Start with id's operation lock already held.
 func (m *Manager) start(parentCtx context.Context, id string, cfg Config) (*Runtime, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	m.mu.RLock()
 	if rt, ok := m.runtimes[id]; ok {
+		m.mu.RUnlock()
 		return rt, nil // already running
 	}
+	m.mu.RUnlock()
 
 	lifecycleCtx, cancel := context.WithCancel(parentCtx)
 	sourceCtx, sourceCancel := context.WithCancel(lifecycleCtx)
@@ -308,29 +314,33 @@ func (m *Manager) start(parentCtx context.Context, id string, cfg Config) (*Runt
 		vodDone:      make(chan struct{}),
 	}
 	rt.setConfig(cfg)
+	if cfg.IsVOD {
+		m.restoreVODState(rt, id)
+	}
 
 	// Consume the mark left by RestoreToLive. The baseline is the same number
 	// newIngestPipeline seeded into progress, so "stored has grown past it"
 	// means a segment arrived during this run and not before it.
+	m.mu.Lock()
 	if m.suppressVOD[id] {
 		delete(m.suppressVOD, id)
 		rt.vodSuppressed.Store(true)
 		rt.storedBaseline.Store(storedSegments(pl.index))
 	}
-
-	if cfg.IsVOD {
-		m.restoreVODState(rt, id)
-	}
-
 	m.runtimes[id] = rt
 
 	// VOD channels are fully served from disk; no ingest goroutines needed.
 	if cfg.IsVOD {
+		m.mu.Unlock()
 		slog.Info("channel started", "id", id)
 		return rt, nil
 	}
 
+	// Count and launch while the runtime is published under m.mu. Stop removes
+	// it under the same lock before calling Wait, so it cannot observe a zero
+	// WaitGroup between publication and this Add.
 	m.launchIngest(sourceCtx, poolCtx, lifecycleCtx, rt, cfg, pl)
+	m.mu.Unlock()
 
 	slog.Info("channel started", "id", id)
 	return rt, nil
@@ -766,12 +776,11 @@ func (m *Manager) publishVODTransition(rt *Runtime, finalMPD *imdp.ParsedMPD) {
 // The runtime is removed from the map first, so nothing new can find it while it
 // is winding down.
 func (m *Manager) Stop(id string) error {
-	m.operationMu.Lock()
-	defer m.operationMu.Unlock()
+	defer m.lockOperation(id)()
 	return m.stop(id)
 }
 
-// stop is Stop with operationMu already held.
+// stop is Stop with id's operation lock already held.
 func (m *Manager) stop(id string) error {
 	m.mu.Lock()
 	rt, ok := m.runtimes[id]
@@ -802,8 +811,8 @@ func (m *Manager) Get(id string) *Runtime {
 // then cancel and wait. Cancelling every channel before waiting on any of them
 // makes shutdown take as long as the slowest channel rather than their sum.
 func (m *Manager) StopAll() {
-	m.operationMu.Lock()
-	defer m.operationMu.Unlock()
+	m.operationGate.Lock()
+	defer m.operationGate.Unlock()
 	m.mu.Lock()
 	stopping := make(map[string]*Runtime, len(m.runtimes))
 	for id, rt := range m.runtimes {
