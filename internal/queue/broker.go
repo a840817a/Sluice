@@ -94,10 +94,12 @@ func (b *Broker) PushPreserving(ctx context.Context, t *SegmentTask) bool {
 		key := t.Key()
 		if _, ok := b.seen[key]; ok {
 			// Upgrade the already queued copy when a finite source rediscovers
-			// work previously admitted as live.
+			// work previously admitted as live. The finite source also owns the
+			// deadline policy: its usual zero deadline clears a stale live
+			// deadline, while an explicit finite deadline remains meaningful.
 			for _, queued := range b.pq {
 				if queued.Key() == key {
-					queued.preserve = true
+					promotePreserved(queued, t)
 					break
 				}
 			}
@@ -252,13 +254,21 @@ func (b *Broker) Requeue(t *SegmentTask, maxRetries int, backoff time.Duration) 
 	} else {
 		for _, queued := range b.pq {
 			if queued.Key() == t.Key() {
-				queued.preserve = true
+				promotePreserved(queued, t)
 				break
 			}
 		}
 	}
 	b.mu.Unlock()
 	return true
+}
+
+// promotePreserved makes queued protected by a finite source and transfers
+// that source's deadline policy. A zero deadline is intentional for ordinary
+// finite work: it must replace any stale live deadline already on queued.
+func promotePreserved(queued, source *SegmentTask) {
+	queued.preserve = true
+	queued.Deadline = source.Deadline
 }
 
 // ── heap implementation ──────────────────────────────────────────────────────

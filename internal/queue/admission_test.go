@@ -215,6 +215,74 @@ func TestPreservingAdmissionPromotesQueuedDuplicate(t *testing.T) {
 	broker.Release()
 }
 
+func TestPreservingAdmissionPromotionTransfersDeadlinePolicy(t *testing.T) {
+	t.Run("finite source clears stale live deadline", func(t *testing.T) {
+		broker := NewBroker(1)
+		live := makeTask(1, 9)
+		live.Deadline = time.Now().Add(time.Hour)
+		broker.Push(live)
+
+		// The broker stores this pointer, so making its old live deadline
+		// expired is deterministic and does not require waiting for a clock.
+		live.Deadline = time.Now().Add(-time.Second)
+		finite := makeTask(1, 9) // zero is the normal finite-source deadline
+		if !broker.PushPreserving(context.Background(), finite) {
+			t.Fatal("finite duplicate was not admitted")
+		}
+		if !live.Deadline.IsZero() {
+			t.Fatal("finite source did not clear the stale live deadline")
+		}
+		if broker.Pop() != live || broker.Dropped() != 0 {
+			t.Fatal("promoted finite task was dropped by its old live deadline")
+		}
+		broker.Release()
+	})
+
+	t.Run("explicit finite expiry remains effective", func(t *testing.T) {
+		broker := NewBroker(1)
+		live := makeTask(1, 9)
+		live.Deadline = time.Now().Add(time.Hour)
+		broker.Push(live)
+		finite := makeTask(1, 9)
+		finite.Deadline = time.Now().Add(-time.Second)
+		if !broker.PushPreserving(context.Background(), finite) {
+			t.Fatal("finite duplicate was not admitted")
+		}
+		if broker.Pop() != nil || broker.Dropped() != 1 {
+			t.Fatal("explicit finite expiry was lost during promotion")
+		}
+	})
+}
+
+func TestPreservedRequeueCollisionTransfersDeadlinePolicy(t *testing.T) {
+	broker := NewBroker(1)
+	finite := makeTask(1, 9)
+	if !broker.PushPreserving(context.Background(), finite) {
+		t.Fatal("finite task was not admitted")
+	}
+	if broker.Pop() != finite {
+		t.Fatal("could not fetch finite task")
+	}
+
+	live := makeTask(1, 9)
+	live.Deadline = time.Now().Add(time.Hour)
+	broker.Push(live)
+	// As above, expire the live copy without relying on test scheduling.
+	live.Deadline = time.Now().Add(-time.Second)
+	if !broker.Requeue(finite, 1, 0) {
+		t.Fatal("finite retry was not requeued")
+	}
+	broker.Release()
+
+	if !live.preserve || !live.Deadline.IsZero() {
+		t.Fatal("requeue collision did not transfer finite deadline policy")
+	}
+	if broker.Pop() != live || broker.Dropped() != 0 {
+		t.Fatal("requeue collision left the queued live deadline in effect")
+	}
+	broker.Release()
+}
+
 func TestPreservingAdmissionStillDropsExpiredWork(t *testing.T) {
 	broker := NewBroker(1)
 	task := makeTask(1, 1)
