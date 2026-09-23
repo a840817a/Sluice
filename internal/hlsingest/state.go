@@ -2,6 +2,8 @@ package hlsingest
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -65,14 +67,12 @@ type persistedVariant struct {
 	Channels  string `json:"channels,omitempty"`
 }
 
-// saveState writes the current source description. Best-effort: failing to
-// persist only degrades restart recovery, never live serving.
-func (w *Watcher) saveState() {
-	if w.statePath == "" {
-		return
-	}
-
+// snapshotState takes an independent copy of the current source description.
+// The caller may serialize it after releasing w.mu, so polling never waits on
+// disk I/O.
+func (w *Watcher) snapshotState() sourceState {
 	w.mu.Lock()
+	defer w.mu.Unlock()
 	st := sourceState{
 		Version:             sourceStateVersion,
 		IndependentSegments: w.independentSegments,
@@ -98,16 +98,54 @@ func (w *Watcher) saveState() {
 	for id, uri := range w.keyURIs {
 		st.KeyURIs[id] = uri
 	}
-	w.mu.Unlock()
+	return st
+}
+
+// writeState snapshots and writes the current source description. durable is
+// reserved for lifecycle checkpoints; the normal watcher path remains
+// best-effort and need not wait for directory durability.
+func (w *Watcher) writeState(durable, requireDescription bool) error {
+	if w.statePath == "" {
+		return errors.New("HLS source state path is not configured")
+	}
+
+	st := w.snapshotState()
+	if requireDescription && len(st.Variants) == 0 {
+		return errors.New("HLS source description is unavailable")
+	}
 
 	data, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
-		slog.Warn("HLS source state marshal failed", "channel", w.channelID, "err", err)
-		return
+		return fmt.Errorf("marshal HLS source state: %w", err)
+	}
+	if durable {
+		if err := store.WriteDurable(w.statePath, data, 0o600); err != nil {
+			return fmt.Errorf("durably write HLS source state: %w", err)
+		}
+		return nil
 	}
 	if err := store.Write(w.statePath, data); err != nil {
+		return fmt.Errorf("write HLS source state: %w", err)
+	}
+	return nil
+}
+
+// saveState writes the current source description. Best-effort: failing to
+// persist only degrades restart recovery, never live serving.
+func (w *Watcher) saveState() {
+	if w.statePath == "" {
+		return
+	}
+	if err := w.writeState(false, false); err != nil {
 		slog.Warn("HLS source state write failed", "channel", w.channelID, "err", err)
 	}
+}
+
+// Checkpoint synchronously makes the current discovered source description
+// durable. A VOD transition cannot recover after restart without at least one
+// discovered poll target and a configured state file.
+func (w *Watcher) Checkpoint() error {
+	return w.writeState(true, true)
 }
 
 // loadState restores a previously discovered source description so playlists

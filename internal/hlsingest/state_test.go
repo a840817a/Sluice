@@ -186,3 +186,46 @@ func TestSourceStateMissingAndCorruptFile(t *testing.T) {
 		t.Errorf("got %d variants from a corrupt file", len(w.variants))
 	}
 }
+
+func TestCheckpointWritesDiscoveredSourceState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hls-source.json")
+	w := stateWatcher(t, path)
+	w.variants = []variant{{
+		Variant: hlsdesc.Variant{RepID: "v0", Bandwidth: 1234},
+		url:     "http://origin.example.com/v0.m3u8",
+		asID:    hlsASID,
+	}}
+	w.keyURIs = map[string]string{"key-1": "https://keys.example.com/1"}
+
+	if err := w.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read checkpoint: %v", err)
+	}
+	var got sourceState
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("decode checkpoint: %v", err)
+	}
+	if len(got.Variants) != 1 || got.Variants[0].RepID != "v0" {
+		t.Errorf("checkpoint variants = %+v, want v0", got.Variants)
+	}
+	if got.KeyURIs["key-1"] != "https://keys.example.com/1" {
+		t.Errorf("checkpoint key URIs = %v", got.KeyURIs)
+	}
+}
+
+func TestCheckpointRequiresSourceDescriptionAndPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hls-source.json")
+	if err := stateWatcher(t, path).Checkpoint(); err == nil {
+		t.Error("Checkpoint without discovered variants succeeded")
+	}
+
+	w := stateWatcher(t, "")
+	w.variants = []variant{{Variant: hlsdesc.Variant{RepID: "v0"}}}
+	if err := w.Checkpoint(); err == nil {
+		t.Error("Checkpoint without a state path succeeded")
+	}
+}
