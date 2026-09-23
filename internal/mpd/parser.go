@@ -66,9 +66,15 @@ type ParsedAdaptationSet struct {
 	BaseURL            string   // primary <BaseURL>
 	AltBaseURLs        []string // fallback <BaseURL> elements (index 1+)
 	ContentProtections []gompeg.Descriptor
-	// RawCPs holds the verbatim XML string for each ContentProtection element,
-	// including namespace-prefixed attributes and children that encoding/xml drops.
+	// RawCPs holds the XML of each ContentProtection element, including the
+	// namespace-prefixed attributes and children that encoding/xml drops.
 	// Indexed in the same order as ContentProtections.
+	//
+	// It is re-serialized, not verbatim: prefixes do not survive, so
+	// cenc:default_KID comes back as xmlns:_="urn:mpeg:cenc:2013" _:default_KID
+	// and cenc:pssh as <pssh xmlns="urn:mpeg:cenc:2013">. That is
+	// namespace-equivalent, but it breaks consumers that match the literal
+	// cenc: prefix.
 	RawCPs                   []string
 	ParsedContentProtections []ParsedContentProtection
 	Representations          []*ParsedRepresentation

@@ -26,6 +26,9 @@ const (
 )
 
 // Config holds the per-channel configuration stored in channels.json.
+//
+// Its JSON tags are also the admin API's request and response format, so a
+// renamed or retagged field breaks both stored configs and API clients.
 type Config struct {
 	Title string `json:"title,omitempty"`
 	// SourceType selects the upstream protocol: "dash" (or empty) or "hls".

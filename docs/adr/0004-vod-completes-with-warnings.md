@@ -1,0 +1,3 @@
+# The VOD transition completes with warnings when an artifact fails
+
+When a required artifact of the VOD transition fails to be written (a key checkpoint, `manifest.mpd`, a sidecar record for one segment), the channel still becomes VOD and the failure is reported in `vod_warnings`, aggregated per directory. Only a failed rebuild of the VOD index from disk puts the channel in VOD failed, which can be retried. We chose this over failing the whole transition because a single missing segment record or an unreachable key server would otherwise make an otherwise playable asset unavailable, with nothing an operator could do but restart.

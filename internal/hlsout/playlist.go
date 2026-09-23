@@ -4,6 +4,11 @@
 // gateway currently holds, it produces the master and media playlists that
 // point clients back at the gateway's own segment endpoints. It never touches
 // segment bytes — HLS sources are served through untouched.
+//
+// It imports store and hlskey on purpose: taking segment file extensions from
+// store and key ids from hlskey.KeyID, the same code that writes the files and
+// serves the keys, is what keeps a playlist from advertising a segment URL or
+// key id that the gateway would not answer.
 package hlsout
 
 import (

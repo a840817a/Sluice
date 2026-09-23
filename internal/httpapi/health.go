@@ -91,6 +91,11 @@ func (s *Server) handleChannelHealth(w http.ResponseWriter, r *http.Request) {
 		// The index that describes what the channel can actually serve: after a
 		// VOD transition that is the full-history index, not the live window the
 		// ring still holds.
+		//
+		// The walk is written out by hand rather than with ForEachRep because
+		// ForEachRep never yields an AdaptationSet that has no representations,
+		// and such a set is reachable (index/rebuilder.go creates it before
+		// reading its directory). Health must still report it, as an empty map.
 		ci := sv.Index
 		ci.Mu().RLock()
 		for periodID, ps := range ci.Periods {
