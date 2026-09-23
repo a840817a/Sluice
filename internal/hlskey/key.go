@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/a840817a/sluice/internal/fetch"
+	"github.com/a840817a/sluice/internal/store"
 )
 
 // KeyLength is the size of an HLS AES-128 content key.
@@ -64,9 +65,13 @@ type Cache struct {
 
 	mu      sync.Mutex
 	entries map[string]*entry
-	// stored mirrors the on-disk key file (uri → hex key) so persisting a new
-	// key is a single whole-file rewrite rather than a read-modify-write.
+	// stored is the desired on-disk key file (uri → hex key). It is retained
+	// after a best-effort write failure so a required checkpoint can retry it.
 	stored map[string]string
+	// persistMu serializes whole-file snapshots and writes. Without it, two
+	// concurrent persists can each write an older snapshot after the other has
+	// included a newer key, dropping that key from disk.
+	persistMu sync.Mutex
 }
 
 // entry is one in-flight or completed key fetch.
@@ -127,7 +132,7 @@ func (c *Cache) Get(ctx context.Context, uri string) ([]byte, error) {
 		delete(c.entries, uri)
 		c.mu.Unlock()
 	} else {
-		c.persist(uri, key)
+		c.persist()
 	}
 	return key, err
 }
@@ -243,58 +248,100 @@ func (c *Cache) loadStore() {
 	}
 }
 
+// Checkpoint fetches every required key and synchronously writes every
+// completed successful key to disk. It is used when a VOD transition needs a
+// restart-safe key proxy, rather than the best-effort persistence used during
+// live ingest.
+func (c *Cache) Checkpoint(ctx context.Context, requiredURIs []string) error {
+	if len(requiredURIs) == 0 {
+		return nil
+	}
+	if c.storePath == "" {
+		return errors.New("HLS key store path is not configured")
+	}
+	for _, uri := range requiredURIs {
+		if _, err := c.Get(ctx, uri); err != nil {
+			return fmt.Errorf("fetch required HLS key %q: %w", uri, err)
+		}
+	}
+	if err := c.writeStore(true); err != nil {
+		return fmt.Errorf("durably write HLS key store: %w", err)
+	}
+	return nil
+}
+
 // persist records a fetched key in the on-disk store. Best-effort: a write
-// failure only costs restart recovery, not live serving. The key material is
-// written 0600 since it can decrypt the co-located segments.
-func (c *Cache) persist(uri string, key []byte) {
+// failure only costs restart recovery, not live serving. It runs on the path
+// of a player's first key request, so it does not fsync; Checkpoint writes the
+// durable copy, retrying every completed key, including one whose persist failed.
+func (c *Cache) persist() {
 	if c.storePath == "" {
 		return
 	}
+	_ = c.writeStore(false)
+}
+
+// writeStore serializes the current completed keys and writes a whole-file
+// snapshot, durably (file and directory fsync) when durable is set. persistMu
+// covers both snapshot and write so an older snapshot can never rename over a
+// newer one.
+func (c *Cache) writeStore(durable bool) error {
+	c.persistMu.Lock()
+	defer c.persistMu.Unlock()
+
 	c.mu.Lock()
-	if c.stored[uri] == hex.EncodeToString(key) {
-		c.mu.Unlock()
-		return // already persisted
+	snapshot := make(map[string]string, len(c.stored)+len(c.entries))
+	for uri, hexKey := range c.stored {
+		snapshot[uri] = hexKey
 	}
-	c.stored[uri] = hex.EncodeToString(key)
-	snapshot := make(map[string]string, len(c.stored))
-	for k, v := range c.stored {
-		snapshot[k] = v
+	for uri, e := range c.entries {
+		select {
+		case <-e.done:
+			if e.err == nil && len(e.key) == KeyLength {
+				snapshot[uri] = hex.EncodeToString(e.key)
+			}
+		default:
+		}
+	}
+	for uri, hexKey := range snapshot {
+		c.stored[uri] = hexKey
 	}
 	c.mu.Unlock()
 
 	data, err := json.Marshal(snapshot)
 	if err != nil {
-		return
+		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(c.storePath), 0o755); err != nil {
-		return
+	if durable {
+		return store.WriteDurable(c.storePath, data, 0o600)
 	}
-	// Write atomically so a crash cannot leave a half-written key file. The temp
-	// file gets a unique name: warmKey runs one goroutine per key, so two
-	// persists overlap routinely, and a shared name would let them write over
-	// each other's bytes between write and rename.
-	tmp, err := os.CreateTemp(filepath.Dir(c.storePath), filepath.Base(c.storePath)+".*.tmp")
+	return writeAtomic(c.storePath, data)
+}
+
+// writeAtomic replaces path without fsync. The key file must never be group-
+// or world-readable, so the temp file is made 0600 explicitly before rename.
+func writeAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
 	if err != nil {
-		return
+		return fmt.Errorf("create temp: %w", err)
 	}
-	tmpName := tmp.Name()
-	// The key file must never be group- or world-readable, and CreateTemp makes
-	// it 0600 already; set it explicitly so the guarantee is local and obvious.
+	defer os.Remove(tmp.Name())
+	defer tmp.Close()
 	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return
+		return fmt.Errorf("chmod temp: %w", err)
 	}
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return
+		return fmt.Errorf("write temp: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return
+		return fmt.Errorf("close temp: %w", err)
 	}
-	if err := os.Rename(tmpName, c.storePath); err != nil {
-		os.Remove(tmpName)
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return fmt.Errorf("rename %s → %s: %w", tmp.Name(), path, err)
 	}
+	return nil
 }

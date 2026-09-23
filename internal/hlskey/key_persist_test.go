@@ -2,10 +2,12 @@ package hlskey
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -128,5 +130,84 @@ func TestPersistedStoreAccumulatesMultipleKeys(t *testing.T) {
 		if _, err := c2.Get(context.Background(), srv.URL+name); err != nil {
 			t.Errorf("key %s not persisted: %v", name, err)
 		}
+	}
+}
+
+func TestCheckpointFetchesRequiredKeysAndWritesAllSuccessfulKeys(t *testing.T) {
+	dir := t.TempDir()
+	blockedParent := filepath.Join(dir, "blocked")
+	if err := os.WriteFile(blockedParent, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(testKey())
+	}))
+	defer srv.Close()
+
+	uri := srv.URL + "/key.bin"
+	// The live, best-effort persist fails because its parent is a file. The
+	// successful in-memory entry must still be captured by the later required
+	// checkpoint after its destination is fixed.
+	c := NewCache(nil, nil, filepath.Join(blockedParent, "keys.json"))
+	if _, err := c.Get(context.Background(), uri); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	c.storePath = filepath.Join(dir, "keys.json")
+	if err := c.Checkpoint(context.Background(), []string{uri}); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	data, err := os.ReadFile(c.storePath)
+	if err != nil {
+		t.Fatalf("read key checkpoint: %v", err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("decode key checkpoint: %v", err)
+	}
+	if got[uri] == "" {
+		t.Errorf("checkpoint omitted successful in-memory key: %v", got)
+	}
+}
+
+func TestCheckpointRetriesFailedRequiredKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keys.json")
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&hits, 1) == 1 {
+			http.Error(w, "temporary failure", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write(testKey())
+	}))
+	defer srv.Close()
+
+	c := NewCache(nil, nil, path)
+	uri := srv.URL + "/key.bin"
+	if _, err := c.Get(context.Background(), uri); err == nil {
+		t.Fatal("initial transient Get succeeded")
+	}
+	if err := c.Checkpoint(context.Background(), []string{uri}); err != nil {
+		t.Fatalf("Checkpoint after transient failure: %v", err)
+	}
+	if hits := atomic.LoadInt32(&hits); hits != 2 {
+		t.Errorf("key server hits = %d, want 2", hits)
+	}
+}
+
+func TestCheckpointRequiresKeyStoreOnlyWhenKeysAreRequired(t *testing.T) {
+	c := NewCache(nil, nil, "")
+	if err := c.Checkpoint(context.Background(), nil); err != nil {
+		t.Fatalf("Checkpoint with no required keys: %v", err)
+	}
+	// A reachable key server, so the missing store path is the only thing
+	// that can make the checkpoint fail.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(testKey())
+	}))
+	defer srv.Close()
+	err := c.Checkpoint(context.Background(), []string{srv.URL + "/key.bin"})
+	if err == nil || !strings.Contains(err.Error(), "store path is not configured") {
+		t.Errorf("Checkpoint with a required key and no store path = %v, want the missing store path reported", err)
 	}
 }
