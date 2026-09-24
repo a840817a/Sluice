@@ -125,7 +125,7 @@ type TrackStats struct {
 // The index is the source of truth for which tracks exist, not the manifest: a
 // representation that has been dropped upstream still has segments on disk and
 // still serves, so it must remain visible. Manifest data only decorates.
-func buildTracks(rt *Runtime, ci *index.ChannelIndex) []TrackStats {
+func buildTracks(sv Serving, ci *index.ChannelIndex) []TrackStats {
 	var tracks []TrackStats
 	ci.ForEachRep(func(ref index.RepRef, rep *index.RepresentationState) {
 		p, c, e := rep.StatusCounts()
@@ -144,10 +144,10 @@ func buildTracks(rt *Runtime, ci *index.ChannelIndex) []TrackStats {
 		return nil
 	}
 
-	if rt.HLS != nil {
-		decorateHLSTracks(rt, tracks)
-	} else if p := rt.ParsedMPD(); p != nil {
-		decorateDASHTracks(p, tracks)
+	if sv.IsHLSSource {
+		decorateHLSTracks(sv.Presentation, tracks)
+	} else if sv.ParsedMPD != nil {
+		decorateDASHTracks(sv.ParsedMPD, tracks)
 	}
 
 	sortTracks(tracks)
@@ -157,17 +157,17 @@ func buildTracks(rt *Runtime, ci *index.ChannelIndex) []TrackStats {
 // decorateHLSTracks fills in codec, resolution and language from the discovered
 // HLS source description. RepIDs are unique per channel across variants and
 // renditions, so a single pass over each kind is enough.
-func decorateHLSTracks(rt *Runtime, tracks []TrackStats) {
+func decorateHLSTracks(p Presentation, tracks []TrackStats) {
 	variants := make(map[string]hlsdesc.Variant)
-	for _, v := range rt.HLS.Variants() {
+	for _, v := range p.Variants {
 		variants[v.RepID] = v
 	}
 	audio := make(map[string]hlsdesc.Rendition)
-	for _, a := range rt.HLS.Renditions() {
+	for _, a := range p.Renditions {
 		audio[a.RepID] = a
 	}
 	subs := make(map[string]hlsdesc.Subtitle)
-	for _, s := range rt.HLS.Subtitles() {
+	for _, s := range p.Subtitles {
 		subs[s.RepID] = s
 	}
 

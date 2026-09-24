@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/a840817a/sluice/internal/hlsdesc"
 	"github.com/a840817a/sluice/internal/index"
 	imdp "github.com/a840817a/sluice/internal/mpd"
 )
@@ -49,8 +50,8 @@ func synthOpts() HLSSynthOptions {
 	}
 }
 
-func testVariants() []HLSVariant {
-	return []HLSVariant{
+func testVariants() []hlsdesc.Variant {
+	return []hlsdesc.Variant{
 		{RepID: "v0", Bandwidth: 1280000, Codecs: "avc1.4d401f,mp4a.40.2", Width: 1280, Height: 720},
 		{RepID: "v1", Bandwidth: 640000, Codecs: "avc1.4d401e,mp4a.40.2", Width: 640, Height: 360},
 	}
@@ -229,11 +230,11 @@ func TestSynthesizeHLSMPDDemuxedAudio(t *testing.T) {
 	commitAudioAS(ci, "0", "a0", 2)
 
 	p := SynthesizeHLSMPD(
-		[]HLSVariant{{RepID: "v0", Bandwidth: 800000, Codecs: "avc1.42c01e,mp4a.40.2", Width: 640, Height: 360}},
+		[]hlsdesc.Variant{{RepID: "v0", Bandwidth: 800000, Codecs: "avc1.42c01e,mp4a.40.2", Width: 640, Height: 360}},
 		ci.Snapshot(),
 		HLSSynthOptions{
 			ASID: "0", MediaType: imdp.MediaVideo, MimeType: "video/mp4",
-			Audio: []HLSAudio{{RepID: "a0"}}, AudioASID: "1", VOD: true,
+			Audio: []hlsdesc.Rendition{{RepID: "a0"}}, AudioASID: "1", VOD: true,
 		},
 	)
 	if p == nil || len(p.Periods) != 1 {
@@ -263,7 +264,7 @@ func TestSynthesizeHLSMPDMuxedKeepsFullCodecs(t *testing.T) {
 	// No audio renditions: the (muxed) variant keeps its full CODECS.
 	ci := cmafIndex("0", []string{"v0"}, 1)
 	p := SynthesizeHLSMPD(
-		[]HLSVariant{{RepID: "v0", Bandwidth: 1, Codecs: "avc1.42c01e,mp4a.40.2"}},
+		[]hlsdesc.Variant{{RepID: "v0", Bandwidth: 1, Codecs: "avc1.42c01e,mp4a.40.2"}},
 		ci.Snapshot(), HLSSynthOptions{ASID: "0", MediaType: imdp.MediaVideo, MimeType: "video/mp4", VOD: true},
 	)
 	if n := len(p.Periods[0].AdaptationSets); n != 1 {

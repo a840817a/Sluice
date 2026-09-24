@@ -4,26 +4,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/a840817a/sluice/internal/hlsdesc"
 	"github.com/a840817a/sluice/internal/index"
 	imdp "github.com/a840817a/sluice/internal/mpd"
 )
-
-// HLSVariant describes one representation of an HLS source, as read from its
-// master playlist.
-type HLSVariant struct {
-	RepID     string
-	Bandwidth uint64
-	Codecs    string
-	Width     uint64
-	Height    uint64
-}
-
-// HLSAudio describes one demuxed audio representation to add to the synthesized
-// MPD as its own AdaptationSet.
-type HLSAudio struct {
-	RepID  string
-	Codecs string // e.g. "mp4a.40.2"; derived from the video CODECS when empty
-}
 
 // HLSSynthOptions controls MPD synthesis for an HLS source.
 type HLSSynthOptions struct {
@@ -35,7 +19,7 @@ type HLSSynthOptions struct {
 	MimeType string
 	// Audio, when non-empty, adds a separate audio AdaptationSet (demuxed
 	// source). AudioASID must match how the ingest side keyed the audio index.
-	Audio     []HLSAudio
+	Audio     []hlsdesc.Rendition
 	AudioASID string
 	// VOD renders a static presentation; otherwise dynamic.
 	VOD bool
@@ -64,7 +48,7 @@ type HLSSynthOptions struct {
 //
 // Returns nil when no variant has any published segment, since a presentation
 // with nothing in it is not worth serving.
-func SynthesizeHLSMPD(variants []HLSVariant, snap index.Snapshot, o HLSSynthOptions) *imdp.ParsedMPD {
+func SynthesizeHLSMPD(variants []hlsdesc.Variant, snap index.Snapshot, o HLSSynthOptions) *imdp.ParsedMPD {
 	if len(variants) == 0 {
 		return nil
 	}
@@ -110,8 +94,8 @@ func SynthesizeHLSMPD(variants []HLSVariant, snap index.Snapshot, o HLSSynthOpti
 				ID:        v.RepID,
 				Bandwidth: v.Bandwidth,
 				Codecs:    codecs,
-				Width:     v.Width,
-				Height:    v.Height,
+				Width:     uint64(v.Width),
+				Height:    uint64(v.Height),
 				MimeType:  o.MimeType,
 				// A SegmentTemplate carrying only the timescale is enough: the
 				// generator supplies its own media and init paths, and replaces
@@ -134,10 +118,9 @@ func SynthesizeHLSMPD(variants []HLSVariant, snap index.Snapshot, o HLSSynthOpti
 				if ts == 0 {
 					continue
 				}
-				codecs := a.Codecs
-				if codecs == "" {
-					codecs = audioCodecsFrom(variants)
-				}
+				// HLS names a demuxed audio track's codec only in the
+				// variants' CODECS, so it is taken from there.
+				codecs := audioCodecsFrom(variants)
 				aas.Representations = append(aas.Representations, &imdp.ParsedRepresentation{
 					ID:          a.RepID,
 					Codecs:      codecs,
@@ -183,7 +166,7 @@ func videoCodecs(codecs string) string {
 
 // audioCodecsFrom returns the audio codec found in the variants' CODECS, for an
 // audio rendition whose EXT-X-MEDIA carried no codec of its own.
-func audioCodecsFrom(variants []HLSVariant) string {
+func audioCodecsFrom(variants []hlsdesc.Variant) string {
 	for _, v := range variants {
 		if a := filterCodecs(v.Codecs, false); a != "" {
 			return a

@@ -1,6 +1,8 @@
 package channel
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -96,28 +98,28 @@ func TestServingCapabilities(t *testing.T) {
 		if sv.IsHLSSource {
 			t.Error("IsHLSSource = true for a channel with no HLS watcher")
 		}
-		if !sv.ServesDASH {
+		if !sv.Presentation.ServesDASH {
 			t.Error("ServesDASH = false for a DASH channel")
 		}
-		if sv.CanServeKeys {
-			t.Error("CanServeKeys = true without a key cache")
+		if _, err := rt.ResolveKey(context.Background(), "k"); !errors.Is(err, ErrNoKeyProxy) {
+			t.Errorf("ResolveKey = %v without a key cache, want ErrNoKeyProxy", err)
 		}
 	})
 
 	t.Run("mpeg-ts hls source cannot serve dash", func(t *testing.T) {
 		// A zero Watcher has not discovered fMP4 segments, which is exactly the
 		// MPEG-TS case: serving it as DASH would require remuxing.
-		rt := &Runtime{Index: index.NewChannelIndex(), HLS: &hlsingest.Watcher{}}
+		rt := &Runtime{Index: index.NewChannelIndex(), hls: &hlsingest.Watcher{}}
 		sv := rt.Serving()
 
 		if !sv.IsHLSSource {
 			t.Error("IsHLSSource = false with an HLS watcher attached")
 		}
-		if sv.ServesDASH {
+		if sv.Presentation.ServesDASH {
 			t.Error("ServesDASH = true for an MPEG-TS HLS channel")
 		}
-		if sv.CanServeKeys {
-			t.Error("CanServeKeys = true without a key cache")
+		if _, err := rt.ResolveKey(context.Background(), "k"); !errors.Is(err, ErrNoKeyProxy) {
+			t.Errorf("ResolveKey = %v without a key cache, want ErrNoKeyProxy", err)
 		}
 	})
 }

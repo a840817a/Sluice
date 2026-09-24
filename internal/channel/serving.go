@@ -38,15 +38,11 @@ type Serving struct {
 	// Config is the channel's configuration, copied by value.
 	Config Config
 	// IsHLSSource reports whether the channel ingests HLS. It reflects the
-	// runtime that was built, not the configuration that asked for it, so it is
-	// what a caller deciding "may I touch rt.HLS" needs.
+	// runtime that was built, not the configuration that asked for it.
 	IsHLSSource bool
-	// ServesDASH reports whether the channel can produce a DASH manifest.
-	ServesDASH bool
-	// CanServeKeys reports whether an AES-128 key cache exists to broker from.
-	// Whether it *should* remains a policy question for the caller: a
-	// decrypt-on-ingest channel stores cleartext and must still be refused.
-	CanServeKeys bool
+	// Presentation is what the channel offers to players: its tracks, and
+	// whether it can be served as HLS and as DASH.
+	Presentation Presentation
 	// FinalDuration is the mediaPresentationDuration the upstream announced in
 	// its final MPD, or 0 if it announced none.
 	FinalDuration time.Duration
@@ -87,15 +83,15 @@ func (rt *Runtime) Serving() Serving {
 		}
 	}
 
+	parsed := rt.ParsedMPD()
 	return Serving{
 		Mode:              mode,
 		Index:             ci,
 		Config:            rt.Config(),
 		IsHLSSource:       rt.IsHLSSource(),
-		ServesDASH:        rt.ServesDASH(),
-		CanServeKeys:      rt.CanServeKeys(),
+		Presentation:      rt.presentation(parsed),
 		FinalDuration:     rt.FinalDuration(),
 		StaticIngestStart: rt.StaticIngestStartTime(),
-		ParsedMPD:         rt.ParsedMPD(),
+		ParsedMPD:         parsed,
 	}
 }

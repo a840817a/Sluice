@@ -30,8 +30,8 @@ func registerRuntime(t *testing.T, m *Manager, id string, mode ChannelMode) *Run
 		vodDone:  make(chan struct{}),
 		ingest:   &fakeIngest{},
 	}
-	rt.Watcher = &dashingest.Watcher{}
-	rt.Source = dashSource{rt.Watcher}
+	rt.watcher = &dashingest.Watcher{}
+	rt.Source = dashSource{rt.watcher}
 	seedVODSource(t, rt)
 	rt.setConfig(Config{})
 	driveMode(t, rt, mode)
@@ -164,5 +164,5 @@ func seedVODSource(t *testing.T, rt *Runtime) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rt.Watcher.SetParsedMPD(parsed, raw)
+	rt.watcher.SetParsedMPD(parsed, raw)
 }

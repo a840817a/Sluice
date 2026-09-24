@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"log/slog"
 	"math"
 	"net/http"
@@ -30,22 +31,22 @@ func (s *Server) handleMasterPlaylist(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "channel not found or not running", http.StatusNotFound)
 		return
 	}
-	view, ok := s.hlsViewFor(rt, rt.Serving())
-	if !ok {
+	pr := rt.Serving().Presentation
+	if !pr.ServesHLS {
 		http.Error(w, "channel cannot be served as HLS (encrypted or unsupported)", http.StatusNotFound)
 		return
 	}
-	if !view.ready {
+	if !pr.Ready {
 		http.Error(w, "playlist not yet available", http.StatusServiceUnavailable)
 		return
 	}
 
-	out := hlsout.Master(view.variants, hlsout.MasterOptions{
+	out := hlsout.Master(pr.Variants, hlsout.MasterOptions{
 		GatewayBaseURL:      s.cfg.Server.BaseURL,
 		ChannelID:           channelID,
-		IndependentSegments: view.independentSegments,
-		Renditions:          view.renditions,
-		Subtitles:           view.subtitles,
+		IndependentSegments: pr.IndependentSegments,
+		Renditions:          pr.Renditions,
+		Subtitles:           pr.Subtitles,
 	})
 
 	w.Header().Set("Content-Type", playlistContentType)
@@ -68,12 +69,11 @@ func (s *Server) handleMediaPlaylist(w http.ResponseWriter, r *http.Request) {
 	// One read of the channel for the whole response: the index the segments
 	// come from and the VOD flag that describes them have to agree.
 	sv := rt.Serving()
-	view, ok := s.hlsViewFor(rt, sv)
-	if !ok {
+	if !sv.Presentation.ServesHLS {
 		http.Error(w, "channel cannot be served as HLS", http.StatusNotFound)
 		return
 	}
-	if !view.knownRep(repID) {
+	if !sv.Presentation.KnownRep(repID) {
 		http.NotFound(w, r)
 		return
 	}
@@ -114,30 +114,15 @@ func (s *Server) handleMediaPlaylist(w http.ResponseWriter, r *http.Request) {
 // synthesizeHLSManifest builds the stand-in DASH MPD for an fMP4 HLS channel,
 // or nil when nothing is published yet. HLS carries no MPD, so the structure
 // comes from the discovered variants and the timeline from the segment index.
-func (s *Server) synthesizeHLSManifest(rt *ch.Runtime, sv ch.Serving, snap index.Snapshot, isVOD bool, windowDepth time.Duration) *imdp.ParsedMPD {
-	variants := rt.HLS.Variants()
-	out := make([]manifest.HLSVariant, 0, len(variants))
-	for _, v := range variants {
-		out = append(out, manifest.HLSVariant{
-			RepID:     v.RepID,
-			Bandwidth: v.Bandwidth,
-			Codecs:    v.Codecs,
-			Width:     uint64(v.Width),
-			Height:    uint64(v.Height),
-		})
-	}
-	// Demuxed audio renditions become a separate audio AdaptationSet, so the
-	// DASH output carries audio too (not just the video track).
-	var audio []manifest.HLSAudio
-	for _, r := range rt.HLS.Renditions() {
-		audio = append(audio, manifest.HLSAudio{RepID: r.RepID})
-	}
-
-	return manifest.SynthesizeHLSMPD(out, snap, manifest.HLSSynthOptions{
+//
+// Demuxed audio renditions become a separate audio AdaptationSet, so the DASH
+// output carries audio too (not just the video track).
+func (s *Server) synthesizeHLSManifest(sv ch.Serving, snap index.Snapshot, isVOD bool, windowDepth time.Duration) *imdp.ParsedMPD {
+	return manifest.SynthesizeHLSMPD(sv.Presentation.Variants, snap, manifest.HLSSynthOptions{
 		ASID:      hlsingest.VideoASID,
 		MediaType: imdp.MediaVideo,
 		MimeType:  "video/mp4",
-		Audio:     audio,
+		Audio:     sv.Presentation.Renditions,
 		AudioASID: hlsingest.AudioASID,
 		VOD:       isVOD,
 		// A stable anchor for the live edge; unused for VOD.
@@ -200,26 +185,13 @@ func (s *Server) handleKeyProxy(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	sv := rt.Serving()
-	if !sv.CanServeKeys {
+	// ResolveKey decides whether this channel brokers keys at all and whether
+	// keyID is one it issued; both refusals look like an unknown key.
+	key, err := rt.ResolveKey(r.Context(), keyID)
+	if errors.Is(err, ch.ErrNoKeyProxy) || errors.Is(err, ch.ErrUnknownKey) {
 		http.NotFound(w, r)
 		return
 	}
-	// Decrypt-on-ingest channels republish in the clear; there is no key to hand
-	// out, and serving one would leak a credential for content we already
-	// stripped protection from.
-	if sv.Config.DecryptOnIngest() {
-		http.NotFound(w, r)
-		return
-	}
-
-	uri, ok := rt.HLS.KeyURIForID(keyID)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-
-	key, err := rt.Keys.Get(r.Context(), uri)
 	if err != nil {
 		slog.Warn("key proxy fetch failed", "channel", channelID, "err", err)
 		http.Error(w, "key unavailable", http.StatusBadGateway)

@@ -63,8 +63,8 @@ func (m *Manager) captureVODArtifacts(rt *Runtime, candidate *index.ChannelIndex
 		snapshot: candidate.Snapshot(),
 		rawMPD:   append([]byte(nil), rt.ParsedMPDBytes()...),
 	}
-	if rt.HLS != nil {
-		a.variants = rt.HLS.Variants()
+	if sv.IsHLSSource {
+		a.variants = sv.Presentation.Variants
 	}
 	return a, nil
 }
@@ -245,7 +245,7 @@ func (m *Manager) SavedVODManifestPath(channelID string) string {
 }
 
 func (m *Manager) restoreVODUpstreamMPD(rt *Runtime) {
-	if rt.Watcher == nil {
+	if rt.watcher == nil {
 		return
 	}
 	raw, err := os.ReadFile(m.vodArtifactPath(rt.ID, vodUpstreamFile))
@@ -258,5 +258,5 @@ func (m *Manager) restoreVODUpstreamMPD(rt *Runtime) {
 		slog.Warn("VOD restore: upstream MPD parse failed", "channel", rt.ID, "err", err)
 		return
 	}
-	rt.Watcher.SetParsedMPD(p, raw)
+	rt.watcher.SetParsedMPD(p, raw)
 }

@@ -23,12 +23,14 @@ import (
 type Runtime struct {
 	ID    string
 	Index *index.ChannelIndex
-	// Watcher is the DASH ingest watcher; nil for HLS channels.
-	Watcher *dashingest.Watcher
-	// HLS is the HLS ingest watcher; nil for DASH channels.
-	HLS *hlsingest.Watcher
-	// Keys caches AES-128 content keys for HLS channels; nil for DASH channels.
-	Keys *hlskey.Cache
+	// watcher is the DASH ingest watcher; nil for HLS channels.
+	watcher *dashingest.Watcher
+	// hls is the HLS ingest watcher; nil for DASH channels.
+	hls *hlsingest.Watcher
+	// keys caches AES-128 content keys for HLS channels; nil for DASH channels.
+	// Other packages reach what these three know through Source, Serving's
+	// Presentation and ResolveKey, never directly.
+	keys *hlskey.Cache
 	// Source is whichever of the two is actually driving ingestion.
 	Source Source
 	// Progress counts what this channel has ingested since it was last started.
@@ -150,34 +152,24 @@ func (rt *Runtime) autoVODAllowed() bool {
 // IsHLSSource reports whether this channel ingests HLS.
 //
 // It reads the runtime that was actually built rather than the configuration
-// that asked for it, which is what callers deciding "can I call rt.HLS" need.
-func (rt *Runtime) IsHLSSource() bool { return rt.HLS != nil }
-
-// ServesDASH reports whether the channel can produce a DASH manifest. An HLS
-// source qualifies only when its segments are fMP4; MPEG-TS would need
-// remuxing, which this gateway deliberately does not do.
-func (rt *Runtime) ServesDASH() bool { return rt.HLS == nil || rt.HLS.IsFMP4() }
-
-// CanServeKeys reports whether the channel has an AES-128 key cache to broker
-// from. Whether it *should* is a separate policy question: decrypt-on-ingest
-// channels store cleartext and must still be refused by the caller.
-func (rt *Runtime) CanServeKeys() bool { return rt.HLS != nil && rt.Keys != nil }
+// that asked for it.
+func (rt *Runtime) IsHLSSource() bool { return rt.hls != nil }
 
 // ParsedMPD returns the most recently fetched upstream MPD, or nil for HLS
 // channels, which have no MPD at all.
 func (rt *Runtime) ParsedMPD() *imdp.ParsedMPD {
-	if rt.Watcher == nil {
+	if rt.watcher == nil {
 		return nil
 	}
-	return rt.Watcher.ParsedMPD()
+	return rt.watcher.ParsedMPD()
 }
 
 // ParsedMPDBytes returns the raw upstream MPD XML, or nil for HLS channels.
 func (rt *Runtime) ParsedMPDBytes() []byte {
-	if rt.Watcher == nil {
+	if rt.watcher == nil {
 		return nil
 	}
-	return rt.Watcher.ParsedMPDBytes()
+	return rt.watcher.ParsedMPDBytes()
 }
 
 // Manager starts and stops channels at runtime.
@@ -274,9 +266,9 @@ func (m *Manager) start(parentCtx context.Context, id string, cfg Config) (*Runt
 	rt := &Runtime{
 		ID:           id,
 		Index:        pl.index,
-		Watcher:      pl.watcher,
-		HLS:          pl.hls,
-		Keys:         pl.keys,
+		watcher:      pl.watcher,
+		hls:          pl.hls,
+		keys:         pl.keys,
 		Source:       pl.source,
 		Progress:     pl.progress,
 		Broker:       pl.broker,
@@ -731,7 +723,7 @@ func buildStatus(rt *Runtime) ChannelStatus {
 	}
 
 	s.Progress = buildProgress(rt)
-	s.Tracks = buildTracks(rt, ci)
+	s.Tracks = buildTracks(sv, ci)
 	if w := rt.vodWarnings.Load(); w != nil {
 		s.VODWarnings = *w
 	}

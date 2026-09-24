@@ -32,7 +32,7 @@ func startEmptyLiveHLSOrigin(t *testing.T) *httptest.Server {
 func waitForHLSDiscovery(t *testing.T, rt *ch.Runtime) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
-	for rt.HLS == nil || !rt.HLS.Ready() {
+	for !rt.Serving().Presentation.Ready {
 		if time.Now().After(deadline) {
 			t.Fatal("HLS source never completed discovery")
 		}
