@@ -45,7 +45,7 @@ func TestServingResolvesIndex(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			rt := &Runtime{ID: "c", Index: live}
-			rt.mode.Store(int32(tc.mode))
+			driveMode(t, rt, tc.mode)
 			if tc.vodIndex != nil {
 				rt.vodIndex.Store(tc.vodIndex)
 			}
@@ -73,7 +73,7 @@ func TestServingModePredicates(t *testing.T) {
 
 	for _, tc := range tests {
 		rt := &Runtime{Index: index.NewChannelIndex()}
-		rt.mode.Store(int32(tc.mode))
+		driveMode(t, rt, tc.mode)
 		sv := rt.Serving()
 
 		if sv.IsVOD() != tc.isVOD {
@@ -126,13 +126,12 @@ func TestServingCapabilities(t *testing.T) {
 // that changes when the channel does.
 func TestServingIsASnapshot(t *testing.T) {
 	rt := &Runtime{ID: "c", Index: index.NewChannelIndex()}
-	rt.mode.Store(int32(ModeLive))
 	rt.setConfig(Config{Title: "before"})
 	rt.setStaticIngestStart(time.Unix(100, 0))
 
 	sv := rt.Serving()
 
-	rt.mode.Store(int32(ModeVOD))
+	driveMode(t, rt, ModeVOD)
 	rt.setConfig(Config{Title: "after"})
 
 	if sv.Mode != ModeLive {

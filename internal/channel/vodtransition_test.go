@@ -241,8 +241,7 @@ func TestRestoreToLiveRejectsALiveChannel(t *testing.T) {
 func TestAutoVODSuppressionLiftsOnNewSegment(t *testing.T) {
 	rt := &Runtime{Progress: progress.New()}
 	rt.Progress.SeedStored(7)
-	rt.vodSuppressed.Store(true)
-	rt.storedBaseline.Store(7)
+	rt.modes.begin(ModeLive, true, 7)
 
 	if rt.autoVODAllowed() {
 		t.Fatal("auto-VOD is allowed while suppressed and nothing new has been stored")
@@ -253,7 +252,7 @@ func TestAutoVODSuppressionLiftsOnNewSegment(t *testing.T) {
 	if !rt.autoVODAllowed() {
 		t.Error("auto-VOD is still suppressed after a new segment was stored")
 	}
-	if rt.vodSuppressed.Load() {
+	if rt.modes.suppressed.Load() {
 		t.Error("the suppression flag was not cleared, so the check pays for itself forever")
 	}
 }

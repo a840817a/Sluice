@@ -110,7 +110,7 @@ func TestBuildStatusModeStrings(t *testing.T) {
 		{ModeStaticIngesting, "static_ingesting"},
 	} {
 		rt := &Runtime{ID: "ch1", Index: index.NewChannelIndex()}
-		rt.mode.Store(int32(tc.mode))
+		driveMode(t, rt, tc.mode)
 		if got := buildStatus(rt).Mode; got != tc.want {
 			t.Errorf("mode %d: got %q, want %q", tc.mode, got, tc.want)
 		}
@@ -138,12 +138,12 @@ func TestBuildStatusUsesVODIndexOnlyInVODMode(t *testing.T) {
 	}
 
 	// ModeStaticIngesting also reads the live index while segments download.
-	rt.mode.Store(int32(ModeStaticIngesting))
+	driveMode(t, rt, ModeStaticIngesting)
 	if p := byPeriod(buildStatus(rt))["p0"]; p.Published != 1 {
 		t.Errorf("static_ingesting published = %d, want 1 (from the live index)", p.Published)
 	}
 
-	rt.mode.Store(int32(ModeVOD))
+	driveMode(t, rt, ModeVOD)
 	if p := byPeriod(buildStatus(rt))["p0"]; p.Published != 5 {
 		t.Errorf("vod mode published = %d, want 5 (from the VOD index)", p.Published)
 	}
@@ -156,7 +156,7 @@ func TestBuildStatusVODModeWithoutVODIndex(t *testing.T) {
 	live.Period("p0").AS("0").Rep("v0", 8).RestorePublished(seg(1))
 
 	rt := &Runtime{ID: "ch1", Index: live}
-	rt.mode.Store(int32(ModeVOD))
+	driveMode(t, rt, ModeVOD)
 
 	if p := byPeriod(buildStatus(rt))["p0"]; p.Published != 1 {
 		t.Errorf("published = %d, want 1 (fallback to the live index)", p.Published)

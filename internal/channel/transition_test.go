@@ -32,7 +32,7 @@ func registerRuntime(t *testing.T, m *Manager, id string, mode ChannelMode) *Run
 	rt.Watcher = &dashingest.Watcher{}
 	seedVODSource(t, rt)
 	rt.setConfig(Config{})
-	rt.mode.Store(int32(mode))
+	driveMode(t, rt, mode)
 
 	m.mu.Lock()
 	m.runtimes[id] = rt
@@ -128,15 +128,14 @@ func TestTransitionToVODAcceptsLiveAndStaticIngesting(t *testing.T) {
 func TestTransitionToVODOverridesRestoreSuppression(t *testing.T) {
 	m := managerForTransition(t)
 	rt := registerRuntime(t, m, "c", ModeLive)
-	rt.vodSuppressed.Store(true)
-	rt.storedBaseline.Store(1000) // far above anything stored, so nothing lifts it
+	rt.modes.begin(ModeLive, true, 1000) // far above anything stored, so nothing lifts it
 
 	if err := m.TransitionToVOD("c"); err != nil {
 		t.Fatalf("TransitionToVOD: %v", err)
 	}
 	waitForMode(t, rt, ModeVOD, 5*time.Second)
 
-	if rt.vodSuppressed.Load() {
+	if rt.modes.suppressed.Load() {
 		t.Error("suppression survived an explicit operator transition")
 	}
 }

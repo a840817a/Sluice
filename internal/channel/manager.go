@@ -19,17 +19,6 @@ import (
 	"github.com/a840817a/sluice/internal/queue"
 )
 
-// ChannelMode is the lifecycle state of a running channel.
-type ChannelMode int32
-
-const (
-	ModeLive            ChannelMode = 0
-	ModeTransitioning   ChannelMode = 1
-	ModeVOD             ChannelMode = 2
-	ModeStaticIngesting ChannelMode = 3 // static MPD discovered; segments downloading
-	ModeVODFailed       ChannelMode = 4 // ingest stopped; the VOD transition failed and may be retried
-)
-
 // Runtime holds the live state for one running channel.
 type Runtime struct {
 	ID    string
@@ -74,9 +63,11 @@ type Runtime struct {
 	// Stop waits for the goroutines that can need this mutex.
 	configMu sync.Mutex
 	cfg      atomic.Pointer[Config]
-	mode     atomic.Int32 // ChannelMode
-	vodOnce  sync.Once
-	vodDone  chan struct{} // closed when VOD index is ready
+	// modes owns the Channel mode and the auto-VOD suppression; every change
+	// to either goes through it.
+	modes   channelModeMachine
+	vodOnce sync.Once
+	vodDone chan struct{} // closed when VOD index is ready
 	// vodWarnings lists the restart-safety steps that failed during the last
 	// VOD transition. They do not block completion, which is served from the
 	// in-memory index regardless; they tell an operator what a restart may lose.
@@ -84,22 +75,10 @@ type Runtime struct {
 
 	// These three are written by the watcher and VOD-transition goroutines while
 	// HTTP handlers read them concurrently, so they are atomics rather than
-	// plain fields — same reason as mode above.
+	// plain fields.
 	vodIndex          atomic.Pointer[index.ChannelIndex] // non-nil after a successful VOD transition
 	finalDuration     atomic.Int64                       // time.Duration: mediaPresentationDuration from finalMPD
 	staticIngestStart atomic.Pointer[time.Time]          // set when a static upstream is first detected
-
-	// vodSuppressed blocks the automatic VOD transition for a channel that was
-	// just restored to live. Without it the restore is futile: the upstream is
-	// normally still finished, so the source would complete cleanly again
-	// within seconds and put the channel straight back into VOD.
-	//
-	// storedBaseline is the stored-segment count at the moment of that restore.
-	// The suppression lifts as soon as the count exceeds it, which is exactly
-	// "the upstream produced something new" — Progress.AddStored only counts
-	// segments the index accepted as new.
-	vodSuppressed  atomic.Bool
-	storedBaseline atomic.Uint64
 }
 
 // Config returns the channel's current configuration.
@@ -122,7 +101,7 @@ func (rt *Runtime) setConfig(cfg Config) {
 }
 
 // Mode returns the current channel mode.
-func (rt *Runtime) Mode() ChannelMode { return ChannelMode(rt.mode.Load()) }
+func (rt *Runtime) Mode() ChannelMode { return rt.modes.Mode() }
 
 // VODIndex returns the full-history index built during the VOD transition, or
 // nil if the channel has not completed one.
@@ -165,20 +144,10 @@ func (rt *Runtime) setStaticIngestStart(t time.Time) { rt.staticIngestStart.Stor
 
 // autoVODAllowed reports whether a clean source completion may transition this
 // channel to VOD, lifting the suppression a restore installed once the upstream
-// has produced a segment this run.
-//
-// The check is by counter rather than by a callback on the processor because
-// AddStored is already the one place that means "a new segment was committed";
-// a second notification path would be a second thing to keep true.
+// has produced a segment this run. Progress.AddStored only counts segments the
+// index accepted as new, so its total growing is exactly "something new".
 func (rt *Runtime) autoVODAllowed() bool {
-	if !rt.vodSuppressed.Load() {
-		return true
-	}
-	if rt.Progress.Snapshot().SegmentsStored > rt.storedBaseline.Load() {
-		rt.vodSuppressed.Store(false)
-		return true
-	}
-	return false
+	return rt.modes.AutoAllowed(rt.Progress.Snapshot().SegmentsStored)
 }
 
 // IsHLSSource reports whether this channel ingests HLS.
@@ -284,6 +253,14 @@ func (m *Manager) start(parentCtx context.Context, id string, cfg Config) (*Runt
 	}
 	m.mu.RUnlock()
 
+	// Consume the mark left by RestoreToLive. Without it the restore is futile:
+	// the upstream is normally still finished, so the source would complete
+	// cleanly again within seconds and put the channel straight back into VOD.
+	m.mu.Lock()
+	suppress := m.suppressVOD[id]
+	delete(m.suppressVOD, id)
+	m.mu.Unlock()
+
 	lifecycleCtx, cancel := context.WithCancel(parentCtx)
 	sourceCtx, sourceCancel := context.WithCancel(lifecycleCtx)
 	poolCtx, poolCancel := context.WithCancel(lifecycleCtx)
@@ -309,19 +286,19 @@ func (m *Manager) start(parentCtx context.Context, id string, cfg Config) (*Runt
 		vodDone:      make(chan struct{}),
 	}
 	rt.setConfig(cfg)
+	// The baseline is the same number newIngestPipeline seeded into progress,
+	// so "stored has grown past it" means a segment arrived during this run and
+	// not before it.
+	initial := ModeLive
+	if cfg.IsVOD {
+		initial = ModeVOD
+	}
+	rt.modes.begin(initial, suppress, storedSegments(pl.index))
 	if cfg.IsVOD {
 		m.restoreVODState(rt, id)
 	}
 
-	// Consume the mark left by RestoreToLive. The baseline is the same number
-	// newIngestPipeline seeded into progress, so "stored has grown past it"
-	// means a segment arrived during this run and not before it.
 	m.mu.Lock()
-	if m.suppressVOD[id] {
-		delete(m.suppressVOD, id)
-		rt.vodSuppressed.Store(true)
-		rt.storedBaseline.Store(storedSegments(pl.index))
-	}
 	m.runtimes[id] = rt
 
 	// VOD channels are fully served from disk; no ingest goroutines needed.
@@ -342,10 +319,9 @@ func (m *Manager) start(parentCtx context.Context, id string, cfg Config) (*Runt
 }
 
 // restoreVODState brings a channel back up in VOD mode from persisted state,
-// without triggering a new transition.
+// without triggering a new transition. The runtime already starts in ModeVOD.
 func (m *Manager) restoreVODState(rt *Runtime, id string) {
 	rt.vodIndex.Store(rt.Index)
-	rt.mode.Store(int32(ModeVOD))
 	rt.vodOnce.Do(func() { close(rt.vodDone) })
 
 	// A restored VOD channel is complete by definition: nothing further will be
@@ -416,7 +392,7 @@ func (m *Manager) awaitStaticUpstream(ctx context.Context, rt *Runtime) {
 			if !staticIngestVisible(rt.upstreamIsFinishedAsset(), rt.autoVODAllowed()) {
 				continue
 			}
-			if rt.mode.CompareAndSwap(int32(ModeLive), int32(ModeStaticIngesting)) {
+			if _, ok := rt.modes.PromoteStatic(); ok {
 				rt.setStaticIngestStart(time.Now())
 				slog.Info("upstream is a finished asset, ingesting", "channel", rt.ID)
 			}
@@ -484,7 +460,11 @@ func (m *Manager) superviseSource(ctx context.Context, rt *Runtime, cfg Config, 
 				}
 				continue
 			}
-			if !cfg.IsVOD && (rt.mode.CompareAndSwap(int32(ModeLive), int32(ModeStaticIngesting)) || rt.Mode() == ModeStaticIngesting) {
+			if cfg.IsVOD {
+				return
+			}
+			// awaitStaticUpstream may have promoted the channel already.
+			if from, ok := rt.modes.PromoteStatic(); ok || from == ModeStaticIngesting {
 				if rt.StaticIngestStartTime().IsZero() {
 					rt.setStaticIngestStart(time.Now())
 				}
@@ -530,13 +510,12 @@ func (m *Manager) TransitionToVOD(id string) error {
 	}
 	// Claim before launching the goroutine. Besides making the operation's
 	// acceptance truthful, this is what makes a simultaneous clean source
-	// completion and a manual request have exactly one winner.
-	if !m.claimVODTransition(rt) &&
-		!rt.mode.CompareAndSwap(int32(ModeVODFailed), int32(ModeTransitioning)) {
-		return fmt.Errorf("channel %q is not in live or static-ingesting mode", id)
+	// completion and a manual request have exactly one winner. A manual claim
+	// also retries a failed transition and overrides a restore's suppression.
+	if from, ok := rt.modes.Claim(claimManual); !ok {
+		return fmt.Errorf("channel %q is not in live or static-ingesting mode (it is %s)", id, from)
 	}
-	// An explicit operator action overrides a restore's suppression.
-	rt.vodSuppressed.Store(false)
+	slog.Info("channel transitioning to VOD", "id", rt.ID, "trigger", "manual")
 	rt.wg.Add(1)
 	go func() { defer rt.wg.Done(); m.finalizeVODTransition(rt) }()
 	return nil
@@ -576,9 +555,13 @@ func (m *Manager) awaitPipelineDrain(rt *Runtime, broker *queue.Broker) bool {
 // automatic side of the manual/automatic race: a manual request can claim the
 // transition during this wait and thereby becomes the only one to run it.
 func (m *Manager) awaitStaticIngestComplete(rt *Runtime) {
-	if !m.awaitPipelineDrain(rt, rt.Broker) || !m.claimVODTransition(rt) {
+	if !m.awaitPipelineDrain(rt, rt.Broker) {
 		return
 	}
+	if _, ok := rt.modes.Claim(claimAuto); !ok {
+		return
+	}
+	slog.Info("channel transitioning to VOD", "id", rt.ID, "trigger", "auto")
 	m.finalizeVODTransition(rt)
 }
 
@@ -642,18 +625,6 @@ func logStaticIngestShortfall(rt *Runtime) {
 			"dropped", rt.Broker.Dropped(),
 		)
 	}
-}
-
-// claimVODTransition changes the visible lifecycle state before any waiting.
-// It is deliberately a separate operation because a manual request must be
-// rejected synchronously when automatic completion won the same race.
-func (m *Manager) claimVODTransition(rt *Runtime) bool {
-	if rt.mode.CompareAndSwap(int32(ModeLive), int32(ModeTransitioning)) ||
-		rt.mode.CompareAndSwap(int32(ModeStaticIngesting), int32(ModeTransitioning)) {
-		slog.Info("channel transitioning to VOD", "id", rt.ID)
-		return true
-	}
-	return false
 }
 
 // finalizeVODTransition turns a claimed transition into VOD. It first closes
@@ -723,7 +694,7 @@ func (m *Manager) publishVODTransition(rt *Runtime, finalMPD *imdp.ParsedMPD) {
 		// claiming live ingest or leaving a completed attempt "transitioning".
 		// The checkpoint's warnings may explain the failure, so keep them.
 		recordVODWarnings(rt, warnings)
-		rt.mode.Store(int32(ModeVODFailed))
+		rt.modes.Fail()
 		return
 	}
 
@@ -739,7 +710,7 @@ func (m *Manager) publishVODTransition(rt *Runtime, finalMPD *imdp.ParsedMPD) {
 		rt.configMu.Unlock()
 		slog.Error("VOD artifact capture failed", "channel", rt.ID, "err", err)
 		recordVODWarnings(rt, warnings)
-		rt.mode.Store(int32(ModeVODFailed))
+		rt.modes.Fail()
 		return
 	}
 	warnings = append(warnings, a.persistDASHManifests()...)
@@ -765,7 +736,7 @@ func (m *Manager) publishVODTransition(rt *Runtime, finalMPD *imdp.ParsedMPD) {
 	recordVODWarnings(rt, warnings)
 	rt.vodOnce.Do(func() {
 		rt.vodIndex.Store(vodCI)
-		rt.mode.Store(int32(ModeVOD))
+		rt.modes.Complete()
 		snap := rt.Progress.Snapshot()
 		if !snap.TotalKnown {
 			rt.Progress.SetExpectedTotal(snap.SegmentsStored)
@@ -961,22 +932,11 @@ func buildStatus(rt *Runtime) ChannelStatus {
 	// full-history numbers during a transition.
 	sv := rt.Serving()
 
-	modeStr := "live"
-	switch sv.Mode {
-	case ModeTransitioning:
-		modeStr = "transitioning"
-	case ModeVOD:
-		modeStr = "vod"
-	case ModeStaticIngesting:
-		modeStr = "static_ingesting"
-	case ModeVODFailed:
-		modeStr = "vod_failed"
-	}
 	s := ChannelStatus{
 		ID:      rt.ID,
 		MPDURL:  sv.Config.MPDURL,
 		Running: true,
-		Mode:    modeStr,
+		Mode:    sv.Mode.String(),
 		Source:  sourceStatus(rt),
 	}
 	ci := sv.Index

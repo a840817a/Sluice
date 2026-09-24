@@ -117,7 +117,7 @@ func completeVODWhenStopped(t *testing.T, m *Manager, rt *Runtime) {
 		// production VOD transition observes cancellation while stopping source and
 		// draining the pipeline; publication itself remains joinable by Stop so
 		// its store update is visible before Restart reads the configuration.
-		if m.claimVODTransition(rt) {
+		if _, ok := rt.modes.Claim(claimManual); ok {
 			m.publishVODTransition(rt, nil)
 		}
 	}()
