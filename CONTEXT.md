@@ -19,7 +19,7 @@ _Avoid_: Upstream, feed
 ## Timeline
 
 **Period**:
-A continuous stretch of a channel's timeline. A new one starts when the origin restarts its numbering.
+A continuous stretch of a channel's timeline. A new one starts when the origin restarts its numbering, including a restart that happened while the gateway was down; a restart of the gateway itself does not start one.
 _Avoid_: Epoch, discontinuity
 
 **Representation**:

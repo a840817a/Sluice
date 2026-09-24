@@ -15,6 +15,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
@@ -189,7 +190,25 @@ func NewWatcher(
 	// immediately after a restart, including for channels resumed in VOD mode
 	// that never run discovery again.
 	w.loadState()
+	w.periodEpoch = latestPeriodEpoch(ci)
 	return w
+}
+
+// latestPeriodEpoch returns the highest period epoch the index already holds,
+// or 0 for an empty index. A gateway restart is not a period boundary, so
+// ingest resumes in the period it was in when the gateway went down; starting
+// again at 0 would append new segments to the channel's first period.
+func latestPeriodEpoch(ci *index.ChannelIndex) int {
+	ci.Mu().RLock()
+	ids := ci.PeriodIDs()
+	ci.Mu().RUnlock()
+	latest := 0
+	for _, id := range ids {
+		if n, err := strconv.Atoi(id); err == nil && n > latest {
+			latest = n
+		}
+	}
+	return latest
 }
 
 // registerKey records an upstream key URI so the gateway's key proxy can later
@@ -526,10 +545,14 @@ type variantState struct {
 	seen bool
 	// epoch is the period epoch this state belongs to.
 	epoch int
+	// resumed marks state seeded from the index at startup that has not yet
+	// seen a playlist. lastMediaSequence is unknown until then, so an origin
+	// restart during the gateway's downtime is detected from segment numbers.
+	resumed bool
 }
 
 // newVariantState builds the initial polling state for a variant, seeding it
-// from any segments already in the index.
+// from the segments already in the index for the channel's current period.
 //
 // This mirrors how the DASH watcher seeds lastKnown from the index on restart:
 // without it, the first poll after a restart re-enqueues the entire current
@@ -538,29 +561,30 @@ type variantState struct {
 // playlist — which requires a strictly contiguous run — collapses to a single
 // segment. Seeding lastSeq and the PTS accumulator from the highest segment
 // already held makes a restart resume cleanly and fetch only genuinely new
-// segments.
+// segments. Earlier periods are ignored: their numbering is unrelated to the
+// current one's.
 func (w *Watcher) newVariantState(v variant) *variantState {
-	st := &variantState{}
+	w.mu.Lock()
+	st := &variantState{epoch: w.periodEpoch}
+	w.mu.Unlock()
 
 	var maxSeg uint64
 	var endPTS int64
 	found := false
 
-	w.ci.ForEachRep(func(ref index.RepRef, rep *index.RepresentationState) {
-		if ref.ASID != v.asID || ref.RepID != v.RepID {
-			return
-		}
+	if rep := w.ci.FindRep(fmt.Sprintf("%d", st.epoch), v.asID, v.RepID); rep != nil {
 		for _, s := range append(rep.Published(), rep.Committed()...) {
 			if !found || s.SegNo > maxSeg {
 				maxSeg, endPTS, found = s.SegNo, s.EndPTS, true
 			}
 		}
-	})
+	}
 
 	if found {
 		st.lastSeq = maxSeg
 		st.ptsAccum = endPTS
 		st.seen = true
+		st.resumed = true
 	}
 	return st
 }
@@ -658,15 +682,35 @@ func (w *Watcher) enqueueNew(ctx context.Context, v variant, st *variantState, m
 	// numbering against what is already indexed is not possible in general
 	// (segment N after the restart is unrelated to segment N before it), so the
 	// channel moves to a fresh period and the variant starts over.
-	if st.seen && m.MediaSequence < st.lastMediaSequence {
+	//
+	// After a gateway restart there is no previous media sequence to compare
+	// against, so a playlist that ends below the highest segment already held
+	// is taken as a restart that happened while the gateway was down. One whose
+	// new numbering already passed that mark cannot be told apart and simply
+	// continues the current period.
+	acrossRestart := st.resumed && len(m.Segments) > 0 &&
+		m.Segments[len(m.Segments)-1].SeqNo < st.lastSeq
+	if acrossRestart || (st.seen && m.MediaSequence < st.lastMediaSequence) {
+		// Across a restart the previous media sequence is unknown; the highest
+		// segment held is what the playlist was compared against.
+		previous, prevValue := "previous", st.lastMediaSequence
+		if acrossRestart {
+			previous, prevValue = "highest_held", st.lastSeq
+		}
 		slog.Warn("upstream media sequence went backwards; treating as a stream reset",
 			"channel", w.channelID,
 			"rep", v.RepID,
-			"previous", st.lastMediaSequence,
+			previous, prevValue,
 			"current", m.MediaSequence,
+			"across_restart", acrossRestart,
 		)
 		st.epoch = w.resetPeriodEpoch(st.epoch)
 		st.lastSeq, st.ptsAccum, st.seen = 0, 0, false
+	}
+	if len(m.Segments) > 0 {
+		// An empty playlist gives nothing to compare, so the check waits for
+		// the first one that does.
+		st.resumed = false
 	}
 	st.lastMediaSequence = m.MediaSequence
 
