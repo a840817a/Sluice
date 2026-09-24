@@ -86,7 +86,7 @@ func TestHLSBackfillsInteriorGap(t *testing.T) {
 			map[string]string{"channelID": "bf", "repID": "v0"})
 		body = w.Body.String()
 		if strings.Count(body, "#EXTINF:") == 4 &&
-			strings.Contains(body, "/segments/v0/2.ts") {
+			strings.Contains(body, "/segments/0/v0/2.ts") {
 			return // backfill succeeded: hole filled, playlist un-collapsed
 		}
 		time.Sleep(200 * time.Millisecond)

@@ -161,7 +161,7 @@ func TestCMAFDualOutput(t *testing.T) {
 	if !strings.Contains(hls, "#EXT-X-MAP:URI=") {
 		t.Errorf("fMP4 HLS playlist must advertise an init map:\n%s", hls)
 	}
-	if !strings.Contains(hls, "/segments/v0/0.m4s") {
+	if !strings.Contains(hls, "/segments/0/v0/0.m4s") {
 		t.Errorf("HLS must reference .m4s segments:\n%s", hls)
 	}
 
@@ -178,8 +178,8 @@ func TestCMAFDualOutput(t *testing.T) {
 		`codecs="avc1.42c01e,mp4a.40.2"`,
 		`<SegmentTimeline>`,
 		fmt.Sprintf(`timescale="%d"`, cmafTimescale),
-		"v1/channels/cmaf/segments/v0/",
-		"v1/channels/cmaf/init/v0.mp4",
+		"v1/channels/cmaf/segments/0/v0/",
+		"v1/channels/cmaf/init/0/v0.mp4",
 	} {
 		if !strings.Contains(mpd, want) {
 			t.Errorf("DASH manifest missing %q:\n%s", want, mpd)
@@ -190,11 +190,11 @@ func TestCMAFDualOutput(t *testing.T) {
 	// DASH uses zero-padded names ($Number%09d$), HLS uses bare numbers; both
 	// must resolve to the same stored segment.
 	padded := executeRequest(srv.handleSegment, http.MethodGet,
-		"/v1/channels/cmaf/segments/v0/000000000.m4s",
-		map[string]string{"channelID": "cmaf", "repID": "v0", "segFile": "000000000.m4s"})
+		"/v1/channels/cmaf/segments/0/v0/000000000.m4s",
+		map[string]string{"channelID": "cmaf", "periodID": "0", "repID": "v0", "segFile": "000000000.m4s"})
 	bare := executeRequest(srv.handleSegment, http.MethodGet,
-		"/v1/channels/cmaf/segments/v0/0.m4s",
-		map[string]string{"channelID": "cmaf", "repID": "v0", "segFile": "0.m4s"})
+		"/v1/channels/cmaf/segments/0/v0/0.m4s",
+		map[string]string{"channelID": "cmaf", "periodID": "0", "repID": "v0", "segFile": "0.m4s"})
 	if padded.Code != http.StatusOK || bare.Code != http.StatusOK {
 		t.Fatalf("segment fetch: padded=%d bare=%d", padded.Code, bare.Code)
 	}
@@ -203,7 +203,7 @@ func TestCMAFDualOutput(t *testing.T) {
 	}
 	// The shared init segment must serve for both.
 	iw := executeRequest(srv.handleInit, http.MethodGet,
-		"/v1/channels/cmaf/init/v0.mp4", map[string]string{"channelID": "cmaf", "repID": "v0"})
+		"/v1/channels/cmaf/init/0/v0.mp4", map[string]string{"channelID": "cmaf", "periodID": "0", "repID": "v0"})
 	if iw.Code != http.StatusOK {
 		t.Errorf("init.mp4: got %d, want 200", iw.Code)
 	}

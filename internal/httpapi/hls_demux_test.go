@@ -103,7 +103,7 @@ func TestDemuxedHLSAudioIngestedAndServed(t *testing.T) {
 	videoPl := waitSegs("v0")
 	audioPl := waitSegs("a0") // the demuxed audio track is ingested and served
 
-	if !strings.Contains(videoPl, "/segments/v0/") || !strings.Contains(audioPl, "/segments/a0/") {
+	if !strings.Contains(videoPl, "/segments/0/v0/") || !strings.Contains(audioPl, "/segments/0/a0/") {
 		t.Error("video and audio playlists must reference their own segments")
 	}
 
@@ -126,8 +126,8 @@ func TestDemuxedHLSAudioIngestedAndServed(t *testing.T) {
 
 	// Audio segments are served from their own AdaptationSet, distinct from video.
 	aw := executeRequest(srv.handleSegment, http.MethodGet,
-		"/v1/channels/dx/segments/a0/0.ts",
-		map[string]string{"channelID": "dx", "repID": "a0", "segFile": "0.ts"})
+		"/v1/channels/dx/segments/0/a0/0.ts",
+		map[string]string{"channelID": "dx", "periodID": "0", "repID": "a0", "segFile": "0.ts"})
 	if aw.Code != http.StatusOK {
 		t.Fatalf("audio segment: got %d", aw.Code)
 	}
@@ -135,8 +135,8 @@ func TestDemuxedHLSAudioIngestedAndServed(t *testing.T) {
 		t.Error("audio segment 0 is not the upstream audio bytes")
 	}
 	vw := executeRequest(srv.handleSegment, http.MethodGet,
-		"/v1/channels/dx/segments/v0/0.ts",
-		map[string]string{"channelID": "dx", "repID": "v0", "segFile": "0.ts"})
+		"/v1/channels/dx/segments/0/v0/0.ts",
+		map[string]string{"channelID": "dx", "periodID": "0", "repID": "v0", "segFile": "0.ts"})
 	if !bytesEqual(vw.Body.Bytes(), tsSegment(0)) {
 		t.Error("video segment 0 is not the upstream video bytes")
 	}

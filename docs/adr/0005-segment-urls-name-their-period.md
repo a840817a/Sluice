@@ -1,0 +1,11 @@
+# Segment URLs name their period
+
+A segment URL is `/v1/channels/{channel}/segments/{period}/{representation}/{number}{ext}` and an init URL is `/v1/channels/{channel}/init/{period}/{representation}.mp4`. Before this, neither carried the period. When the origin restarts its numbering, the channel starts a new period and reuses segment numbers under the same representation (a multi-period DASH source can do the same), so two periods held the same (representation, number). The lookup walked a Go map and returned whichever period came first, and the HLS media playlist merged all periods by number. A player got the wrong period's segment or init, and after a reset the live playlist stayed on the old period's tail. We chose to put the period in the URL over gateway-assigned numbering that would have kept the URL shape. That alternative would have changed ingest's restart detection, the AES-128 IV and DASH `startNumber`.
+
+## Consequences
+
+- The period-less routes were removed rather than kept as a fallback, so every segment and init URL cached by a player or CDN before the upgrade returns 404. A live player recovers by reloading its playlist.
+- An ID made only of letters, digits, `.`, `_` and `-` goes into the URL as is. Any other ID, including the empty ID of a DASH period with no `id`, and `.` and `..`, is written `~` followed by unpadded base64url (`gwurl.PeriodSegment`). Percent-encoding was rejected because the router hands the handler either the escaped or the decoded segment, depending on how the request path happened to be escaped.
+- Periods are laid out in one order everywhere (`index.OrderPeriodIDs`): a DASH source's MPD document order, HLS epochs numerically.
+- The HLS media playlist emits `EXT-X-DISCONTINUITY` and a fresh `EXT-X-MAP` at each period boundary, and `EXT-X-DISCONTINUITY-SEQUENCE` counts the boundaries that have left the window.
+- Media sequence numbers are derived, not stored. A period is numbered after the previous period's highest segment number, from each representation's lifetime range, which the index keeps in memory. The range therefore does not move as the live window slides. After a restart it is recomputed from disk, and if an old period's files were cleaned up the numbering shifts once, making live players reload.

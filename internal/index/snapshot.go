@@ -71,11 +71,11 @@ func (ci *ChannelIndex) Snapshot() Snapshot {
 	for id := range periods {
 		s.periodIDs = append(s.periodIDs, id)
 	}
-	sort.Strings(s.periodIDs)
+	s.periodIDs = OrderPeriodIDs(s.periodIDs, nil)
 	sort.Slice(s.keys, func(i, j int) bool {
 		a, b := s.keys[i], s.keys[j]
 		if a.periodID != b.periodID {
-			return a.periodID < b.periodID
+			return comparePeriodIDs(a.periodID, b.periodID) < 0
 		}
 		if a.asID != b.asID {
 			return a.asID < b.asID
@@ -117,7 +117,8 @@ func (s Snapshot) ForEachRep(fn func(ref RepRef, published []SegmentState)) {
 	}
 }
 
-// PeriodIDs returns the periods that have at least one representation, sorted.
+// PeriodIDs returns the periods that have at least one representation, in
+// OrderPeriodIDs order without a document: epochs numerically.
 func (s Snapshot) PeriodIDs() []string {
 	out := make([]string, len(s.periodIDs))
 	copy(out, s.periodIDs)

@@ -128,8 +128,8 @@ func TestHLSEndToEndTSPassthrough(t *testing.T) {
 		"#EXT-X-TARGETDURATION:4",
 		"#EXT-X-MEDIA-SEQUENCE:0",
 		"#EXTINF:4.000000,",
-		"http://gw.test/v1/channels/hls1/segments/v0/0.ts",
-		"http://gw.test/v1/channels/hls1/segments/v0/2.ts",
+		"http://gw.test/v1/channels/hls1/segments/0/v0/0.ts",
+		"http://gw.test/v1/channels/hls1/segments/0/v0/2.ts",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("media playlist missing %q:\n%s", want, body)
@@ -167,8 +167,8 @@ func TestHLSEndToEndTSPassthrough(t *testing.T) {
 	for n := 0; n < 3; n++ {
 		segFile := fmt.Sprintf("%d.ts", n)
 		w := executeRequest(srv.handleSegment, http.MethodGet,
-			"/v1/channels/hls1/segments/v0/"+segFile,
-			map[string]string{"channelID": "hls1", "repID": "v0", "segFile": segFile})
+			"/v1/channels/hls1/segments/0/v0/"+segFile,
+			map[string]string{"channelID": "hls1", "periodID": "0", "repID": "v0", "segFile": segFile})
 		if w.Code != http.StatusOK {
 			t.Fatalf("segment %s: got %d", segFile, w.Code)
 		}
@@ -282,8 +282,8 @@ func TestHLSVODKeepsItsSegments(t *testing.T) {
 	}
 	// Segments must still be served after the transition.
 	w := executeRequest(srv.handleSegment, http.MethodGet,
-		"/v1/channels/hls1/segments/v0/0.ts",
-		map[string]string{"channelID": "hls1", "repID": "v0", "segFile": "0.ts"})
+		"/v1/channels/hls1/segments/0/v0/0.ts",
+		map[string]string{"channelID": "hls1", "periodID": "0", "repID": "v0", "segFile": "0.ts"})
 	if w.Code != http.StatusOK {
 		t.Errorf("segment after VOD transition: got %d, want 200", w.Code)
 	}

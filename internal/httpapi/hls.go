@@ -78,7 +78,11 @@ func (s *Server) handleMediaPlaylist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	segs := publishedSegsForRep(sv.Index, repID)
+	periods := s.periodSegmentsForRep(sv, channelID, repID)
+	var segs []index.SegmentState
+	for _, p := range periods {
+		segs = append(segs, p.Segments...)
+	}
 
 	// The advertised target duration must never shrink between reloads, so it
 	// is tracked per channel+representation rather than recomputed per request.
@@ -93,18 +97,12 @@ func (s *Server) handleMediaPlaylist(w http.ResponseWriter, r *http.Request) {
 		TargetDuration: targetDur,
 		WindowSegments: windowSegments(s.cfg.Window.Depth.Seconds(), targetDur, sv.Config.KeepsAllSegments() || isVOD),
 	}
-	// fMP4 representations need their initialization section advertised via
-	// EXT-X-MAP; a non-empty init path is exactly the fMP4 signal, and is empty
-	// for self-contained TS/WebVTT segments regardless of source.
-	if initPath := publishedInitPath(sv.Index, repID); initPath != "" {
-		opts.InitURI = gwurl.InitURL(s.cfg.Server.BaseURL, channelID, repID)
-	}
 	// Segments kept encrypted on disk are advertised with a key URI pointing at
 	// this gateway's proxy. Decrypt-on-ingest channels store cleartext and carry
 	// no key material, so nothing is emitted for them.
 	opts.KeyProxyBase = keyProxyURL(s.cfg.Server.BaseURL, channelID)
 
-	out := hlsout.Media(segs, opts)
+	out := hlsout.Media(periods, opts)
 
 	w.Header().Set("Content-Type", playlistContentType)
 	w.Header().Set("Cache-Control", "no-cache")
@@ -161,15 +159,47 @@ func windowSegments(depthSec float64, targetDur int, keepAll bool) int {
 	return n
 }
 
-// publishedSegsForRep collects every Published segment for repID across all
-// periods, which is what the media playlist renders from.
-func publishedSegsForRep(ci *index.ChannelIndex, repID string) []index.SegmentState {
-	var out []index.SegmentState
-	ci.ForEachRep(func(ref index.RepRef, rep *index.RepresentationState) {
-		if ref.RepID == repID {
-			out = append(out, rep.Published()...)
+// periodSegmentsForRep collects repID's Published segments period by period,
+// in timeline order: a DASH source's periods in the order its MPD lists them,
+// an HLS source's epochs numerically (index.OrderPeriodIDs). Merging them into
+// one list would let two periods' identical segment numbers collide
+// (ADR-0005).
+func (s *Server) periodSegmentsForRep(sv ch.Serving, channelID, repID string) []hlsout.PeriodSegments {
+	byPeriod := map[string]*hlsout.PeriodSegments{}
+	var ids []string
+	sv.Index.ForEachRep(func(ref index.RepRef, rep *index.RepresentationState) {
+		if ref.RepID != repID {
+			return
+		}
+		p, ok := byPeriod[ref.PeriodID]
+		if !ok {
+			p = &hlsout.PeriodSegments{PeriodID: ref.PeriodID}
+			byPeriod[ref.PeriodID] = p
+			ids = append(ids, ref.PeriodID)
+		}
+		p.Segments = append(p.Segments, rep.Published()...)
+		if first, last, ok := rep.SegNoRange(); ok {
+			p.First, p.Last, p.RangeKnown = first, last, true
 		}
 	})
+
+	var docOrder []string
+	if sv.ParsedMPD != nil {
+		for _, p := range sv.ParsedMPD.Periods {
+			docOrder = append(docOrder, p.ID)
+		}
+	}
+	out := make([]hlsout.PeriodSegments, 0, len(ids))
+	for _, id := range index.OrderPeriodIDs(ids, docOrder) {
+		p := *byPeriod[id]
+		// fMP4 representations need their initialization section advertised
+		// via EXT-X-MAP; a non-empty init path is exactly the fMP4 signal, and
+		// is empty for self-contained TS/WebVTT segments regardless of source.
+		if publishedInitPath(sv.Index, id, repID) != "" {
+			p.InitURI = gwurl.InitURL(s.cfg.Server.BaseURL, channelID, id, repID)
+		}
+		out = append(out, p)
+	}
 	return out
 }
 

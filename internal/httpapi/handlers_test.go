@@ -50,8 +50,8 @@ func TestHandleManifest_ChannelNotFound(t *testing.T) {
 
 func TestHandleSegment_ChannelNotFound(t *testing.T) {
 	srv := newTestServer()
-	w := executeRequest(srv.handleSegment, http.MethodGet, "/v1/channels/noexist/segments/r0/000000001.m4s",
-		map[string]string{"channelID": "noexist", "repID": "r0", "segFile": "000000001.m4s"})
+	w := executeRequest(srv.handleSegment, http.MethodGet, "/v1/channels/noexist/segments/0/r0/000000001.m4s",
+		map[string]string{"channelID": "noexist", "periodID": "0", "repID": "r0", "segFile": "000000001.m4s"})
 	if w.Code != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", w.Code)
 	}
@@ -59,8 +59,8 @@ func TestHandleSegment_ChannelNotFound(t *testing.T) {
 
 func TestHandleSegment_MalformedSegFile(t *testing.T) {
 	srv := newTestServer()
-	w := executeRequest(srv.handleSegment, http.MethodGet, "/v1/channels/ch1/segments/r0/notanumber.m4s",
-		map[string]string{"channelID": "ch1", "repID": "r0", "segFile": "notanumber.m4s"})
+	w := executeRequest(srv.handleSegment, http.MethodGet, "/v1/channels/ch1/segments/0/r0/notanumber.m4s",
+		map[string]string{"channelID": "ch1", "periodID": "0", "repID": "r0", "segFile": "notanumber.m4s"})
 	if w.Code != http.StatusNotFound {
 		t.Errorf("expected 404 for malformed seg file, got %d", w.Code)
 	}
@@ -68,8 +68,8 @@ func TestHandleSegment_MalformedSegFile(t *testing.T) {
 
 func TestHandleInit_ChannelNotFound(t *testing.T) {
 	srv := newTestServer()
-	w := executeRequest(srv.handleInit, http.MethodGet, "/v1/channels/noexist/init/r0.mp4",
-		map[string]string{"channelID": "noexist", "repID": "r0"})
+	w := executeRequest(srv.handleInit, http.MethodGet, "/v1/channels/noexist/init/0/r0.mp4",
+		map[string]string{"channelID": "noexist", "periodID": "0", "repID": "r0"})
 	if w.Code != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", w.Code)
 	}

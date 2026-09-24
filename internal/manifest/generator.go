@@ -260,8 +260,8 @@ func buildRepresentation(
 
 	// Build segment template pointing to gateway paths. The URL shape, including
 	// why DASH advertises zero-padded segment numbers, lives in gwurl.
-	mediaPath := gwurl.SegmentTemplatePath(cfg.ChannelID, origRep.ID)
-	initPath := gwurl.InitTemplatePath(cfg.ChannelID, origRep.ID)
+	mediaPath := gwurl.SegmentTemplatePath(cfg.ChannelID, origPeriod.ID, origRep.ID)
+	initPath := gwurl.InitTemplatePath(cfg.ChannelID, origPeriod.ID, origRep.ID)
 
 	st := &gompeg.SegmentTemplate{
 		Media:          &mediaPath,
@@ -340,8 +340,8 @@ func buildRepFromSegmentList(
 		return nil, nil, nil // not ready yet
 	}
 
-	mediaPath := gwurl.SegmentTemplatePath(cfg.ChannelID, origRep.ID)
-	initPath := gwurl.InitTemplatePath(cfg.ChannelID, origRep.ID)
+	mediaPath := gwurl.SegmentTemplatePath(cfg.ChannelID, origPeriod.ID, origRep.ID)
+	initPath := gwurl.InitTemplatePath(cfg.ChannelID, origPeriod.ID, origRep.ID)
 	st := &gompeg.SegmentTemplate{
 		Media:          &mediaPath,
 		Initialization: &initPath,

@@ -120,7 +120,7 @@ func TestClearDASHServesHLS(t *testing.T) {
 		if !strings.Contains(pl, "#EXT-X-MAP:URI=") {
 			t.Errorf("%s playlist missing EXT-X-MAP:\n%s", name, pl)
 		}
-		if !strings.Contains(pl, "/segments/"+name+"/") || !strings.Contains(pl, ".m4s") {
+		if !strings.Contains(pl, "/segments/0/"+name+"/") || !strings.Contains(pl, ".m4s") {
 			t.Errorf("%s playlist must reference its .m4s segments:\n%s", name, pl)
 		}
 	}
@@ -152,8 +152,8 @@ func TestClearDASHServesHLS(t *testing.T) {
 	// published before segment 1.
 	segFile := firstSegmentFile(t, vpl)
 	sw := executeRequest(srv.handleSegment, http.MethodGet,
-		"/v1/channels/d2h/segments/v0/"+segFile,
-		map[string]string{"channelID": "d2h", "repID": "v0", "segFile": segFile})
+		"/v1/channels/d2h/segments/0/v0/"+segFile,
+		map[string]string{"channelID": "d2h", "periodID": "0", "repID": "v0", "segFile": segFile})
 	if sw.Code != http.StatusOK {
 		t.Errorf("segment %s is advertised by the playlist but not servable: got %d\nplaylist:\n%s",
 			segFile, sw.Code, vpl)

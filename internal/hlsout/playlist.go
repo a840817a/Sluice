@@ -56,18 +56,107 @@ type MediaOptions struct {
 	// TargetDuration is the value to advertise. Callers must source this from a
 	// StickyTargetDuration so it never decreases between reloads.
 	TargetDuration int
-	// InitURI, when non-empty, emits EXT-X-MAP and marks the playlist as fMP4.
-	InitURI string
 	// KeyProxyBase is the base URL of this gateway's key proxy, e.g.
 	// "https://gw/v1/channels/ch1/key". Segments stored as ciphertext get an
 	// EXT-X-KEY pointing under it. When empty no key is advertised at all —
 	// publishing the upstream key URL instead would hand clients a credential
 	// the gateway was meant to broker.
 	KeyProxyBase string
-	// DiscontinuitySequence is the number of discontinuities that have already
-	// slid out of the window. It cannot be derived from the window's contents,
-	// so the caller maintains it as a running per-representation counter.
-	DiscontinuitySequence uint64
+}
+
+// PeriodSegments is one period's share of a representation's media playlist.
+// Media takes them in timeline order (index.OrderPeriodIDs).
+type PeriodSegments struct {
+	PeriodID string
+	// Segments are the period's published segments, in any order.
+	Segments []index.SegmentState
+	// First and Last are the lowest and highest segment numbers the
+	// representation has ever recorded in this period
+	// (index.RepresentationState.SegNoRange). They fix where the next period's
+	// media sequence numbers begin, so those numbers do not move as old
+	// segments leave the window. When RangeKnown is false they are taken from
+	// Segments.
+	First, Last uint64
+	RangeKnown  bool
+	// InitURI, when non-empty, is this period's EXT-X-MAP, and marks the
+	// playlist as fMP4.
+	InitURI string
+}
+
+// segNoRange returns the period's lifetime segment number range.
+func (p PeriodSegments) segNoRange() (first, last uint64, ok bool) {
+	if p.RangeKnown {
+		return p.First, p.Last, true
+	}
+	for i, s := range p.Segments {
+		if i == 0 || s.SegNo < first {
+			first = s.SegNo
+		}
+		if i == 0 || s.SegNo > last {
+			last = s.SegNo
+		}
+	}
+	return first, last, len(p.Segments) > 0
+}
+
+// playlistEntry is one segment as the playlist numbers it.
+type playlistEntry struct {
+	seg    index.SegmentState
+	msn    int64 // media sequence number
+	period int   // position of its period in the playlist's period list
+	init   string
+}
+
+// numberPeriods lays the periods' segments out on one media-sequence line.
+//
+// Within a period a segment keeps its own number, offset so that the period's
+// lowest number ever follows the previous period's highest: a stream that
+// continues its numbering across periods keeps its numbers, and one that
+// rewound after an upstream reset is numbered after what came before it
+// instead of below it, which players would read as going backwards. Each
+// period contributes its contiguous run (contiguousRun) in the requested mode.
+func numberPeriods(periods []PeriodSegments, vod bool) []playlistEntry {
+	var out []playlistEntry
+	var offset int64
+	var prevLast int64
+	started := false
+	for i, p := range periods {
+		first, last, ok := p.segNoRange()
+		if !ok {
+			continue
+		}
+		if started {
+			offset = prevLast + 1 - int64(first)
+		}
+		for _, s := range contiguousRun(p.Segments, vod) {
+			out = append(out, playlistEntry{seg: s, msn: offset + int64(s.SegNo), period: i, init: p.InitURI})
+		}
+		prevLast = offset + int64(last)
+		started = true
+	}
+	return out
+}
+
+// consecutiveRun keeps the longest run of consecutive media sequence numbers,
+// anchored like contiguousRun: at the oldest entry for VOD, the newest for
+// live. Within a period contiguousRun already guarantees this; across a
+// boundary it holds unless a period is missing its first or last segment.
+func consecutiveRun(entries []playlistEntry, vod bool) []playlistEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	if vod {
+		end := 1
+		for end < len(entries) && entries[end].msn == entries[end-1].msn+1 {
+			end++
+		}
+		return entries[:end]
+	}
+	start := len(entries) - 1
+	for start > 0 && entries[start].msn == entries[start-1].msn+1 {
+		start--
+	}
+	return entries[start:]
 }
 
 // Master renders the multivariant playlist. Every variant URI points at this
@@ -152,15 +241,17 @@ func Master(variants []hlsdesc.Variant, o MasterOptions) []byte {
 }
 
 // Media renders a media playlist for one representation from the segments the
-// gateway currently holds.
+// gateway currently holds, period by period (ADR-0005).
 //
-// Only a strictly contiguous run of segments is ever emitted: a playlist that
-// skips a sequence number desynchronises players. Which run is chosen depends
-// on the mode — see contiguousRun.
-func Media(segs []index.SegmentState, o MediaOptions) []byte {
+// Only a run of consecutive media sequence numbers is ever emitted: a playlist
+// that skips one desynchronises players. Which run is chosen depends on the
+// mode — see contiguousRun. Each period boundary inside the run is marked
+// with EXT-X-DISCONTINUITY and a fresh EXT-X-MAP, and
+// EXT-X-DISCONTINUITY-SEQUENCE counts the boundaries already before it.
+func Media(periods []PeriodSegments, o MediaOptions) []byte {
 	base := strings.TrimRight(o.GatewayBaseURL, "/")
 
-	run := contiguousRun(segs, o.VOD)
+	run := consecutiveRun(numberPeriods(periods, o.VOD), o.VOD)
 	if o.WindowSegments > 0 && len(run) > o.WindowSegments {
 		run = run[len(run)-o.WindowSegments:]
 	}
@@ -168,13 +259,19 @@ func Media(segs []index.SegmentState, o MediaOptions) []byte {
 	// EXT-X-VERSION 6 is required for EXT-X-MAP in a media playlist; plain
 	// MPEG-TS playlists remain at 3 for maximum client compatibility.
 	version := 3
-	if o.InitURI != "" {
-		version = 6
+	for _, p := range periods {
+		if p.InitURI != "" {
+			version = 6
+		}
 	}
 
 	targetDur := o.TargetDuration
 	if targetDur <= 0 {
-		targetDur = ceilMaxDuration(run)
+		segs := make([]index.SegmentState, len(run))
+		for i, e := range run {
+			segs[i] = e.seg
+		}
+		targetDur = ceilMaxDuration(segs)
 	}
 
 	var b strings.Builder
@@ -182,31 +279,37 @@ func Media(segs []index.SegmentState, o MediaOptions) []byte {
 	fmt.Fprintf(&b, "#EXT-X-VERSION:%d\n", version)
 	fmt.Fprintf(&b, "#EXT-X-TARGETDURATION:%d\n", targetDur)
 
-	var mediaSeq uint64
+	var mediaSeq int64
+	var discSeq int
 	if len(run) > 0 {
-		mediaSeq = run[0].SegNo
+		mediaSeq = run[0].msn
+		// Every period before the window's first one ended in a boundary
+		// that has already left the playlist.
+		discSeq = periodsBefore(periods, run[0].period)
 	}
 	fmt.Fprintf(&b, "#EXT-X-MEDIA-SEQUENCE:%d\n", mediaSeq)
 
-	if o.DiscontinuitySequence > 0 {
-		fmt.Fprintf(&b, "#EXT-X-DISCONTINUITY-SEQUENCE:%d\n", o.DiscontinuitySequence)
+	if discSeq > 0 {
+		fmt.Fprintf(&b, "#EXT-X-DISCONTINUITY-SEQUENCE:%d\n", discSeq)
 	}
 	if o.VOD {
 		b.WriteString("#EXT-X-PLAYLIST-TYPE:VOD\n")
-	}
-	if o.InitURI != "" {
-		fmt.Fprintf(&b, "#EXT-X-MAP:URI=%q\n", o.InitURI)
 	}
 
 	// keyLine tracks the EXT-X-KEY currently in force so it is re-emitted only
 	// when it actually changes.
 	var keyLine string
-	for i, s := range run {
+	for i, e := range run {
+		s := e.seg
+		newPeriod := i > 0 && e.period != run[i-1].period
 		// The leading discontinuity of the emitted run is meaningless: it
 		// describes a break from a segment the client never saw, and
 		// EXT-X-DISCONTINUITY-SEQUENCE already accounts for it.
-		if s.Discontinuity && i > 0 {
+		if (s.Discontinuity || newPeriod) && i > 0 {
 			b.WriteString("#EXT-X-DISCONTINUITY\n")
+		}
+		if (i == 0 || newPeriod) && e.init != "" {
+			fmt.Fprintf(&b, "#EXT-X-MAP:URI=%q\n", e.init)
 		}
 		if line := keyLineFor(s, o.KeyProxyBase); line != keyLine {
 			keyLine = line
@@ -219,7 +322,7 @@ func Media(segs []index.SegmentState, o MediaOptions) []byte {
 			}
 		}
 		fmt.Fprintf(&b, "#EXTINF:%.6f,\n", segmentDuration(s))
-		b.WriteString(gwurl.SegmentURL(base, o.ChannelID, o.RepID, s.SegNo, segmentExt(s)) + "\n")
+		b.WriteString(gwurl.SegmentURL(base, o.ChannelID, periods[e.period].PeriodID, o.RepID, s.SegNo, segmentExt(s)) + "\n")
 	}
 
 	if o.VOD {
@@ -227,6 +330,18 @@ func Media(segs []index.SegmentState, o MediaOptions) []byte {
 	}
 
 	return []byte(b.String())
+}
+
+// periodsBefore counts the periods before position i that hold segments, each
+// of which ended in a period boundary.
+func periodsBefore(periods []PeriodSegments, i int) int {
+	n := 0
+	for _, p := range periods[:i] {
+		if _, _, ok := p.segNoRange(); ok {
+			n++
+		}
+	}
+	return n
 }
 
 // keyLineFor renders the EXT-X-KEY tag a segment needs, or "" when the segment

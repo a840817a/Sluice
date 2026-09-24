@@ -104,7 +104,7 @@ func TestSubtitlesIngestedAndServed(t *testing.T) {
 	wait("v0")
 	wait("a0")
 	subPl := wait("s0") // WebVTT subtitle track ingested
-	if !strings.Contains(subPl, "/segments/s0/0.vtt") {
+	if !strings.Contains(subPl, "/segments/0/s0/0.vtt") {
 		t.Errorf("subtitle playlist must reference .vtt segments:\n%s", subPl)
 	}
 
@@ -123,8 +123,8 @@ func TestSubtitlesIngestedAndServed(t *testing.T) {
 
 	// A subtitle segment is served as WebVTT text.
 	sw := executeRequest(srv.handleSegment, http.MethodGet,
-		"/v1/channels/sx/segments/s0/0.vtt",
-		map[string]string{"channelID": "sx", "repID": "s0", "segFile": "0.vtt"})
+		"/v1/channels/sx/segments/0/s0/0.vtt",
+		map[string]string{"channelID": "sx", "periodID": "0", "repID": "s0", "segFile": "0.vtt"})
 	if sw.Code != http.StatusOK {
 		t.Fatalf("subtitle segment: got %d", sw.Code)
 	}
