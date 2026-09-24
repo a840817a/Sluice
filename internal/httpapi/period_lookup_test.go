@@ -19,6 +19,7 @@ import (
 	ch "github.com/a840817a/sluice/internal/channel"
 	"github.com/a840817a/sluice/internal/config"
 	"github.com/a840817a/sluice/internal/gwurl"
+	"github.com/a840817a/sluice/internal/hlsout"
 	"github.com/a840817a/sluice/internal/index"
 	"github.com/a840817a/sluice/internal/store"
 )
@@ -264,9 +265,10 @@ func TestUnusualPeriodIDReachesItsSegment(t *testing.T) {
 func TestPeriodSegmentsCarryLifetimeRangeInOrder(t *testing.T) {
 	ci := index.NewChannelIndex()
 	for _, period := range []string{"10", "2"} {
-		rep := ci.Period(period).AS("0").Rep("v0", 2) // holds 2; 5 pushed
+		rep := ci.Period(period).AS("0").Rep("v0", 2) // holds 2; 5 published
 		for n := uint64(100); n <= 104; n++ {
 			rep.Commit(index.SegmentState{SegNo: n, EndPTS: 1, Timescale: 1})
+			rep.MarkPublished(map[uint64]struct{}{n: {}})
 		}
 	}
 	srv := NewServer(config.Config{}, ch.NewManager(config.Config{}))
@@ -277,6 +279,44 @@ func TestPeriodSegmentsCarryLifetimeRangeInOrder(t *testing.T) {
 	for _, p := range got {
 		if !p.RangeKnown || p.First != 100 || p.Last != 104 {
 			t.Errorf("period %s range = %d..%d (known %v), want the lifetime 100..104", p.PeriodID, p.First, p.Last, p.RangeKnown)
+		}
+	}
+}
+
+// A segment the index committed but never published — a video segment whose
+// audio never arrived before an upstream reset, say — is not part of what the
+// playlist can list. It must not open a gap in the media sequence at a period
+// boundary, or the playlist cuts at the gap and loses whole periods.
+//
+// The index is built the way ingest builds it, commit then publish, because
+// that is where the committed-only segment comes from.
+func TestUnpublishedSegmentAtAPeriodEdgeKeepsBothPeriods(t *testing.T) {
+	ci := index.NewChannelIndex()
+	commit := func(period string, first, last, publishedTo uint64) {
+		rep := ci.Period(period).AS("0").Rep("v0", 100)
+		published := map[uint64]struct{}{}
+		for n := first; n <= last; n++ {
+			rep.Commit(index.SegmentState{SegNo: n, StartPTS: int64(n) * 90000, EndPTS: int64(n+1) * 90000, Timescale: 90000, Path: "/x/" + period})
+			if n <= publishedTo {
+				published[n] = struct{}{}
+			}
+		}
+		rep.MarkPublished(published)
+	}
+	commit("0", 1, 5, 4) // segment 5 committed, never published
+	commit("1", 1, 3, 3)
+
+	srv := NewServer(config.Config{}, ch.NewManager(config.Config{}))
+	periods := srv.periodSegmentsForRep(ch.Serving{Index: ci}, "c", "v0")
+	want := []string{"0/v0/1", "0/v0/2", "0/v0/3", "0/v0/4", "1/v0/1", "1/v0/2", "1/v0/3"}
+	for _, vod := range []bool{true, false} {
+		out := string(hlsout.Media(periods, hlsout.MediaOptions{GatewayBaseURL: "http://gw", ChannelID: "c", RepID: "v0", VOD: vod, TargetDuration: 1}))
+		var got []string
+		for _, m := range regexp.MustCompile(`/segments/(\S+)\.m4s`).FindAllStringSubmatch(out, -1) {
+			got = append(got, m[1])
+		}
+		if strings.Join(got, " ") != strings.Join(want, " ") {
+			t.Errorf("VOD=%v lists %v, want both periods' published segments %v\n%s", vod, got, want, out)
 		}
 	}
 }

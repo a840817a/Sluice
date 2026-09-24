@@ -36,8 +36,15 @@ func TestSegNoRangeSurvivesEviction(t *testing.T) {
 	}
 	for n := uint64(10); n <= 14; n++ {
 		rep.Commit(SegmentState{SegNo: n, EndPTS: 1, Timescale: 1})
+		rep.MarkPublished(map[uint64]struct{}{n: {}})
 	}
 	if first, last, ok := rep.SegNoRange(); !ok || first != 10 || last != 14 {
 		t.Errorf("SegNoRange = %d..%d (%v), want 10..14 after evicting 10..12", first, last, ok)
+	}
+
+	// Committed but never published: in no playlist, so not in the range.
+	rep.Commit(SegmentState{SegNo: 15, EndPTS: 1, Timescale: 1})
+	if _, last, _ := rep.SegNoRange(); last != 14 {
+		t.Errorf("an unpublished segment widened the range to %d", last)
 	}
 }

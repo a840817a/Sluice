@@ -314,28 +314,32 @@ type RepresentationState struct {
 	ID  string
 	buf *RingBuffer
 	// first and last are the lowest and highest segment numbers this
-	// representation has ever recorded. Unlike the ring they never shrink as
-	// segments are evicted, which is what lets output number a later period's
-	// segments after this one's without the numbers moving as the window
-	// slides. A restart recomputes them from what is on disk.
+	// representation has ever published. Unlike the ring they never shrink as
+	// segments expire or are evicted, which is what lets output number a later
+	// period's segments after this one's without the numbers moving as the
+	// window slides. A restart recomputes them from what is on disk.
+	//
+	// Only publication widens them. A segment committed but never published —
+	// its A/V partner never arrived before an upstream reset — is not in any
+	// playlist, and counting it would open a gap in the numbering at the
+	// period boundary.
 	first, last uint64
 	seen        bool
 }
 
-// push records seg in the ring and in the lifetime range. Caller holds rs.mu.
-func (rs *RepresentationState) push(seg SegmentState) bool {
-	if !rs.seen || seg.SegNo < rs.first {
-		rs.first = seg.SegNo
+// recordPublished widens the lifetime range to segNo. Caller holds rs.mu.
+func (rs *RepresentationState) recordPublished(segNo uint64) {
+	if !rs.seen || segNo < rs.first {
+		rs.first = segNo
 	}
-	if !rs.seen || seg.SegNo > rs.last {
-		rs.last = seg.SegNo
+	if !rs.seen || segNo > rs.last {
+		rs.last = segNo
 	}
 	rs.seen = true
-	return rs.buf.Push(seg)
 }
 
 // SegNoRange returns the lowest and highest segment numbers this
-// representation has ever recorded, and false if it has recorded none.
+// representation has ever published, and false if it has published none.
 func (rs *RepresentationState) SegNoRange() (first, last uint64, ok bool) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -349,7 +353,8 @@ func (rs *RepresentationState) RestorePublished(seg SegmentState) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	seg.Status = StatusPublished
-	rs.push(seg)
+	rs.recordPublished(seg.SegNo)
+	rs.buf.Push(seg)
 }
 
 // Commit records a newly written segment in the ring buffer.
@@ -362,7 +367,7 @@ func (rs *RepresentationState) Commit(seg SegmentState) bool {
 	defer rs.mu.Unlock()
 	seg.Status = StatusCommitted
 	seg.CommitAt = time.Now()
-	return rs.push(seg)
+	return rs.buf.Push(seg)
 }
 
 // Published returns all segments currently in StatusPublished order by SegNo.
@@ -400,6 +405,7 @@ func (rs *RepresentationState) MarkPublished(segNos map[uint64]struct{}) {
 	rs.buf.UpdateWhere(func(s *SegmentState) {
 		if _, ok := segNos[s.SegNo]; ok && s.Status == StatusCommitted {
 			s.Status = StatusPublished
+			rs.recordPublished(s.SegNo)
 		}
 	})
 }
