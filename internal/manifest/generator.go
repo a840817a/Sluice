@@ -1,6 +1,8 @@
 package manifest
 
 import (
+	"bytes"
+	"encoding/xml"
 	"strings"
 	"time"
 
@@ -175,18 +177,12 @@ func Generate(
 	encoded = injectNamespaces(encoded)
 
 	// Go's encoding/xml silently drops namespace-prefixed element names
-	// (mspr:pro, cenc:pssh, cenc:default_KID) inside Descriptor.
-	// Post-process step 1: replace bare <ContentProtection .../> stubs with the
-	// full verbatim XML from RawCPs (preserves mspr:pro, cenc:pssh children).
+	// (mspr:pro, cenc:pssh, cenc:default_KID) inside Descriptor, so replace
+	// the bare <ContentProtection .../> stubs with the source elements, with
+	// the PlayReady LA_URL rewritten on the way.
 	encoded, err = injectContentProtections(encoded, orig, cfg)
 	if err != nil {
 		return nil, err
-	}
-
-	// Post-process step 2: rewrite LA_URL inside all <pro>...</pro> elements.
-	// encoding/xml re-encodes mspr:pro as <pro xmlns="urn:microsoft:playready">.
-	if !cfg.DisablePlayReady && cfg.LicenseURL != "" {
-		encoded = rewriteProElements(encoded, cfg.LicenseURL)
 	}
 	return encoded, nil
 }
@@ -512,11 +508,12 @@ func nextTimelinePTS(s *gompeg.SegmentTimelineS) uint64 {
 }
 
 // injectContentProtections replaces bare <ContentProtection .../> stubs emitted
-// by go-mpd with the verbatim XML extracted from the original MPD (stored in
-// ParsedAdaptationSet.RawCPs). This preserves mspr:pro, cenc:pssh, and
-// cenc:default_KID which encoding/xml cannot handle.
+// by go-mpd with the source bytes of each element (ParsedAdaptationSet.RawCPs,
+// by way of ParsedContentProtection.RawXML). This preserves mspr:pro,
+// cenc:pssh, and cenc:default_KID, prefixes included, which encoding/xml
+// cannot write.
 //
-// Stubs are replaced in document order, one per RawCP entry, so that each
+// Stubs are replaced in document order, one per element, so that each
 // AdaptationSet's ContentProtection elements receive their own correct PSSH/KID
 // (important when video and audio use different keys under the same schemeIdUri).
 func injectContentProtections(encoded []byte, orig *imdp.ParsedMPD, cfg GeneratorConfig) ([]byte, error) {
@@ -526,29 +523,18 @@ func injectContentProtections(encoded []byte, orig *imdp.ParsedMPD, cfg Generato
 	}
 	var subs []sub
 
+	rewriteLAURL := !cfg.DisablePlayReady && cfg.LicenseURL != ""
 	for _, period := range orig.Periods {
 		for _, as := range period.AdaptationSets {
-			for _, rawCP := range as.RawCPs {
-				sid := attrValue(rawCP, "schemeIdUri")
-				if sid == "" {
+			for _, cp := range as.ParsedContentProtections {
+				if cp.SchemeIDURI == "" || !contentProtectionAllowed(cp.SchemeIDURI, cfg) {
 					continue
 				}
-				if !contentProtectionAllowed(sid, cfg) {
-					continue
+				raw := cp.RawXML
+				if rewriteLAURL {
+					raw = rewriteProElements(raw, cfg.LicenseURL)
 				}
-				val := attrValue(rawCP, "value")
-				// The LA_URL is not rewritten here. RawCPs come back from the
-				// parser re-encoded through encoding/xml, which resolves the
-				// mspr: prefix into an xmlns attribute, so every PlayReady
-				// object reaching this point is spelled <pro xmlns="...">.
-				// rewriteProElements handles that spelling over the finished
-				// bytes, after this injection.
-				raw := rawCP
-				stub := `<ContentProtection schemeIdUri="` + sid + `"/>`
-				if val != "" {
-					stub = `<ContentProtection schemeIdUri="` + sid + `" value="` + val + `"/>`
-				}
-				subs = append(subs, sub{stub: stub, raw: raw})
+				subs = append(subs, sub{stub: contentProtectionStub(cp), raw: raw})
 			}
 		}
 	}
@@ -571,71 +557,85 @@ func injectContentProtections(encoded []byte, orig *imdp.ParsedMPD, cfg Generato
 	return []byte(s), nil
 }
 
-// attrValue extracts an XML attribute value from a raw XML string by simple
-// string search. Used only to identify stubs, not for semantic parsing.
-func attrValue(xml, attr string) string {
-	needle := attr + `="`
-	idx := strings.Index(xml, needle)
-	if idx < 0 {
-		return ""
+// contentProtectionStub spells the element go-mpd writes for cp: its
+// attributes as encoding/xml escapes them, schemeIdUri first. It is built from
+// the parsed values, not by searching the source text, which may quote with '
+// or space the attributes differently.
+func contentProtectionStub(cp imdp.ParsedContentProtection) string {
+	var b strings.Builder
+	b.WriteString(`<ContentProtection schemeIdUri="`)
+	_ = xml.EscapeText(&b, []byte(cp.SchemeIDURI))
+	b.WriteString(`"`)
+	if cp.Value != "" {
+		b.WriteString(` value="`)
+		_ = xml.EscapeText(&b, []byte(cp.Value))
+		b.WriteString(`"`)
 	}
-	rest := xml[idx+len(needle):]
-	end := strings.IndexByte(rest, '"')
-	if end < 0 {
-		return ""
-	}
-	return rest[:end]
+	b.WriteString(`/>`)
+	return b.String()
 }
 
-// rewriteProElements rewrites LA_URL inside every <pro>...</pro> element in the
-// encoded MPD bytes. go-mpd renders mspr:pro as:
-//
-//	<pro xmlns="urn:microsoft:playready">base64blob</pro>
-func rewriteProElements(b []byte, licenseURL string) []byte {
-	const open = `<pro `
-	const closeTag = `</pro>`
-	s := string(b)
-	var result strings.Builder
+// rewriteProElements rewrites the LA_URL inside every PlayReady pro element
+// in one ContentProtection element, however the source prefixed it. The rest
+// of the element's bytes, whitespace around the blob included, are kept.
+func rewriteProElements(raw, licenseURL string) string {
+	// The wrapper binds mspr the way the output root does, so a pro element
+	// that relies on the root's declaration still resolves to its namespace.
+	const open = `<w xmlns:mspr="` + imdp.NamespaceMSPR + `">`
+	doc := open + raw + `</w>`
+
+	type span struct{ start, end int }
+	var blobs []span
+	dec := xml.NewDecoder(strings.NewReader(doc))
+	dec.Strict = false
+	inPro, depth, blobStart := false, 0, 0
 	for {
-		start := strings.Index(s, open)
-		if start < 0 {
-			result.WriteString(s)
-			break
-		}
-		// Find the end of the opening tag
-		tagEnd := strings.Index(s[start:], ">")
-		if tagEnd < 0 {
-			result.WriteString(s)
-			break
-		}
-		tagEnd += start + 1 // position after '>'
-
-		// Find closing tag
-		end := strings.Index(s[tagEnd:], closeTag)
-		if end < 0 {
-			result.WriteString(s)
-			break
-		}
-		end += tagEnd
-
-		b64 := s[tagEnd:end]
-		rewritten, err := RewriteLAURL(b64, licenseURL)
+		before := int(dec.InputOffset())
+		tok, err := dec.Token()
 		if err != nil {
-			// keep original on error
-			rewritten = b64
+			break
 		}
-		result.WriteString(s[:tagEnd])
-		result.WriteString(rewritten)
-		s = s[end:]
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if inPro {
+				depth++
+			} else if t.Name.Local == "pro" && t.Name.Space == imdp.NamespaceMSPR {
+				inPro, depth, blobStart = true, 1, int(dec.InputOffset())
+			}
+		case xml.EndElement:
+			if inPro {
+				if depth--; depth == 0 {
+					inPro = false
+					blobs = append(blobs, span{blobStart, before})
+				}
+			}
+		}
 	}
-	return []byte(result.String())
+
+	var b bytes.Buffer
+	last := 0
+	for _, sp := range blobs {
+		text := doc[sp.start:sp.end]
+		b64 := strings.TrimSpace(text)
+		rewritten, err := RewriteLAURL(b64, licenseURL)
+		if err != nil || b64 == "" {
+			continue // keep original on error
+		}
+		lead := strings.Index(text, b64)
+		b.WriteString(doc[last : sp.start+lead])
+		b.WriteString(rewritten)
+		last = sp.start + lead + len(b64)
+	}
+	b.WriteString(doc[last:])
+	out := b.String()
+	return out[len(open) : len(out)-len(`</w>`)]
 }
 
 // injectNamespaces adds xmlns:cenc and xmlns:mspr declarations to the MPD
 // root element so that prefixed child elements are valid XML.
 func injectNamespaces(b []byte) []byte {
 	const marker = `<MPD `
-	const inject = `xmlns:cenc="urn:mpeg:cenc:2013" xmlns:mspr="urn:microsoft:playready" `
+	const inject = `xmlns:cenc="` + imdp.NamespaceCENC + `" xmlns:mspr="` + imdp.NamespaceMSPR + `" `
 	s := string(b)
 	if idx := strings.Index(s, marker); idx >= 0 {
 		s = s[:idx+len(marker)] + inject + s[idx+len(marker):]

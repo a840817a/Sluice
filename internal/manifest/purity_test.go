@@ -3,6 +3,7 @@ package manifest
 import (
 	"bytes"
 	"os"
+	"regexp"
 	"testing"
 	"time"
 
@@ -111,7 +112,10 @@ func TestGenerateZeroNowUsesWallClock(t *testing.T) {
 
 func publishTimeOf(t *testing.T, mpd []byte) time.Time {
 	t.Helper()
-	got := attrValue(string(mpd), "publishTime")
+	var got string
+	if m := regexp.MustCompile(`publishTime="([^"]*)"`).FindSubmatch(mpd); m != nil {
+		got = string(m[1])
+	}
 	if got == "" {
 		t.Fatalf("no publishTime in output:\n%s", truncateXML(mpd))
 	}

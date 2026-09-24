@@ -32,7 +32,8 @@ func proBlob(t *testing.T, xml string) string {
 func laURLsIn(t *testing.T, doc string) []string {
 	t.Helper()
 	var out []string
-	// <mspr:pro> is the preserved upstream form; <pro ...> is go-mpd's rendering.
+	// <mspr:pro> is the usual upstream spelling; <pro ...> covers an upstream
+	// that binds the namespace as the default on the element itself.
 	for _, re := range []*regexp.Regexp{
 		regexp.MustCompile(`(?s)<mspr:pro>(.*?)</mspr:pro>`),
 		regexp.MustCompile(`(?s)<pro[^>]*>(.*?)</pro>`),
@@ -62,10 +63,9 @@ const wrmHeader = `<WRMHEADER xmlns="http://schemas.microsoft.com/DRM/2007/03/Pl
 	`<LA_URL>https://upstream.example/license</LA_URL>` +
 	`<CHECKSUM>abcdefgh</CHECKSUM></DATA></WRMHEADER>`
 
-// The end that matters: whichever rendering carried the blob, no player is ever
-// handed the upstream licence server's address. The two rewrites — one over the
-// preserved <mspr:pro> string, one over go-mpd's <pro> output — implement the
-// same rule separately, so this asserts the result rather than either path.
+// The end that matters: no player is ever handed the upstream licence server's
+// address. This asserts the result in the output rather than the rewrite that
+// produces it.
 func TestGeneratedManifestNeverPointsAtTheUpstreamLicenceServer(t *testing.T) {
 	data, err := os.ReadFile("../../testdata/manifest.mpd")
 	if err != nil {
@@ -112,12 +112,10 @@ func TestGeneratedManifestNeverPointsAtTheUpstreamLicenceServer(t *testing.T) {
 	}
 }
 
-// The same assertion for an upstream that writes the namespace-prefixed
-// spelling. It is worth its own case because the two spellings could plausibly
-// take different routes through the generator — and this is the one that shows
-// they do not: the parser re-encodes every ContentProtection through
-// encoding/xml, so <mspr:pro> arrives here already resolved to
-// <pro xmlns="urn:microsoft:playready"> and the same rewrite handles both.
+// The same assertion for a minimal upstream that writes the namespace-prefixed
+// spelling. The parser keeps ContentProtection elements as source bytes, so
+// <mspr:pro> reaches the rewrite spelled exactly so, and the rewrite has to
+// find the element by namespace rather than by its literal name.
 func TestGeneratedManifestRewritesTheNamespacePrefixedSpelling(t *testing.T) {
 	raw := `<?xml version="1.0" encoding="utf-8"?>
 <MPD xmlns="urn:mpeg:dash:schema:mpd:2011" xmlns:mspr="urn:microsoft:playready"

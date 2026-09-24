@@ -31,6 +31,7 @@ type localMPD struct {
 	XMLName                   xml.Name      `xml:"MPD"`
 	Xmlns                     string        `xml:"xmlns,attr"`
 	XmlnsCenc                 string        `xml:"xmlns:cenc,attr,omitempty"`
+	XmlnsMspr                 string        `xml:"xmlns:mspr,attr,omitempty"`
 	Type                      string        `xml:"type,attr"`
 	Profiles                  string        `xml:"profiles,attr"`
 	MinBufferTime             string        `xml:"minBufferTime,attr"`
@@ -46,7 +47,9 @@ type localPeriod struct {
 // RawCPs carries the ContentProtection elements verbatim. encoding/xml drops
 // namespace-prefixed attributes and children (cenc:default_KID, cenc:pssh,
 // mspr:pro), which is the same reason the served manifest re-injects them, so
-// the parser's preserved source text is written through untouched.
+// the parser's preserved source text is written through untouched. It relies
+// on the root declaring cenc and mspr, as imdp.ParsedAdaptationSet.RawCPs
+// requires.
 type localAS struct {
 	MimeType string     `xml:"mimeType,attr,omitempty"`
 	Lang     string     `xml:"lang,attr,omitempty"`
@@ -103,7 +106,8 @@ func GenerateLocalMPD(orig *imdp.ParsedMPD, snap index.Snapshot, channelDir stri
 
 	doc := localMPD{
 		Xmlns:         "urn:mpeg:dash:schema:mpd:2011",
-		XmlnsCenc:     "urn:mpeg:cenc:2013",
+		XmlnsCenc:     imdp.NamespaceCENC,
+		XmlnsMspr:     imdp.NamespaceMSPR,
 		Type:          "static",
 		Profiles:      "urn:mpeg:dash:profile:isoff-main:2011",
 		MinBufferTime: "PT2S",

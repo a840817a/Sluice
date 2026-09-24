@@ -51,7 +51,7 @@ func TestGenerateStaticMPD(t *testing.T) {
 
 	// Gateway license URL must appear inside the mspr:pro blob.
 	// The <pro> element contains base64(UTF-16LE XML) — decode and verify.
-	re := regexp.MustCompile(`<pro[^>]*>([A-Za-z0-9+/=\s]+)</pro>`)
+	re := regexp.MustCompile(`<(?:\w+:)?pro[^>]*>([A-Za-z0-9+/=\s]+)</(?:\w+:)?pro>`)
 	proMatches := re.FindAllStringSubmatch(xml, -1)
 	if len(proMatches) == 0 {
 		t.Fatal("no <pro> elements found in output")

@@ -66,15 +66,15 @@ type ParsedAdaptationSet struct {
 	BaseURL            string   // primary <BaseURL>
 	AltBaseURLs        []string // fallback <BaseURL> elements (index 1+)
 	ContentProtections []gompeg.Descriptor
-	// RawCPs holds the XML of each ContentProtection element, including the
-	// namespace-prefixed attributes and children that encoding/xml drops.
+	// RawCPs holds the source bytes of each ContentProtection element, so
+	// namespace-prefixed attributes and children (cenc:default_KID, cenc:pssh,
+	// mspr:pro) keep their literal prefixes: DRM tools match on them.
 	// Indexed in the same order as ContentProtections.
 	//
-	// It is re-serialized, not verbatim: prefixes do not survive, so
-	// cenc:default_KID comes back as xmlns:_="urn:mpeg:cenc:2013" _:default_KID
-	// and cenc:pssh as <pssh xmlns="urn:mpeg:cenc:2013">. That is
-	// namespace-equivalent, but it breaks consumers that match the literal
-	// cenc: prefix.
+	// A prefix the element borrows from an ancestor is declared on the
+	// element itself, unless it is cenc or mspr bound to NamespaceCENC or
+	// NamespaceMSPR: the documents RawCPs are written into declare those two
+	// on their root.
 	RawCPs                   []string
 	ParsedContentProtections []ParsedContentProtection
 	Representations          []*ParsedRepresentation
@@ -658,10 +658,21 @@ func inferMediaType(mimeType string, contentType *string) MediaType {
 	return MediaUnknown
 }
 
-// extractRawContentProtections parses the raw MPD bytes using a streaming XML
-// decoder and returns one []string per AdaptationSet, where each string is the
-// verbatim XML of one ContentProtection element (including namespace-prefixed
-// children that encoding/xml would otherwise drop).
+// Namespaces the generated manifests declare on their root element, so that
+// ContentProtection elements copied from the source can use the cenc: and
+// mspr: prefixes without declaring them.
+const (
+	NamespaceCENC = "urn:mpeg:cenc:2013"
+	NamespaceMSPR = "urn:microsoft:playready"
+)
+
+// extractRawContentProtections returns one []string per AdaptationSet, where
+// each string is the source bytes of one ContentProtection element (see
+// ParsedAdaptationSet.RawCPs).
+//
+// The bytes are sliced from the source rather than re-encoded: encoding/xml
+// cannot write a prefix, so a round trip turns cenc:default_KID into
+// _:default_KID and <cenc:pssh> into <pssh xmlns="urn:mpeg:cenc:2013">.
 //
 // Outer slice index = AdaptationSet order in document.
 // Inner slice index = ContentProtection order within that AdaptationSet.
@@ -669,31 +680,36 @@ func extractRawContentProtections(data []byte) [][]string {
 	var result [][]string
 	var current []string
 	inAS := false
+	// scopes[i] holds the prefixes declared on the i-th open element.
+	var scopes []map[string]string
 
 	dec := xml.NewDecoder(bytes.NewReader(data))
 	dec.Strict = false
 	dec.AutoClose = xml.HTMLAutoClose
 
 	for {
+		start := dec.InputOffset()
 		tok, err := dec.Token()
 		if err != nil {
 			break
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
-			switch t.Name.Local {
-			case "AdaptationSet":
+			if t.Name.Local == "ContentProtection" && inAS {
+				if end, ok := skipElement(dec); ok {
+					current = append(current, declareBorrowedPrefixes(data[start:end], scopes))
+				}
+				continue
+			}
+			scopes = append(scopes, declaredPrefixes(t.Attr))
+			if t.Name.Local == "AdaptationSet" {
 				inAS = true
 				current = nil
-			case "ContentProtection":
-				if inAS {
-					raw, err := tokenToString(t, dec)
-					if err == nil {
-						current = append(current, raw)
-					}
-				}
 			}
 		case xml.EndElement:
+			if len(scopes) > 0 {
+				scopes = scopes[:len(scopes)-1]
+			}
 			if t.Name.Local == "AdaptationSet" {
 				result = append(result, current)
 				inAS = false
@@ -702,6 +718,123 @@ func extractRawContentProtections(data []byte) [][]string {
 		}
 	}
 	return result
+}
+
+// skipElement consumes tokens up to and including the end of the element
+// whose start was just read, and returns the input offset just past it.
+func skipElement(dec *xml.Decoder) (int64, bool) {
+	for depth := 1; depth > 0; {
+		tok, err := dec.Token()
+		if err != nil {
+			return 0, false
+		}
+		switch tok.(type) {
+		case xml.StartElement:
+			depth++
+		case xml.EndElement:
+			depth--
+		}
+	}
+	return dec.InputOffset(), true
+}
+
+// declaredPrefixes returns the prefix declarations (xmlns:p="uri") among attrs.
+func declaredPrefixes(attrs []xml.Attr) map[string]string {
+	var m map[string]string
+	for _, a := range attrs {
+		if a.Name.Space == "xmlns" {
+			if m == nil {
+				m = make(map[string]string)
+			}
+			m[a.Name.Local] = a.Value
+		}
+	}
+	return m
+}
+
+// declareBorrowedPrefixes makes a copied element self-contained: every prefix
+// it uses but does not declare itself is declared on its start tag, with the
+// binding found in ancestors. cenc and mspr bound to their usual namespaces are
+// left to the output document's root.
+func declareBorrowedPrefixes(raw []byte, ancestors []map[string]string) string {
+	elemName, borrowed := borrowedPrefixes(raw)
+	var decls strings.Builder
+	for _, prefix := range borrowed {
+		uri, ok := lookupPrefix(ancestors, prefix)
+		if !ok {
+			continue // unbound in the source too; nothing to carry
+		}
+		if (prefix == "cenc" && uri == NamespaceCENC) || (prefix == "mspr" && uri == NamespaceMSPR) {
+			continue
+		}
+		decls.WriteString(" xmlns:" + prefix + `="`)
+		_ = xml.EscapeText(&decls, []byte(uri))
+		decls.WriteString(`"`)
+	}
+	if decls.Len() == 0 {
+		return string(raw)
+	}
+	at := len("<") + len(elemName)
+	return string(raw[:at]) + decls.String() + string(raw[at:])
+}
+
+// borrowedPrefixes returns the element's qualified name and, in first-use
+// order, the prefixes used within it that no element within it declares in
+// scope.
+func borrowedPrefixes(raw []byte) (string, []string) {
+	var elemName string
+	var borrowed []string
+	seen := make(map[string]bool)
+	var scopes []map[string]string
+
+	use := func(prefix string) {
+		if prefix == "" || prefix == "xmlns" || prefix == "xml" || seen[prefix] {
+			return
+		}
+		if _, ok := lookupPrefix(scopes, prefix); ok {
+			return
+		}
+		seen[prefix] = true
+		borrowed = append(borrowed, prefix)
+	}
+
+	dec := xml.NewDecoder(bytes.NewReader(raw))
+	dec.Strict = false
+	for {
+		tok, err := dec.RawToken()
+		if err != nil {
+			break
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if elemName == "" {
+				elemName = t.Name.Local
+				if t.Name.Space != "" {
+					elemName = t.Name.Space + ":" + t.Name.Local
+				}
+			}
+			scopes = append(scopes, declaredPrefixes(t.Attr))
+			use(t.Name.Space)
+			for _, a := range t.Attr {
+				use(a.Name.Space)
+			}
+		case xml.EndElement:
+			if len(scopes) > 0 {
+				scopes = scopes[:len(scopes)-1]
+			}
+		}
+	}
+	return elemName, borrowed
+}
+
+// lookupPrefix resolves prefix against scopes, innermost last.
+func lookupPrefix(scopes []map[string]string, prefix string) (string, bool) {
+	for i := len(scopes) - 1; i >= 0; i-- {
+		if uri, ok := scopes[i][prefix]; ok {
+			return uri, true
+		}
+	}
+	return "", false
 }
 
 func parseRawContentProtections(rawCPs []string) []ParsedContentProtection {
@@ -798,33 +931,4 @@ func readElementText(dec *xml.Decoder, _ string) (string, bool) {
 		}
 	}
 	return b.String(), true
-}
-
-// tokenToString re-encodes a StartElement and its contents back to an XML string.
-func tokenToString(start xml.StartElement, dec *xml.Decoder) (string, error) {
-	var buf bytes.Buffer
-	enc := xml.NewEncoder(&buf)
-
-	if err := enc.EncodeToken(start); err != nil {
-		return "", err
-	}
-	depth := 1
-	for depth > 0 {
-		tok, err := dec.Token()
-		if err != nil {
-			break
-		}
-		switch t := tok.(type) {
-		case xml.StartElement:
-			depth++
-			_ = enc.EncodeToken(t)
-		case xml.EndElement:
-			depth--
-			_ = enc.EncodeToken(t)
-		case xml.CharData:
-			_ = enc.EncodeToken(t)
-		}
-	}
-	_ = enc.Flush()
-	return buf.String(), nil
 }
