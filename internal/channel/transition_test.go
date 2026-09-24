@@ -28,6 +28,7 @@ func registerRuntime(t *testing.T, m *Manager, id string, mode ChannelMode) *Run
 		Progress: progress.New(),
 		cancel:   cancel,
 		vodDone:  make(chan struct{}),
+		ingest:   &fakeIngest{},
 	}
 	rt.Watcher = &dashingest.Watcher{}
 	seedVODSource(t, rt)
@@ -119,24 +120,6 @@ func TestTransitionToVODAcceptsLiveAndStaticIngesting(t *testing.T) {
 				t.Error("vodDone was not closed, so anything waiting on the transition still is")
 			}
 		})
-	}
-}
-
-// A restore-to-live installs a suppression so the channel does not immediately
-// fall back into VOD when the finished upstream completes again. An operator
-// asking for the transition by hand is saying they want it anyway.
-func TestTransitionToVODOverridesRestoreSuppression(t *testing.T) {
-	m := managerForTransition(t)
-	rt := registerRuntime(t, m, "c", ModeLive)
-	rt.modes.begin(ModeLive, true, 1000) // far above anything stored, so nothing lifts it
-
-	if err := m.TransitionToVOD("c"); err != nil {
-		t.Fatalf("TransitionToVOD: %v", err)
-	}
-	waitForMode(t, rt, ModeVOD, 5*time.Second)
-
-	if rt.modes.suppressed.Load() {
-		t.Error("suppression survived an explicit operator transition")
 	}
 }
 

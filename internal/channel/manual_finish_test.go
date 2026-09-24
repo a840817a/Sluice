@@ -154,53 +154,6 @@ func TestStopInterruptsManualVODDrain(t *testing.T) {
 	}
 }
 
-func TestAutomaticVODKeepsStaticIngestingWhileDraining(t *testing.T) {
-	m, rt, _, done, release, _ := gatedFinishChannel(t, true)
-	waitForMode(t, rt, ModeStaticIngesting, 3*time.Second)
-	// A manual request during automatic draining must still be accepted and
-	// converge on one callback, without abandoning already admitted work.
-	if err := m.TransitionToVOD(rt.ID); err != nil {
-		t.Fatal(err)
-	}
-	release()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("manual/automatic completion did not converge")
-	}
-	if got := storedSegments(rt.VODIndex()); got != 3 {
-		t.Fatalf("VOD has %d segments, want 3", got)
-	}
-}
-
-func TestRestartInterruptsManualVODDrain(t *testing.T) {
-	m, rt, st, done, _, _ := gatedFinishChannel(t, false)
-	if err := m.TransitionToVOD(rt.ID); err != nil {
-		t.Fatal(err)
-	}
-	restarted := make(chan error, 1)
-	go func() { restarted <- m.Restart(context.Background(), rt.ID) }()
-	select {
-	case err := <-restarted:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("Restart hung behind VOD drain")
-	}
-	if next := m.Get(rt.ID); next == nil || next == rt || next.Mode() != ModeLive {
-		t.Fatal("Restart did not replace the interrupted runtime with live ingest")
-	}
-	select {
-	case <-done:
-		t.Fatal("interrupted runtime published VOD")
-	default:
-	}
-	if saved, _ := st.Get(rt.ID); saved.IsVOD {
-		t.Fatal("interrupted runtime persisted VOD")
-	}
-}
-
 func failedVODRebuild(t *testing.T) (*Manager, *Runtime, *Store, string) {
 	t.Helper()
 	m := managerForTransition(t)

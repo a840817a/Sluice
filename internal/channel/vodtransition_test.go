@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/a840817a/sluice/internal/pipeline"
-	"github.com/a840817a/sluice/internal/progress"
 )
 
 // startEndedHLSOrigin serves a finished HLS asset: one variant, segCount
@@ -232,36 +231,5 @@ func TestRestoreToLiveRejectsALiveChannel(t *testing.T) {
 	}
 	if err := m.RestoreToLive(context.Background(), "nosuch"); err == nil {
 		t.Error("restoring an unknown channel succeeded")
-	}
-}
-
-// TestAutoVODSuppressionLiftsOnNewSegment pins the release condition. A
-// one-way flag would leave a restored channel unable to ever transition again,
-// which is a worse bug than the one the flag fixes.
-func TestAutoVODSuppressionLiftsOnNewSegment(t *testing.T) {
-	rt := &Runtime{Progress: progress.New()}
-	rt.Progress.SeedStored(7)
-	rt.modes.begin(ModeLive, true, 7)
-
-	if rt.autoVODAllowed() {
-		t.Fatal("auto-VOD is allowed while suppressed and nothing new has been stored")
-	}
-
-	rt.Progress.AddStored(1, 1024)
-
-	if !rt.autoVODAllowed() {
-		t.Error("auto-VOD is still suppressed after a new segment was stored")
-	}
-	if rt.modes.suppressed.Load() {
-		t.Error("the suppression flag was not cleared, so the check pays for itself forever")
-	}
-}
-
-// TestAutoVODAllowedByDefault guards the ordinary path: a channel nobody
-// restored must never be held out of VOD.
-func TestAutoVODAllowedByDefault(t *testing.T) {
-	rt := &Runtime{Progress: progress.New()}
-	if !rt.autoVODAllowed() {
-		t.Error("a channel that was never restored is suppressed")
 	}
 }

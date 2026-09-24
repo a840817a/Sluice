@@ -41,15 +41,12 @@ type Runtime struct {
 	// headers is the provider shared by Keys, Source and the fetch pool. Holding
 	// it here is what lets UpdateConfig rotate upstream credentials in place.
 	headers *fetch.AtomicHeaders
-	// cancel ends the whole runtime. Source and pipeline have child contexts so
-	// the VOD transition can stop admitting work while allowing work already admitted
-	// to finish.
+	// cancel ends the whole runtime. Source and pipeline have child contexts,
+	// reached through ingest, so the VOD transition can stop admitting work
+	// while allowing work already admitted to finish.
 	cancel       context.CancelFunc
 	lifecycleCtx context.Context
-	sourceCancel context.CancelFunc
-	poolCancel   context.CancelFunc
-	sourceDone   chan struct{} // closed after Source.Run has returned for good
-	pipelineDone chan struct{} // closed after the pool and processor have exited
+	ingest       ingestControl
 	// wg counts every goroutine started on this channel's behalf, so Stop can
 	// join them instead of merely cancelling. Each Add happens either before
 	// Start returns or inside a goroutine that is itself already counted, so it
@@ -266,6 +263,13 @@ func (m *Manager) start(parentCtx context.Context, id string, cfg Config) (*Runt
 	poolCtx, poolCancel := context.WithCancel(lifecycleCtx)
 
 	pl := newIngestPipeline(m.gwCfg, id, cfg)
+	var parsedMPD func() *imdp.ParsedMPD
+	if pl.watcher != nil {
+		parsedMPD = pl.watcher.ParsedMPD
+	} else {
+		parsedMPD = func() *imdp.ParsedMPD { return nil }
+	}
+	ingest := newChannelIngest(sourceCancel, poolCancel, pl.broker, parsedMPD)
 
 	rt := &Runtime{
 		ID:           id,
@@ -279,10 +283,7 @@ func (m *Manager) start(parentCtx context.Context, id string, cfg Config) (*Runt
 		headers:      pl.headers,
 		cancel:       cancel,
 		lifecycleCtx: lifecycleCtx,
-		sourceCancel: sourceCancel,
-		poolCancel:   poolCancel,
-		sourceDone:   make(chan struct{}),
-		pipelineDone: make(chan struct{}),
+		ingest:       ingest,
 		vodDone:      make(chan struct{}),
 	}
 	rt.setConfig(cfg)
@@ -311,7 +312,7 @@ func (m *Manager) start(parentCtx context.Context, id string, cfg Config) (*Runt
 	// Count and launch while the runtime is published under m.mu. Stop removes
 	// it under the same lock before calling Wait, so it cannot observe a zero
 	// WaitGroup between publication and this Add.
-	m.launchIngest(sourceCtx, poolCtx, lifecycleCtx, rt, cfg, pl)
+	m.launchIngest(sourceCtx, poolCtx, lifecycleCtx, rt, cfg, pl, ingest)
 	m.mu.Unlock()
 
 	slog.Info("channel started", "id", id)
@@ -321,15 +322,10 @@ func (m *Manager) start(parentCtx context.Context, id string, cfg Config) (*Runt
 // restoreVODState brings a channel back up in VOD mode from persisted state,
 // without triggering a new transition. The runtime already starts in ModeVOD.
 func (m *Manager) restoreVODState(rt *Runtime, id string) {
-	rt.vodIndex.Store(rt.Index)
-	rt.vodOnce.Do(func() { close(rt.vodDone) })
-
 	// A restored VOD channel is complete by definition: nothing further will be
 	// ingested, and what is on disk is the whole asset. Saying so lets the card
-	// render "finished" rather than an empty progress bar. The original
-	// discovery total is not on disk, so the restored count stands in for it.
-	rt.Progress.SetExpectedTotal(rt.Progress.Snapshot().SegmentsStored)
-	rt.Progress.MarkIngestComplete()
+	// render "finished" rather than an empty progress bar.
+	rt.enterVOD(rt.Index, false)
 
 	m.restoreVODUpstreamMPD(rt)
 
@@ -341,7 +337,7 @@ func (m *Manager) restoreVODState(rt *Runtime, id string) {
 //
 // Every goroutine is counted in rt.wg, which is what lets Stop join them rather
 // than merely cancel them — see Stop for why that matters.
-func (m *Manager) launchIngest(sourceCtx, poolCtx, processorCtx context.Context, rt *Runtime, cfg Config, pl *ingestPipeline) {
+func (m *Manager) launchIngest(sourceCtx, poolCtx, processorCtx context.Context, rt *Runtime, cfg Config, pl *ingestPipeline, ingest *channelIngest) {
 	// pipelineWG lets the VOD transition join just the pool and processor. It
 	// must not wait on rt.wg: the transition itself is counted there, so that
 	// would make a Stop racing a VOD transition deadlock.
@@ -350,12 +346,12 @@ func (m *Manager) launchIngest(sourceCtx, poolCtx, processorCtx context.Context,
 	rt.wg.Add(5)
 	go func() { defer rt.wg.Done(); defer pipelineWG.Done(); pl.pool.Run(poolCtx) }()
 	go func() { defer rt.wg.Done(); defer pipelineWG.Done(); pl.processor.Run(processorCtx, pl.pool) }()
-	go func() { defer rt.wg.Done(); m.superviseSource(sourceCtx, rt, cfg, pl) }()
+	go func() { defer rt.wg.Done(); defer close(ingest.sourceDone); m.superviseSource(sourceCtx, rt, cfg) }()
 	go func() { defer rt.wg.Done(); m.awaitStaticUpstream(sourceCtx, rt) }()
 	go func() {
 		defer rt.wg.Done()
 		pipelineWG.Wait()
-		close(rt.pipelineDone)
+		close(ingest.pipelineDone)
 	}()
 }
 
@@ -424,8 +420,7 @@ func staticIngestVisible(upstreamFinished, autoVODAllowed bool) bool {
 
 // superviseSource runs the channel's source, restarting it with backoff until
 // the context is cancelled or ingestion completes.
-func (m *Manager) superviseSource(ctx context.Context, rt *Runtime, cfg Config, pl *ingestPipeline) {
-	defer close(rt.sourceDone)
+func (m *Manager) superviseSource(ctx context.Context, rt *Runtime, cfg Config) {
 	backoff := 2 * time.Second
 	for {
 		err := rt.Source.Run(ctx)
@@ -517,61 +512,24 @@ func (m *Manager) TransitionToVOD(id string) error {
 	}
 	slog.Info("channel transitioning to VOD", "id", rt.ID, "trigger", "manual")
 	rt.wg.Add(1)
-	go func() { defer rt.wg.Done(); m.finalizeVODTransition(rt) }()
+	go func() { defer rt.wg.Done(); newVODTransition(m, rt).Run(lifecycleContext(rt)) }()
 	return nil
 }
 
-// drainCheckInterval is how often a channel whose source has finished is polled
-// for the pipeline going idle. It can be short because Broker.Idle answers the
-// question exactly: it used to be two seconds, which was not a poll interval so
-// much as a grace period long enough for in-flight segments to land before an
-// empty queue was mistaken for a finished ingest.
-const drainCheckInterval = 100 * time.Millisecond
-
-// awaitPipelineDrain waits for every task admitted before source shutdown to
-// reach a terminal state, including any retries the processor requeues. An idle
-// broker is stronger than an empty queue: it also excludes a fetch, result, or
-// write still in flight.
-func (m *Manager) awaitPipelineDrain(rt *Runtime, broker *queue.Broker) bool {
-	if broker == nil {
-		return !runtimeCancelled(rt)
-	}
-	ticker := time.NewTicker(drainCheckInterval)
-	defer ticker.Stop()
-	for {
-		if broker.Idle() {
-			return true
-		}
-		select {
-		case <-runtimeDone(rt):
-			return false
-		case <-ticker.C:
-		}
-	}
-}
-
 // awaitStaticIngestComplete keeps a completed source visibly static-ingesting
-// while the already admitted work drains. The final compare-and-swap is the
-// automatic side of the manual/automatic race: a manual request can claim the
+// while the already admitted work drains. The claim is the automatic side of
+// the manual/automatic race: a manual request can claim the
 // transition during this wait and thereby becomes the only one to run it.
 func (m *Manager) awaitStaticIngestComplete(rt *Runtime) {
-	if !m.awaitPipelineDrain(rt, rt.Broker) {
+	ctx := lifecycleContext(rt)
+	if !rt.ingest.AwaitDrain(ctx) {
 		return
 	}
 	if _, ok := rt.modes.Claim(claimAuto); !ok {
 		return
 	}
 	slog.Info("channel transitioning to VOD", "id", rt.ID, "trigger", "auto")
-	m.finalizeVODTransition(rt)
-}
-
-// recordVODWarnings logs a VOD transition attempt's warnings and publishes them
-// in the channel status.
-func recordVODWarnings(rt *Runtime, warnings []string) {
-	for _, w := range warnings {
-		slog.Warn("VOD transition step failed", "channel", rt.ID, "warning", w)
-	}
-	rt.vodWarnings.Store(&warnings)
+	newVODTransition(m, rt).Run(ctx)
 }
 
 // lifecycleContext is the runtime's lifecycle context, or Background for a
@@ -581,180 +539,6 @@ func lifecycleContext(rt *Runtime) context.Context {
 		return context.Background()
 	}
 	return rt.lifecycleCtx
-}
-
-func runtimeDone(rt *Runtime) <-chan struct{} {
-	return lifecycleContext(rt).Done()
-}
-
-func runtimeCancelled(rt *Runtime) bool {
-	select {
-	case <-runtimeDone(rt):
-		return true
-	default:
-		return false
-	}
-}
-
-// staticIngestShortfall reports whether a finished static ingest holds fewer
-// segments than the source named, and the two counts behind that judgement.
-//
-// A total the source never stated (a live stream) or one the enumeration capped
-// cannot be compared against, so neither counts as short.
-func staticIngestShortfall(snap progress.Snapshot, dropped uint64) (short bool, stored, expected uint64) {
-	stored, expected = snap.SegmentsStored, snap.ExpectedSegments
-	if !snap.TotalKnown || snap.TotalCapped || expected == 0 {
-		return false, stored, expected
-	}
-	return stored < expected || dropped > 0, stored, expected
-}
-
-func logStaticIngestShortfall(rt *Runtime) {
-	if rt.Broker == nil {
-		return
-	}
-	if short, stored, expected := staticIngestShortfall(rt.Progress.Snapshot(), rt.Broker.Dropped()); short {
-		// An idle broker means no work is left, not that the work was done: a
-		// task shed under load leaves the queue just as empty as a task fetched.
-		// The VOD is built from what reached disk, so say plainly that it is
-		// incomplete rather than let a partial asset pass for a finished one.
-		slog.Error("static ingest finished short of the source's segment count",
-			"channel", rt.ID,
-			"stored", stored,
-			"expected", expected,
-			"dropped", rt.Broker.Dropped(),
-		)
-	}
-}
-
-// finalizeVODTransition turns a claimed transition into VOD. It first closes
-// source admission, then drains and joins the pipeline, so the disk rebuild
-// sees every task that was already accepted when the transition was requested.
-func (m *Manager) finalizeVODTransition(rt *Runtime) {
-	if rt.sourceCancel != nil {
-		rt.sourceCancel()
-	}
-	if rt.sourceDone != nil {
-		select {
-		case <-rt.sourceDone:
-		case <-runtimeDone(rt):
-			return
-		}
-	}
-	// The last successful source poll may have updated the parsed MPD just
-	// before Source.Run returned. Capture it only after source exit so the final
-	// duration reflects that last observation.
-	finalMPD := rt.ParsedMPD()
-	if runtimeCancelled(rt) || !m.awaitPipelineDrain(rt, rt.Broker) {
-		return
-	}
-	logStaticIngestShortfall(rt)
-
-	// No work remains. Stop the pool so it closes Results. The processor then
-	// exits naturally after its final result and waits for key warming under the
-	// still-live runtime context; cancelling it here would abandon a
-	// passthrough key cache just before the VOD needs to serve it offline.
-	// Waiting only for pipelineDone avoids waiting for this VOD transition
-	// through rt.wg itself.
-	if rt.poolCancel != nil {
-		rt.poolCancel()
-	}
-	if rt.pipelineDone != nil {
-		select {
-		case <-rt.pipelineDone:
-		case <-runtimeDone(rt):
-			return
-		}
-	}
-	if runtimeCancelled(rt) {
-		return
-	}
-	m.publishVODTransition(rt, finalMPD)
-}
-
-// publishVODTransition rebuilds a full-history index from disk and publishes
-// it after its caller has made the ingest pipeline quiescent.
-func (m *Manager) publishVODTransition(rt *Runtime, finalMPD *imdp.ParsedMPD) {
-	if finalMPD != nil && finalMPD.MediaPresentationDuration > 0 {
-		rt.finalDuration.Store(int64(finalMPD.MediaPresentationDuration))
-	}
-
-	// Every exit below records this attempt's warnings, replacing those of an
-	// earlier failed attempt.
-	warnings := m.checkpointVODMedia(rt)
-
-	// Rebuild from disk with unbounded ring buffers so the VOD covers the whole
-	// recorded history rather than just what the live ring still held. fMP4
-	// timing comes from each segment's tfdt box and MPEG-TS timing from the
-	// per-representation sidecar, so both formats reconstruct fully.
-	vodCI := index.NewChannelIndex()
-	if err := index.RebuildFromDiskForVOD(vodCI, m.gwCfg.Store.DataDir, rt.ID); err != nil {
-		slog.Error("VOD rebuild failed", "channel", rt.ID, "err", err)
-		// Ingest is already stopped. Expose a retryable failure rather than
-		// claiming live ingest or leaving a completed attempt "transitioning".
-		// The checkpoint's warnings may explain the failure, so keep them.
-		recordVODWarnings(rt, warnings)
-		rt.modes.Fail()
-		return
-	}
-
-	// Key fetches go to the network, so they happen before configMu: a hot
-	// edit must not wait on an unreachable key server.
-	warnings = append(warnings, checkpointHLSSource(rt, vodCI.Snapshot())...)
-
-	// A hot edit cannot change the configuration between manifest generation,
-	// the store commit, and runtime publication. Stop never acquires configMu.
-	rt.configMu.Lock()
-	a, err := m.captureVODArtifacts(rt, vodCI)
-	if err != nil {
-		rt.configMu.Unlock()
-		slog.Error("VOD artifact capture failed", "channel", rt.ID, "err", err)
-		recordVODWarnings(rt, warnings)
-		rt.modes.Fail()
-		return
-	}
-	warnings = append(warnings, a.persistDASHManifests()...)
-	m.mu.RLock()
-	st, cb := m.store, m.onVODReady
-	m.mu.RUnlock()
-	if st != nil {
-		// Merge under the store's lock rather than Get+Put: an operator can
-		// be saving an edit to this same channel right now, and a plain
-		// read-modify-write would silently drop whichever side lost.
-		merged, syncErr, saveErr := st.update(rt.ID, func(c *Config) { c.IsVOD = true })
-		if saveErr != nil {
-			warnings = append(warnings, fmt.Sprintf("persist VOD state: %v", saveErr))
-		} else {
-			// The rename happened, so the new config is committed even when
-			// its directory sync failed.
-			rt.setConfig(merged)
-			if syncErr != nil {
-				warnings = append(warnings, fmt.Sprintf("sync VOD state: %v", syncErr))
-			}
-		}
-	}
-	recordVODWarnings(rt, warnings)
-	rt.vodOnce.Do(func() {
-		rt.vodIndex.Store(vodCI)
-		rt.modes.Complete()
-		snap := rt.Progress.Snapshot()
-		if !snap.TotalKnown {
-			rt.Progress.SetExpectedTotal(snap.SegmentsStored)
-		}
-		rt.Progress.MarkIngestComplete()
-		close(rt.vodDone)
-	})
-	rt.configMu.Unlock()
-	slog.Info("channel VOD ready", "id", rt.ID)
-
-	// Optional exports use the same capture, but cannot revoke durable VOD.
-	// They remain inside this counted VOD transition so Stop also joins their
-	// writes.
-	a.writeOptional()
-	if cb != nil {
-		rt.wg.Add(1)
-		go func() { defer rt.wg.Done(); cb(rt) }()
-	}
 }
 
 // Stop shuts down the channel's goroutines and does not return until they have

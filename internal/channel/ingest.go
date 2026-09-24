@@ -4,7 +4,9 @@ package channel
 // and in what order.
 
 import (
+	"context"
 	"log/slog"
+	"time"
 
 	gocfg "github.com/a840817a/sluice/internal/config"
 	"github.com/a840817a/sluice/internal/dashingest"
@@ -12,6 +14,7 @@ import (
 	"github.com/a840817a/sluice/internal/hlsingest"
 	"github.com/a840817a/sluice/internal/hlskey"
 	"github.com/a840817a/sluice/internal/index"
+	imdp "github.com/a840817a/sluice/internal/mpd"
 	"github.com/a840817a/sluice/internal/pipeline"
 	"github.com/a840817a/sluice/internal/progress"
 	"github.com/a840817a/sluice/internal/queue"
@@ -161,4 +164,95 @@ func (p *ingestPipeline) attachSource(id string, cfg Config, chGwCfg gocfg.Confi
 	// HLS tracks are independent media playlists the player aligns itself, so
 	// publish each segment directly rather than gating on the A/V barrier.
 	p.processor.SetPublishPolicy(pipeline.PublishImmediate)
+}
+
+// ingestControl is the VOD transition's seam onto a channel's ingest: the three
+// steps that bring it to rest, in the order the transition calls them.
+//
+// Each step is idempotent, because a retried transition runs all three again
+// against ingest that an earlier attempt already brought to rest. Each returns
+// false when ctx ends first, which is how Stop abandons a transition that has
+// not reached publication.
+type ingestControl interface {
+	// StopAdmission stops the source from admitting new work and waits for it
+	// to exit. It returns the last MPD the source observed (nil for HLS), read
+	// only after the source exited so it reflects the final poll.
+	StopAdmission(ctx context.Context) (finalMPD *imdp.ParsedMPD, ok bool)
+	// AwaitDrain waits until every task already admitted, including any retry
+	// the processor requeues, has reached a terminal state.
+	AwaitDrain(ctx context.Context) bool
+	// Join stops the fetch pool and waits for the pool and the processor to
+	// exit. The processor is not cancelled: it finishes its last result and
+	// waits for key warming, so a passthrough key cache is not abandoned just
+	// before the VOD needs to serve it offline.
+	Join(ctx context.Context) bool
+}
+
+// drainCheckInterval is how often a channel whose source has finished is polled
+// for the pipeline going idle. It can be short because Broker.Idle answers the
+// question exactly: it used to be two seconds, which was not a poll interval so
+// much as a grace period long enough for in-flight segments to land before an
+// empty queue was mistaken for a finished ingest.
+const drainCheckInterval = 100 * time.Millisecond
+
+// channelIngest is the production ingestControl: the cancel functions and exit
+// signals of a running channel's source and pipeline. launchIngest closes the
+// two done channels; nothing else touches them.
+type channelIngest struct {
+	sourceCancel context.CancelFunc
+	poolCancel   context.CancelFunc
+	sourceDone   chan struct{} // closed after Source.Run has returned for good
+	pipelineDone chan struct{} // closed after the pool and processor have exited
+	broker       *queue.Broker
+	parsedMPD    func() *imdp.ParsedMPD
+}
+
+func newChannelIngest(sourceCancel, poolCancel context.CancelFunc, broker *queue.Broker, parsedMPD func() *imdp.ParsedMPD) *channelIngest {
+	return &channelIngest{
+		sourceCancel: sourceCancel,
+		poolCancel:   poolCancel,
+		sourceDone:   make(chan struct{}),
+		pipelineDone: make(chan struct{}),
+		broker:       broker,
+		parsedMPD:    parsedMPD,
+	}
+}
+
+func (c *channelIngest) StopAdmission(ctx context.Context) (*imdp.ParsedMPD, bool) {
+	c.sourceCancel()
+	select {
+	case <-c.sourceDone:
+	case <-ctx.Done():
+		return nil, false
+	}
+	return c.parsedMPD(), ctx.Err() == nil
+}
+
+// AwaitDrain polls the broker for idleness. An idle broker is stronger than an
+// empty queue: it also excludes a fetch, result, or write still in flight.
+func (c *channelIngest) AwaitDrain(ctx context.Context) bool {
+	ticker := time.NewTicker(drainCheckInterval)
+	defer ticker.Stop()
+	for {
+		if c.broker.Idle() {
+			return ctx.Err() == nil
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
+}
+
+// Join waits on pipelineDone rather than the runtime's WaitGroup: the VOD
+// transition is itself counted there, so waiting on it would deadlock.
+func (c *channelIngest) Join(ctx context.Context) bool {
+	c.poolCancel()
+	select {
+	case <-c.pipelineDone:
+		return ctx.Err() == nil
+	case <-ctx.Done():
+		return false
+	}
 }
