@@ -375,7 +375,7 @@ const staticUpstreamPollInterval = time.Second
 // A channel whose auto-VOD is suppressed is left alone, matching the same
 // exemption in superviseSource.
 func (m *Manager) awaitStaticUpstream(ctx context.Context, rt *Runtime) {
-	if rt.Watcher == nil && rt.HLS == nil {
+	if rt.Source == nil {
 		return
 	}
 	ticker := time.NewTicker(staticUpstreamPollInterval)
@@ -385,7 +385,7 @@ func (m *Manager) awaitStaticUpstream(ctx context.Context, rt *Runtime) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if !staticIngestVisible(rt.upstreamIsFinishedAsset(), rt.autoVODAllowed()) {
+			if !staticIngestVisible(rt.Source.FinishedAsset(), rt.autoVODAllowed()) {
 				continue
 			}
 			if _, ok := rt.modes.PromoteStatic(); ok {
@@ -395,20 +395,6 @@ func (m *Manager) awaitStaticUpstream(ctx context.Context, rt *Runtime) {
 			return
 		}
 	}
-}
-
-// upstreamIsFinishedAsset reports whether this channel's source has said it is
-// serving a completed asset rather than a live stream. Each protocol says it
-// differently: DASH in the manifest's presentation type, HLS by every polled
-// playlist carrying EXT-X-ENDLIST on its first poll.
-func (rt *Runtime) upstreamIsFinishedAsset() bool {
-	switch {
-	case rt.Watcher != nil:
-		return rt.Watcher.UpstreamType() == string(imdp.PresentationStatic)
-	case rt.HLS != nil:
-		return rt.HLS.UpstreamIsVOD()
-	}
-	return false
 }
 
 // staticIngestVisible reports whether a live channel should already be shown as
@@ -693,21 +679,13 @@ func storedSegments(ci *index.ChannelIndex) uint64 {
 	return n
 }
 
-// sourceStatus reports what the channel's watcher knows about the upstream
-// ending, or nil when it knows nothing yet — before the first MPD fetch, or
-// before HLS discovery has named the playlists to poll.
+// sourceStatus reports what the channel's source knows about the upstream
+// ending, or nil when it knows nothing yet.
 func sourceStatus(rt *Runtime) *SourceStatus {
-	switch {
-	case rt.Watcher != nil:
-		if t := rt.Watcher.UpstreamType(); t != "" {
-			return &SourceStatus{UpstreamType: t}
-		}
-	case rt.HLS != nil:
-		if ended, total := rt.HLS.EndListProgress(); total > 0 {
-			return &SourceStatus{EndedTargets: ended, PollTargets: total}
-		}
+	if rt.Source == nil {
+		return nil
 	}
-	return nil
+	return rt.Source.Status()
 }
 
 func buildStatus(rt *Runtime) ChannelStatus {

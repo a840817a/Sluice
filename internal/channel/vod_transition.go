@@ -19,8 +19,8 @@ import (
 //     was already admitted, join the pool and processor. The disk rebuild must
 //     see every task accepted before the transition was requested.
 //  2. Publish: checkpoint media, rebuild the full-history index from disk,
-//     checkpoint the HLS source and keys, capture and persist artifacts, commit
-//     the VOD config, and enter VOD.
+//     checkpoint the source (for HLS, its state and keys), capture and
+//     persist artifacts, commit the VOD config, and enter VOD.
 //  3. Write optional exports and call the completion observer.
 //
 // Cancellation is observed only in step 1. If ctx ends there the attempt is
@@ -105,9 +105,16 @@ func (t *vodTransition) publish(finalMPD *imdp.ParsedMPD) vodOutcome {
 		return vodFailed
 	}
 
-	// Key fetches go to the network, so they happen before configMu: a hot
-	// edit must not wait on an unreachable key server.
-	warnings = append(warnings, checkpointHLSSource(rt, vodCI.Snapshot())...)
+	// The source's own checkpoint may fetch keys over the network, so it
+	// happens before configMu — a hot edit must not wait on an unreachable key
+	// server — and is bounded. Its failures are warnings: the completed VOD is
+	// served from the in-memory index either way, and only a later restart
+	// depends on these files.
+	if rt.Source != nil {
+		ctx, cancel := context.WithTimeout(lifecycleContext(rt), keyCheckpointTimeout)
+		warnings = append(warnings, rt.Source.Checkpoint(ctx, vodCI.Snapshot())...)
+		cancel()
+	}
 
 	// A hot edit cannot change the configuration between manifest generation,
 	// the store commit, and runtime publication. Stop never acquires configMu.

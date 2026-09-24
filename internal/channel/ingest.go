@@ -140,7 +140,7 @@ func (p *ingestPipeline) attachSource(id string, cfg Config, chGwCfg gocfg.Confi
 		w := dashingest.NewWatcher(chGwCfg, id, p.headers, p.index, p.broker)
 		w.SetProgress(p.progress)
 		p.watcher = w
-		p.source = w
+		p.source = dashSource{w}
 		return
 	}
 
@@ -148,7 +148,6 @@ func (p *ingestPipeline) attachSource(id string, cfg Config, chGwCfg gocfg.Confi
 		hlsingest.SourceStatePath(chGwCfg.Store.DataDir, id), p.index, p.broker)
 	hw.SetProgress(p.progress)
 	p.hls = hw
-	p.source = hw
 
 	// One key cache per channel, shared by decrypt-on-ingest and the key proxy,
 	// so a key is fetched from the upstream server at most once. Passthrough
@@ -159,6 +158,7 @@ func (p *ingestPipeline) attachSource(id string, cfg Config, chGwCfg gocfg.Confi
 		keyStorePath = hlskey.KeyStorePath(chGwCfg.Store.DataDir, id)
 	}
 	p.keys = hlskey.NewCache(nil, p.headers, keyStorePath)
+	p.source = hlsSource{w: hw, keys: p.keys}
 	p.processor.SetKeyFetcher(p.keys)
 
 	// HLS tracks are independent media playlists the player aligns itself, so

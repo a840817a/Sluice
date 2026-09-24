@@ -7,7 +7,6 @@ package channel
 // their consumer is VOD restore, not HTTP request handling.
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -74,30 +73,6 @@ func (m *Manager) captureVODArtifacts(rt *Runtime, candidate *index.ChannelIndex
 // fetch has its own client timeout, but a slow key server answering just
 // inside it could otherwise hold completion for that long per key.
 var keyCheckpointTimeout = 60 * time.Second
-
-// checkpointHLSSource makes an HLS channel's source state and key material
-// restart-safe. It runs before configMu is taken because key fetches go to the
-// network. Each failure is returned as a warning: the completed VOD is served
-// from the in-memory index either way, and only a later restart depends on
-// these files.
-func checkpointHLSSource(rt *Runtime, snapshot index.Snapshot) []string {
-	if rt.HLS == nil {
-		return nil
-	}
-	var warnings []string
-	if err := rt.HLS.Checkpoint(); err != nil {
-		warnings = append(warnings, fmt.Sprintf("checkpoint HLS source state: %v", err))
-	}
-	if rt.Keys == nil {
-		return warnings
-	}
-	ctx, cancel := context.WithTimeout(lifecycleContext(rt), keyCheckpointTimeout)
-	defer cancel()
-	if err := rt.Keys.Checkpoint(ctx, requiredKeyURIs(snapshot)); err != nil {
-		warnings = append(warnings, fmt.Sprintf("checkpoint HLS keys: %v", err))
-	}
-	return warnings
-}
 
 // persistDASHManifests writes the DASH files a VOD restart needs: the served
 // manifest and the raw upstream MPD. A failure is returned as a warning, not

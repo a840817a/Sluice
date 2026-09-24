@@ -32,7 +32,8 @@ func (m *Manager) checkpointVODMedia(rt *Runtime) []string {
 	// segment for every directory makes a many-representation HLS asset
 	// quadratic at precisely the point it is trying to finish.
 	knownByDir := make(map[string]map[uint64]index.SegmentState)
-	if rt.HLS != nil {
+	persistsMeta := rt.Source != nil && rt.Source.PersistsSegmentMeta()
+	if persistsMeta {
 		rt.Index.ForEachRep(func(_ index.RepRef, rep *index.RepresentationState) {
 			add := func(seg index.SegmentState) {
 				dir := filepath.Dir(seg.Path)
@@ -67,7 +68,7 @@ func (m *Manager) checkpointVODMedia(rt *Runtime) []string {
 			dirs = append(dirs, path)
 			return nil
 		}
-		if rt.HLS == nil {
+		if !persistsMeta {
 			return nil
 		}
 		n, ext, ok := store.ParseSegmentFile(d.Name())

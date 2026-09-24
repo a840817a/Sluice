@@ -31,6 +31,7 @@ func registerRuntime(t *testing.T, m *Manager, id string, mode ChannelMode) *Run
 		ingest:   &fakeIngest{},
 	}
 	rt.Watcher = &dashingest.Watcher{}
+	rt.Source = dashSource{rt.Watcher}
 	seedVODSource(t, rt)
 	rt.setConfig(Config{})
 	driveMode(t, rt, mode)
