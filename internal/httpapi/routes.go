@@ -88,8 +88,9 @@ func NewRouter(
 		// AES-128 key proxy for HLS channels kept in passthrough mode.
 		r.Get("/v1/channels/{channelID}/key/{keyID}", srv.handleKeyProxy)
 		r.Get("/v1/channels/{channelID}/health", srv.handleChannelHealth)
-		r.Get("/v1/channels/{channelID}/segments/{repID}/{segFile}", srv.handleSegment)
-		r.Get("/v1/channels/{channelID}/init/{repID}.mp4", srv.handleInit)
+		// Segment and init URLs name their period (ADR-0005).
+		r.Get("/v1/channels/{channelID}/segments/{periodID}/{repID}/{segFile}", srv.handleSegment)
+		r.Get("/v1/channels/{channelID}/init/{periodID}/{repID}.mp4", srv.handleInit)
 		// Per-channel license proxies (OPTIONS preflight also handled by corsMiddleware)
 		r.Post("/v1/channels/{channelID}/license/playready", srv.handleLicense("playready"))
 		r.Post("/v1/channels/{channelID}/license/widevine", srv.handleLicense("widevine"))

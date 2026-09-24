@@ -91,14 +91,14 @@ func TestDASHArtifactsSurviveRestartWithOriginOffline(t *testing.T) {
 				}
 			}
 			init := executeRequest(h2.srv.handleInit, http.MethodGet,
-				"/v1/channels/"+id+"/init/v0.mp4", map[string]string{"channelID": id, "repID": "v0"})
+				"/v1/channels/"+id+"/init/0/v0.mp4", map[string]string{"channelID": id, "periodID": "0", "repID": "v0"})
 			if init.Code != http.StatusOK || init.Body.Len() == 0 {
 				t.Fatalf("init unavailable after restart: %d", init.Code)
 			}
 			for _, file := range []string{"1.m4s", "2.m4s", "3.m4s"} {
 				w := executeRequest(h2.srv.handleSegment, http.MethodGet,
-					"/v1/channels/"+id+"/segments/v0/"+file,
-					map[string]string{"channelID": id, "repID": "v0", "segFile": file})
+					"/v1/channels/"+id+"/segments/0/v0/"+file,
+					map[string]string{"channelID": id, "periodID": "0", "repID": "v0", "segFile": file})
 				if w.Code != http.StatusOK || w.Body.Len() == 0 {
 					t.Fatalf("segment %s unavailable after restart: %d", file, w.Code)
 				}

@@ -68,7 +68,7 @@ func TestMediaPlaylistHasNoDuplicateSegments(t *testing.T) {
 		{SegNo: 7, StartPTS: 7 * 90000, EndPTS: 8 * 90000, Timescale: 90000, Status: index.StatusPublished},
 	}
 
-	out := string(Media(segs, MediaOptions{
+	out := string(Media(inPeriod(segs), MediaOptions{
 		GatewayBaseURL: "http://gw", ChannelID: "ch", RepID: "v0", TargetDuration: 1,
 	}))
 

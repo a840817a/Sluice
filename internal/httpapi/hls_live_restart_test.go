@@ -47,9 +47,12 @@ func TestHLSLiveRestartResumesWithoutCollapse(t *testing.T) {
 	// No segment may appear twice.
 	counts := map[string]int{}
 	for _, line := range strings.Split(body, "\n") {
-		if strings.Contains(line, "/segments/live1/v0/") {
+		if strings.Contains(line, "/v1/channels/live1/segments/") {
 			counts[line]++
 		}
+	}
+	if len(counts) != 4 {
+		t.Errorf("found %d distinct segment URIs, want 4:\n%s", len(counts), body)
 	}
 	for uri, n := range counts {
 		if n > 1 {

@@ -276,8 +276,8 @@ The source URL is **not** a gateway-level setting — it is per channel (`mpd_ur
 | `GET` | `/v1/channels/{channelID}/media/{repID}.m3u8` | HLS media playlist for one representation |
 | `GET` | `/v1/channels/{channelID}/key/{keyID}` | AES-128 key proxy (passthrough HLS channels) |
 | `GET` | `/v1/channels/{channelID}/health` | Channel segment state (JSON) |
-| `GET` | `/v1/channels/{channelID}/segments/{repID}/{segFile}` | Media segment (`.m4s`, `.ts`, `.vtt`) |
-| `GET` | `/v1/channels/{channelID}/init/{repID}.mp4` | Init segment (fMP4 only) |
+| `GET` | `/v1/channels/{channelID}/segments/{periodID}/{repID}/{segFile}` | Media segment (`.m4s`, `.ts`, `.vtt`); the period is encoded as in [ADR-0005](docs/adr/0005-segment-urls-name-their-period.md) |
+| `GET` | `/v1/channels/{channelID}/init/{periodID}/{repID}.mp4` | Init segment (fMP4 only) |
 | `POST` | `/v1/channels/{channelID}/license/playready` | PlayReady license proxy |
 | `POST` | `/v1/channels/{channelID}/license/widevine` | Widevine license proxy |
 

@@ -46,13 +46,19 @@ func lineAfter(t *testing.T, out, prefix string) string {
 	return ""
 }
 
+// inPeriod puts segs in the single period "p0", which is what every
+// single-period test here means.
+func inPeriod(segs []index.SegmentState) []PeriodSegments {
+	return []PeriodSegments{{PeriodID: "p0", Segments: segs}}
+}
+
 func TestMediaLiveBasics(t *testing.T) {
 	segs := []index.SegmentState{
 		seg(100, 0, 6),
 		seg(101, 6, 6),
 		seg(102, 12, 5.5),
 	}
-	out := string(Media(segs, mediaOpts()))
+	out := string(Media(inPeriod(segs), mediaOpts()))
 
 	for _, want := range []string{
 		"#EXTM3U",
@@ -73,7 +79,7 @@ func TestMediaLiveBasics(t *testing.T) {
 	}
 
 	// Segment URIs point back at the gateway, with the stored extension.
-	wantURI := "https://gw.example.com/v1/channels/ch1/segments/v0/100.ts"
+	wantURI := "https://gw.example.com/v1/channels/ch1/segments/p0/v0/100.ts"
 	if got := lineAfter(t, out, "#EXTINF:6.000000"); got != wantURI {
 		t.Errorf("first segment URI = %q, want %q", got, wantURI)
 	}
@@ -94,7 +100,7 @@ func TestMediaLiveFollowsLiveEdgeAcrossAHole(t *testing.T) {
 		seg(102, 12, 6),
 		seg(103, 18, 6),
 	}
-	out := string(Media(segs, mediaOpts()))
+	out := string(Media(inPeriod(segs), mediaOpts()))
 
 	if !strings.Contains(out, "#EXT-X-MEDIA-SEQUENCE:102") {
 		t.Errorf("want MEDIA-SEQUENCE 102 (run after the hole):\n%s", out)
@@ -102,7 +108,7 @@ func TestMediaLiveFollowsLiveEdgeAcrossAHole(t *testing.T) {
 	if n := strings.Count(out, "#EXTINF:"); n != 2 {
 		t.Errorf("emitted %d segments, want 2", n)
 	}
-	if strings.Contains(out, "/segments/v0/100.ts") {
+	if strings.Contains(out, "/segments/p0/v0/100.ts") {
 		t.Error("segment before the hole must not be emitted")
 	}
 }
@@ -117,7 +123,7 @@ func TestMediaNeverEmitsAcrossAGap(t *testing.T) {
 	}
 	opts := mediaOpts()
 	opts.VOD = true
-	out := string(Media(segs, opts))
+	out := string(Media(inPeriod(segs), opts))
 
 	first := lineAfter(t, out, "#EXTINF:6.000000")
 	if !strings.HasSuffix(first, "/1.ts") {
@@ -126,7 +132,7 @@ func TestMediaNeverEmitsAcrossAGap(t *testing.T) {
 	if n := strings.Count(out, "#EXTINF:"); n != 2 {
 		t.Errorf("emitted %d segments, want 2 (truncated at the gap)", n)
 	}
-	if strings.Contains(out, "/segments/v0/5.ts") {
+	if strings.Contains(out, "/segments/p0/v0/5.ts") {
 		t.Error("segment after the gap must not be emitted")
 	}
 }
@@ -135,7 +141,7 @@ func TestMediaVOD(t *testing.T) {
 	segs := []index.SegmentState{seg(0, 0, 4), seg(1, 4, 4)}
 	opts := mediaOpts()
 	opts.VOD = true
-	out := string(Media(segs, opts))
+	out := string(Media(inPeriod(segs), opts))
 
 	for _, want := range []string{
 		"#EXT-X-PLAYLIST-TYPE:VOD",
@@ -155,7 +161,7 @@ func TestMediaWindowKeepsNewestSegments(t *testing.T) {
 	}
 	opts := mediaOpts()
 	opts.WindowSegments = 3
-	out := string(Media(segs, opts))
+	out := string(Media(inPeriod(segs), opts))
 
 	if n := strings.Count(out, "#EXTINF:"); n != 3 {
 		t.Errorf("emitted %d segments, want 3", n)
@@ -164,10 +170,10 @@ func TestMediaWindowKeepsNewestSegments(t *testing.T) {
 	if !strings.Contains(out, "#EXT-X-MEDIA-SEQUENCE:107") {
 		t.Errorf("want MEDIA-SEQUENCE 107:\n%s", out)
 	}
-	if !strings.Contains(out, "/segments/v0/109.ts") {
+	if !strings.Contains(out, "/segments/p0/v0/109.ts") {
 		t.Error("newest segment must be present")
 	}
-	if strings.Contains(out, "/segments/v0/106.ts") {
+	if strings.Contains(out, "/segments/p0/v0/106.ts") {
 		t.Error("segment outside the window must be dropped")
 	}
 }
@@ -175,18 +181,18 @@ func TestMediaWindowKeepsNewestSegments(t *testing.T) {
 func TestMediaFMP4EmitsMapAndVersion6(t *testing.T) {
 	s := seg(1, 0, 4)
 	s.Path = "/data/ch1/periods/p0/video_0/v0/1.m4s"
-	opts := mediaOpts()
-	opts.InitURI = "https://gw.example.com/v1/channels/ch1/init/v0.mp4"
-	out := string(Media([]index.SegmentState{s}, opts))
+	periods := inPeriod([]index.SegmentState{s})
+	periods[0].InitURI = "https://gw.example.com/v1/channels/ch1/init/p0/v0.mp4"
+	out := string(Media(periods, mediaOpts()))
 
 	if !strings.Contains(out, "#EXT-X-VERSION:6") {
 		t.Errorf("fMP4 playlist must declare version 6:\n%s", out)
 	}
-	want := `#EXT-X-MAP:URI="https://gw.example.com/v1/channels/ch1/init/v0.mp4"`
+	want := `#EXT-X-MAP:URI="https://gw.example.com/v1/channels/ch1/init/p0/v0.mp4"`
 	if !strings.Contains(out, want) {
 		t.Errorf("missing %q in:\n%s", want, out)
 	}
-	if !strings.Contains(out, "/segments/v0/1.m4s") {
+	if !strings.Contains(out, "/segments/p0/v0/1.m4s") {
 		t.Errorf("fMP4 segment must keep its .m4s extension:\n%s", out)
 	}
 }
@@ -194,15 +200,10 @@ func TestMediaFMP4EmitsMapAndVersion6(t *testing.T) {
 func TestMediaEmitsDiscontinuity(t *testing.T) {
 	s1, s2 := seg(10, 0, 6), seg(11, 6, 6)
 	s2.Discontinuity = true
-	opts := mediaOpts()
-	opts.DiscontinuitySequence = 4
-	out := string(Media([]index.SegmentState{s1, s2}, opts))
+	out := string(Media(inPeriod([]index.SegmentState{s1, s2}), mediaOpts()))
 
-	if !strings.Contains(out, "#EXT-X-DISCONTINUITY-SEQUENCE:4") {
-		t.Errorf("missing discontinuity sequence:\n%s", out)
-	}
 	idxDisc := strings.Index(out, "#EXT-X-DISCONTINUITY\n")
-	idxSeg11 := strings.Index(out, "/segments/v0/11.ts")
+	idxSeg11 := strings.Index(out, "/segments/p0/v0/11.ts")
 	if idxDisc < 0 || idxDisc > idxSeg11 {
 		t.Errorf("EXT-X-DISCONTINUITY must precede segment 11:\n%s", out)
 	}
@@ -302,7 +303,7 @@ func TestMediaEmitsKeyForEncryptedSegments(t *testing.T) {
 		encSeg(0, 0, 6, "https://drm.example.com/k1.bin", testIV(1)),
 		encSeg(1, 6, 6, "https://drm.example.com/k1.bin", testIV(2)),
 	}
-	out := string(Media(segs, keyOpts()))
+	out := string(Media(inPeriod(segs), keyOpts()))
 
 	if !strings.Contains(out, "#EXT-X-KEY:METHOD=AES-128") {
 		t.Fatalf("no EXT-X-KEY emitted:\n%s", out)
@@ -320,7 +321,7 @@ func TestMediaEmitsKeyForEncryptedSegments(t *testing.T) {
 		t.Errorf("first segment IV not emitted explicitly:\n%s", out)
 	}
 	// The key line must precede the first segment URI.
-	if strings.Index(out, "#EXT-X-KEY") > strings.Index(out, "/segments/v0/0.ts") {
+	if strings.Index(out, "#EXT-X-KEY") > strings.Index(out, "/segments/p0/v0/0.ts") {
 		t.Errorf("EXT-X-KEY must come before the segment it applies to:\n%s", out)
 	}
 }
@@ -331,7 +332,7 @@ func TestMediaReEmitsKeyOnRotationAndPerDistinctIV(t *testing.T) {
 		encSeg(1, 6, 6, "https://drm.example.com/k1.bin", testIV(2)),
 		encSeg(2, 12, 6, "https://drm.example.com/k2.bin", testIV(3)),
 	}
-	out := string(Media(segs, keyOpts()))
+	out := string(Media(inPeriod(segs), keyOpts()))
 
 	// Every segment has its own IV, so each needs its own EXT-X-KEY line.
 	if n := strings.Count(out, "#EXT-X-KEY:METHOD=AES-128"); n != 3 {
@@ -350,12 +351,12 @@ func TestMediaEmitsKeyNoneWhenEncryptionStops(t *testing.T) {
 		encSeg(0, 0, 6, "https://drm.example.com/k1.bin", testIV(1)),
 		seg(1, 6, 6), // clear
 	}
-	out := string(Media(segs, keyOpts()))
+	out := string(Media(inPeriod(segs), keyOpts()))
 
 	if !strings.Contains(out, "#EXT-X-KEY:METHOD=NONE") {
 		t.Errorf("METHOD=NONE not emitted when encryption stops:\n%s", out)
 	}
-	if strings.Index(out, "METHOD=NONE") > strings.Index(out, "/segments/v0/1.ts") {
+	if strings.Index(out, "METHOD=NONE") > strings.Index(out, "/segments/p0/v0/1.ts") {
 		t.Errorf("METHOD=NONE must precede the first clear segment:\n%s", out)
 	}
 }
@@ -363,7 +364,7 @@ func TestMediaEmitsKeyNoneWhenEncryptionStops(t *testing.T) {
 func TestMediaEmitsNoKeyForCleartextSegments(t *testing.T) {
 	// Decrypt-on-ingest channels store cleartext, so the playlist must carry no
 	// key information at all.
-	out := string(Media([]index.SegmentState{seg(0, 0, 6), seg(1, 6, 6)}, keyOpts()))
+	out := string(Media(inPeriod([]index.SegmentState{seg(0, 0, 6), seg(1, 6, 6)}), keyOpts()))
 	if strings.Contains(out, "EXT-X-KEY") {
 		t.Errorf("cleartext playlist must not contain EXT-X-KEY:\n%s", out)
 	}
@@ -374,9 +375,9 @@ func TestMediaOmitsKeyWithoutProxyBase(t *testing.T) {
 	// left out rather than pointing players at the upstream key server.
 	o := mediaOpts()
 	o.KeyProxyBase = ""
-	out := string(Media([]index.SegmentState{
+	out := string(Media(inPeriod([]index.SegmentState{
 		encSeg(0, 0, 6, "https://drm.example.com/k1.bin", testIV(1)),
-	}, o))
+	}), o))
 
 	if strings.Contains(out, "drm.example.com") {
 		t.Errorf("upstream key URL leaked when no proxy base was configured:\n%s", out)
@@ -452,10 +453,10 @@ func TestMediaVTTSegmentExtension(t *testing.T) {
 	// A WebVTT subtitle segment must be referenced with its .vtt extension.
 	s := seg(0, 0, 4)
 	s.Path = "/data/ch1/periods/0/text_2/s0/0.vtt"
-	out := string(Media([]index.SegmentState{s}, MediaOptions{
+	out := string(Media(inPeriod([]index.SegmentState{s}), MediaOptions{
 		GatewayBaseURL: "https://gw.example.com", ChannelID: "ch1", RepID: "s0", TargetDuration: 4,
 	}))
-	if !strings.Contains(out, "/segments/s0/0.vtt") {
+	if !strings.Contains(out, "/segments/p0/s0/0.vtt") {
 		t.Errorf("subtitle playlist must reference the .vtt segment:\n%s", out)
 	}
 	if strings.Contains(out, "EXT-X-MAP") {

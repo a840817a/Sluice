@@ -28,12 +28,12 @@ func TestMasterEmptyBaseIsRootRelative(t *testing.T) {
 func TestMediaEmptyBaseIsRootRelative(t *testing.T) {
 	o := mediaOpts()
 	o.GatewayBaseURL = ""
-	out := string(Media([]index.SegmentState{seg(1, 0, 6), seg(2, 6, 6)}, o))
+	out := string(Media(inPeriod([]index.SegmentState{seg(1, 0, 6), seg(2, 6, 6)}), o))
 
 	if strings.Contains(out, "://") {
 		t.Errorf("empty base still produced an absolute URI:\n%s", out)
 	}
-	if !strings.Contains(out, "\n/v1/channels/ch1/segments/v0/1.ts\n") {
+	if !strings.Contains(out, "\n/v1/channels/ch1/segments/p0/v0/1.ts\n") {
 		t.Errorf("no root-relative segment URI:\n%s", out)
 	}
 }
@@ -41,8 +41,8 @@ func TestMediaEmptyBaseIsRootRelative(t *testing.T) {
 // The configured base must still win when it is set: relative output is the
 // default, not the only mode. A sub-path reverse proxy needs the override.
 func TestNonEmptyBaseStaysAbsolute(t *testing.T) {
-	out := string(Media([]index.SegmentState{seg(1, 0, 6)}, mediaOpts()))
-	if !strings.Contains(out, "https://gw.example.com/v1/channels/ch1/segments/v0/1.ts") {
+	out := string(Media(inPeriod([]index.SegmentState{seg(1, 0, 6)}), mediaOpts()))
+	if !strings.Contains(out, "https://gw.example.com/v1/channels/ch1/segments/p0/v0/1.ts") {
 		t.Errorf("configured base was not honoured:\n%s", out)
 	}
 }

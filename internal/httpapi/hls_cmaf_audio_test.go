@@ -92,8 +92,8 @@ func TestDemuxedCMAFManifestHasAudioAS(t *testing.T) {
 		`mimeType="audio/mp4"`,
 		`codecs="avc1.42c01e"`, // video AS: video codec only
 		`codecs="mp4a.40.2"`,   // audio AS: audio codec only
-		"v1/channels/ca/segments/v0/",
-		"v1/channels/ca/segments/a0/",
+		"v1/channels/ca/segments/0/v0/",
+		"v1/channels/ca/segments/0/a0/",
 	} {
 		if !strings.Contains(mpd, want) {
 			t.Errorf("demuxed CMAF manifest missing %q:\n%s", want, mpd)

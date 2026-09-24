@@ -313,6 +313,37 @@ type RepresentationState struct {
 	mu  sync.Mutex
 	ID  string
 	buf *RingBuffer
+	// first and last are the lowest and highest segment numbers this
+	// representation has ever published. Unlike the ring they never shrink as
+	// segments expire or are evicted, which is what lets output number a later
+	// period's segments after this one's without the numbers moving as the
+	// window slides. A restart recomputes them from what is on disk.
+	//
+	// Only publication widens them. A segment committed but never published —
+	// its A/V partner never arrived before an upstream reset — is not in any
+	// playlist, and counting it would open a gap in the numbering at the
+	// period boundary.
+	first, last uint64
+	seen        bool
+}
+
+// recordPublished widens the lifetime range to segNo. Caller holds rs.mu.
+func (rs *RepresentationState) recordPublished(segNo uint64) {
+	if !rs.seen || segNo < rs.first {
+		rs.first = segNo
+	}
+	if !rs.seen || segNo > rs.last {
+		rs.last = segNo
+	}
+	rs.seen = true
+}
+
+// SegNoRange returns the lowest and highest segment numbers this
+// representation has ever published, and false if it has published none.
+func (rs *RepresentationState) SegNoRange() (first, last uint64, ok bool) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.first, rs.last, rs.seen
 }
 
 // RestorePublished adds a segment directly as StatusPublished, bypassing the
@@ -322,6 +353,7 @@ func (rs *RepresentationState) RestorePublished(seg SegmentState) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	seg.Status = StatusPublished
+	rs.recordPublished(seg.SegNo)
 	rs.buf.Push(seg)
 }
 
@@ -373,6 +405,7 @@ func (rs *RepresentationState) MarkPublished(segNos map[uint64]struct{}) {
 	rs.buf.UpdateWhere(func(s *SegmentState) {
 		if _, ok := segNos[s.SegNo]; ok && s.Status == StatusCommitted {
 			s.Status = StatusPublished
+			rs.recordPublished(s.SegNo)
 		}
 	})
 }

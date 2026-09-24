@@ -187,8 +187,8 @@ func TestSynthesizedMPDGeneratesPlayableManifest(t *testing.T) {
 		`bandwidth="1280000"`,
 		`width="1280"`,
 		`codecs="avc1.4d401f,mp4a.40.2"`,
-		`v1/channels/ch1/segments/v0/$Number%09d$.m4s`,
-		`v1/channels/ch1/init/v0.mp4`,
+		`v1/channels/ch1/segments/0/v0/$Number%09d$.m4s`,
+		`v1/channels/ch1/init/0/v0.mp4`,
 		`<SegmentTimeline>`,
 		`timescale="48000"`,
 	} {
@@ -197,7 +197,7 @@ func TestSynthesizedMPDGeneratesPlayableManifest(t *testing.T) {
 		}
 	}
 	// Both representations must be present.
-	if !strings.Contains(xml, `segments/v1/`) {
+	if !strings.Contains(xml, `segments/0/v1/`) {
 		t.Errorf("second representation missing:\n%s", xml)
 	}
 	// A 4 s segment at timescale 48000 is 192000 ticks.

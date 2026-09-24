@@ -132,8 +132,8 @@ func fetchSegment(t *testing.T, srv *Server, n int) []byte {
 	t.Helper()
 	segFile := fmt.Sprintf("%d.ts", n)
 	w := executeRequest(srv.handleSegment, http.MethodGet,
-		"/v1/channels/enc/segments/v0/"+segFile,
-		map[string]string{"channelID": "enc", "repID": "v0", "segFile": segFile})
+		"/v1/channels/enc/segments/0/v0/"+segFile,
+		map[string]string{"channelID": "enc", "periodID": "0", "repID": "v0", "segFile": segFile})
 	if w.Code != http.StatusOK {
 		t.Fatalf("segment %s: got %d", segFile, w.Code)
 	}
@@ -343,8 +343,8 @@ func TestPassthroughKeySurvivesUpstreamDownRestart(t *testing.T) {
 	// disk-served key, proving playback survives with the origin gone.
 	segFile := "0.ts"
 	sw := executeRequest(h2.srv.handleSegment, http.MethodGet,
-		"/v1/channels/enc/segments/v0/"+segFile,
-		map[string]string{"channelID": "enc", "repID": "v0", "segFile": segFile})
+		"/v1/channels/enc/segments/0/v0/"+segFile,
+		map[string]string{"channelID": "enc", "periodID": "0", "repID": "v0", "segFile": segFile})
 	if sw.Code != http.StatusOK {
 		t.Fatalf("segment after restart: got %d", sw.Code)
 	}

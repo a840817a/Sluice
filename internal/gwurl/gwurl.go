@@ -15,6 +15,7 @@
 package gwurl
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strconv"
 	"strings"
@@ -27,6 +28,58 @@ import (
 // that take a base do this themselves; it is exported for the few places that
 // need a normalized base without building a URL from it.
 func Base(baseURL string) string { return strings.TrimRight(baseURL, "/") }
+
+// --- Period path segment ---------------------------------------------------
+//
+// Segment and init URLs name the period they belong to (ADR-0005): after an
+// upstream reset two periods can hold the same representation and segment
+// number, and a URL without the period cannot say which file it means.
+
+// encodedPeriodPrefix marks a period segment that carries its ID in base64url.
+const encodedPeriodPrefix = "~"
+
+// PeriodSegment encodes a period ID as one URL path segment.
+//
+// An ID made only of letters, digits, ".", "_" and "-" is used as is, which
+// covers HLS epochs and the IDs DASH packagers normally write. Anything else —
+// DASH period IDs are arbitrary upstream strings, and the empty ID is what a
+// period with no id attribute has — becomes "~" and the ID in unpadded
+// base64url, and so do "." and "..", which a client or CDN normalising the
+// path would remove.
+//
+// Percent-encoding would be the obvious alternative and is deliberately not
+// used: whether a router hands a handler the escaped or the decoded form of a
+// segment depends on how the whole request path happened to be escaped, so a
+// percent-encoded ID cannot be decoded reliably. This encoding has no escaped
+// form, and it can never contain "$", which opens a DASH SegmentTemplate
+// identifier.
+func PeriodSegment(periodID string) string {
+	if plainPeriodID(periodID) {
+		return periodID
+	}
+	return encodedPeriodPrefix + base64.RawURLEncoding.EncodeToString([]byte(periodID))
+}
+
+// ParsePeriodSegment reverses PeriodSegment.
+func ParsePeriodSegment(seg string) (string, bool) {
+	if enc, ok := strings.CutPrefix(seg, encodedPeriodPrefix); ok {
+		id, err := base64.RawURLEncoding.DecodeString(enc)
+		return string(id), err == nil
+	}
+	return seg, plainPeriodID(seg)
+}
+
+func plainPeriodID(id string) bool {
+	if id == "" || id == "." || id == ".." {
+		return false
+	}
+	for _, c := range id {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
 
 // --- Relative paths, no leading slash -------------------------------------
 //
@@ -41,13 +94,13 @@ func Base(baseURL string) string { return strings.TrimRight(baseURL, "/") }
 // padded request still resolves because store.ParseSegmentFile parses with
 // ParseUint. Collapsing the two forms into one builder would still pass every
 // test while changing every HLS segment URI that players and CDNs have cached.
-func SegmentTemplatePath(channelID, repID string) string {
-	return fmt.Sprintf("v1/channels/%s/segments/%s/$Number%%09d$.m4s", channelID, repID)
+func SegmentTemplatePath(channelID, periodID, repID string) string {
+	return fmt.Sprintf("v1/channels/%s/segments/%s/%s/$Number%%09d$.m4s", channelID, PeriodSegment(periodID), repID)
 }
 
 // InitTemplatePath is the DASH SegmentTemplate initialization attribute.
-func InitTemplatePath(channelID, repID string) string {
-	return fmt.Sprintf("v1/channels/%s/init/%s.mp4", channelID, repID)
+func InitTemplatePath(channelID, periodID, repID string) string {
+	return fmt.Sprintf("v1/channels/%s/init/%s/%s.mp4", channelID, PeriodSegment(periodID), repID)
 }
 
 // --- Absolute URLs ---------------------------------------------------------
@@ -63,14 +116,14 @@ func MediaPlaylistURL(base, channelID, repID string) string {
 // SegmentURL is one stored segment, numbered exactly as it is on disk and
 // carrying the extension it was stored under (see SegmentTemplatePath for why
 // this is not zero-padded).
-func SegmentURL(base, channelID, repID string, segNo uint64, ext string) string {
-	return Base(base) + "/v1/channels/" + channelID + "/segments/" + repID + "/" +
+func SegmentURL(base, channelID, periodID, repID string, segNo uint64, ext string) string {
+	return Base(base) + "/v1/channels/" + channelID + "/segments/" + PeriodSegment(periodID) + "/" + repID + "/" +
 		strconv.FormatUint(segNo, 10) + ext
 }
 
 // InitURL is a representation's fMP4 initialization segment.
-func InitURL(base, channelID, repID string) string {
-	return Base(base) + "/v1/channels/" + channelID + "/init/" + repID + ".mp4"
+func InitURL(base, channelID, periodID, repID string) string {
+	return Base(base) + "/v1/channels/" + channelID + "/init/" + PeriodSegment(periodID) + "/" + repID + ".mp4"
 }
 
 // KeyProxyBaseURL is the prefix a key ID is appended to, and therefore must

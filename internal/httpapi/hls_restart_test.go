@@ -147,8 +147,8 @@ func TestHLSVODSurvivesRestartWithOriginOffline(t *testing.T) {
 	for n := 0; n < 4; n++ {
 		segFile := fmt.Sprintf("%d.ts", n)
 		w := executeRequest(h2.srv.handleSegment, http.MethodGet,
-			"/v1/channels/vod1/segments/v0/"+segFile,
-			map[string]string{"channelID": "vod1", "repID": "v0", "segFile": segFile})
+			"/v1/channels/vod1/segments/0/v0/"+segFile,
+			map[string]string{"channelID": "vod1", "periodID": "0", "repID": "v0", "segFile": segFile})
 		if w.Code != http.StatusOK {
 			t.Fatalf("segment %s after restart: got %d", segFile, w.Code)
 		}
