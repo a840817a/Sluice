@@ -35,7 +35,10 @@ func statusIndex(t *testing.T) *index.ChannelIndex {
 	ci.Period("p0").AS("0").SetMediaType("video")
 	v0.RestorePublished(seg(1))
 	v0.RestorePublished(seg(2))
-	v0.Commit(seg(3))
+	// An audio AdaptationSet that has not received a segment yet holds the A/V
+	// barrier, so a commit stays committed and unpublished.
+	ci.Period("p0").AS("2").SetMediaType("audio")
+	ci.Commit(index.RepRef{PeriodID: "p0", ASID: "0", RepID: "v0"}, 8, seg(3))
 
 	a0 := ci.Period("p0").AS("1").Rep("a0", 8)
 	ci.Period("p0").AS("1").SetMediaType("audio")
@@ -47,9 +50,9 @@ func statusIndex(t *testing.T) *index.ChannelIndex {
 	a0.RestorePublished(seg(0))
 	a0.ExpireOlderThan(1.5) // segment 0 ends at 1.0
 
-	p1v0 := ci.Period("p1").AS("0").Rep("v0", 8)
 	ci.Period("p1").AS("0").SetMediaType("video")
-	p1v0.Commit(seg(1))
+	ci.Period("p1").AS("1").SetMediaType("audio")
+	ci.Commit(index.RepRef{PeriodID: "p1", ASID: "0", RepID: "v0"}, 8, seg(1))
 
 	return ci
 }

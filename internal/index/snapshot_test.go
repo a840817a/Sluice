@@ -14,10 +14,10 @@ func commitPublished(t *testing.T, ci *ChannelIndex, periodID, asID, repID strin
 	rep := as.Rep(repID, 0)
 	published := make(map[uint64]struct{}, len(segNos))
 	for _, n := range segNos {
-		rep.Commit(SegmentState{SegNo: n, Timescale: 90000, StartPTS: int64(n) * 100, EndPTS: int64(n+1) * 100})
+		rep.commit(SegmentState{SegNo: n, Timescale: 90000, StartPTS: int64(n) * 100, EndPTS: int64(n+1) * 100})
 		published[n] = struct{}{}
 	}
-	rep.MarkPublished(published)
+	rep.markPublished(published)
 }
 
 func TestSnapshotSortsSegmentsBySegNo(t *testing.T) {

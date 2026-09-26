@@ -31,10 +31,9 @@ func restartedWatcher(segs heldSegments) *Watcher {
 			rep := as.Rep(repID, 0)
 			for _, n := range nums {
 				start := int64(n-nums[0]) * 6 * TSTimescale
-				rep.Commit(index.SegmentState{
+				rep.RestorePublished(index.SegmentState{
 					SegNo: n, StartPTS: start, EndPTS: start + 6*TSTimescale, Timescale: TSTimescale,
 				})
-				rep.MarkPublished(map[uint64]struct{}{n: {}})
 			}
 		}
 	}

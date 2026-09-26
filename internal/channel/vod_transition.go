@@ -94,7 +94,7 @@ func (t *vodTransition) publish(finalMPD *imdp.ParsedMPD) vodOutcome {
 	// recorded history rather than just what the live ring still held. fMP4
 	// timing comes from each segment's tfdt box and MPEG-TS timing from the
 	// per-representation sidecar, so both formats reconstruct fully.
-	vodCI := index.NewChannelIndex()
+	vodCI := index.NewChannelIndex(publishPolicy(rt.Config()))
 	if err := index.RebuildFromDiskForVOD(vodCI, m.gwCfg.Store.DataDir, rt.ID); err != nil {
 		slog.Error("VOD rebuild failed", "channel", rt.ID, "err", err)
 		// Ingest is already stopped. Expose a retryable failure rather than

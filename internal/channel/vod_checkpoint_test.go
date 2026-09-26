@@ -29,10 +29,10 @@ func TestCheckpointVODMediaRepairsHLSSidecarsPerRepresentation(t *testing.T) {
 		}
 	}
 
-	ci.Period("p0").AS("0").Rep("v0", 8).Commit(index.SegmentState{
+	ci.Period("p0").AS("0").Rep("v0", 8).RestorePublished(index.SegmentState{
 		SegNo: 7, Path: videoPath, StartPTS: 100, EndPTS: 200, Timescale: 90_000,
 	})
-	ci.Period("p0").AS("1").Rep("a0", 8).Commit(index.SegmentState{
+	ci.Period("p0").AS("1").Rep("a0", 8).RestorePublished(index.SegmentState{
 		SegNo: 9, Path: audioPath, StartPTS: 300, EndPTS: 400, Timescale: 48_000,
 		KeyURI: "https://keys.example.test/a", IV: []byte{1, 2, 3},
 	})
@@ -95,7 +95,7 @@ func TestCheckpointVODMediaRetriesAfterBlockedSidecarPath(t *testing.T) {
 	if err := os.WriteFile(path, []byte("segment"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ci.Period("p0").AS("0").Rep("v0", 8).Commit(index.SegmentState{
+	ci.Period("p0").AS("0").Rep("v0", 8).RestorePublished(index.SegmentState{
 		SegNo: 7, Path: path, StartPTS: 100, EndPTS: 200, Timescale: 90_000,
 	})
 

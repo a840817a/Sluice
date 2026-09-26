@@ -2,10 +2,10 @@ package index
 
 import "sync"
 
-// Barrier checks A/V readiness and publishes segments when both tracks are committed.
+// barrier checks A/V readiness and publishes segments when both tracks are committed.
 // It uses presentation time range overlap rather than exact segNo matching to
 // tolerate the ~21ms audio/video duration misalignment common in AAC + H.264.
-type Barrier struct {
+type barrier struct {
 	mu     sync.Mutex
 	period *PeriodState
 	// overlapTolerance is the minimum fractional overlap required (0–1).
@@ -13,15 +13,15 @@ type Barrier struct {
 	overlapTolerance float64
 }
 
-// NewBarrier creates a Barrier for the given period.
-func NewBarrier(period *PeriodState, overlapTolerance float64) *Barrier {
+// newBarrier creates a barrier for the given period.
+func newBarrier(period *PeriodState, overlapTolerance float64) *barrier {
 	if overlapTolerance <= 0 {
 		overlapTolerance = 0.5
 	}
-	return &Barrier{period: period, overlapTolerance: overlapTolerance}
+	return &barrier{period: period, overlapTolerance: overlapTolerance}
 }
 
-// CheckAndPublish scans all AdaptationSets in the period for COMMITTED segments
+// checkAndPublish scans all AdaptationSets in the period for COMMITTED segments
 // and publishes those for which the A/V barrier is satisfied.
 //
 // A segment slot is publishable when:
@@ -29,13 +29,16 @@ func NewBarrier(period *PeriodState, overlapTolerance float64) *Barrier {
 //     representation has a COMMITTED segment whose time range overlaps
 //     the candidate video segment by >= overlapTolerance.
 //
-// All representations within a publishable slot are published together.
-func (b *Barrier) CheckAndPublish() {
+// All representations within a publishable slot are published together. It
+// returns how many segments it published.
+func (b *barrier) checkAndPublish() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	b.period.mu.RLock()
 	defer b.period.mu.RUnlock()
+
+	published := 0
 
 	// Gather video and audio AdaptationSets that have at least one committed
 	// segment. ASes with only published/expired segments (e.g. rebuilt history
@@ -91,11 +94,11 @@ func (b *Barrier) CheckAndPublish() {
 			}
 			as.mu.RLock()
 			for _, rep := range as.Reps {
-				rep.MarkPublished(segNos)
+				published += rep.markPublished(segNos)
 			}
 			as.mu.RUnlock()
 		}
-		return
+		return published
 	}
 
 	// Collect all committed video time ranges (start/end in seconds).
@@ -182,15 +185,16 @@ func (b *Barrier) CheckAndPublish() {
 		}
 		as.mu.RLock()
 		for _, rep := range as.Reps {
-			rep.MarkPublished(segNos)
+			published += rep.markPublished(segNos)
 		}
 		as.mu.RUnlock()
 	}
+	return published
 }
 
 // overlaps returns true if [s1,e1) and [s2,e2) overlap by at least
 // overlapTolerance × min(duration1, duration2).
-func (b *Barrier) overlaps(s1, e1, s2, e2 float64) bool {
+func (b *barrier) overlaps(s1, e1, s2, e2 float64) bool {
 	start := max(s1, s2)
 	end := min(e1, e2)
 	if end <= start {

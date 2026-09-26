@@ -266,8 +266,7 @@ func TestPeriodSegmentsCarryLifetimeRangeInOrder(t *testing.T) {
 	for _, period := range []string{"10", "2"} {
 		rep := ci.Period(period).AS("0").Rep("v0", 2) // holds 2; 5 published
 		for n := uint64(100); n <= 104; n++ {
-			rep.Commit(index.SegmentState{SegNo: n, EndPTS: 1, Timescale: 1, Discontinuity: n == 101})
-			rep.MarkPublished(map[uint64]struct{}{n: {}})
+			rep.RestorePublished(index.SegmentState{SegNo: n, EndPTS: 1, Timescale: 1, Discontinuity: n == 101})
 		}
 	}
 	srv := NewServer(config.Config{}, newTestManager(t, config.Config{}))
@@ -290,20 +289,20 @@ func TestPeriodSegmentsCarryLifetimeRangeInOrder(t *testing.T) {
 // playlist can list. It must not open a gap in the media sequence at a period
 // boundary, or the playlist cuts at the gap and loses whole periods.
 //
-// The index is built the way ingest builds it, commit then publish, because
-// that is where the committed-only segment comes from.
+// The index is built the way ingest builds it, through Commit under the A/V
+// barrier, because that is where the committed-only segment comes from: once
+// an audio AdaptationSet is known but has no segment, the barrier holds every
+// later video segment back.
 func TestUnpublishedSegmentAtAPeriodEdgeKeepsBothPeriods(t *testing.T) {
 	ci := index.NewChannelIndex()
 	commit := func(period string, first, last, publishedTo uint64) {
-		rep := ci.Period(period).AS("0").Rep("v0", 100)
-		published := map[uint64]struct{}{}
 		for n := first; n <= last; n++ {
-			rep.Commit(index.SegmentState{SegNo: n, StartPTS: int64(n) * 90000, EndPTS: int64(n+1) * 90000, Timescale: 90000, Path: "/x/" + period})
-			if n <= publishedTo {
-				published[n] = struct{}{}
+			if n == publishedTo+1 {
+				ci.Period(period).AS("1").SetMediaType(index.MediaAudio)
 			}
+			ci.Commit(index.RepRef{PeriodID: period, ASID: "0", RepID: "v0", MediaType: index.MediaVideo}, 100,
+				index.SegmentState{SegNo: n, StartPTS: int64(n) * 90000, EndPTS: int64(n+1) * 90000, Timescale: 90000, Path: "/x/" + period})
 		}
-		rep.MarkPublished(published)
 	}
 	commit("0", 1, 5, 4) // segment 5 committed, never published
 	commit("1", 1, 3, 3)

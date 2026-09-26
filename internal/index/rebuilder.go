@@ -39,8 +39,9 @@ const rebuildRingCapacity = 120
 // BaseMediaDecodeTime from the tfdt box.  EndPTS is derived from the next
 // segment's StartPTS; for the last segment the previous delta is reused.
 //
-// Segments are committed via rep.Commit() and then the A/V barrier is run
-// per period so that only time-aligned segments become Published.
+// Segments are committed and then published under the index's policy
+// per period: time-aligned segments under the A/V barrier, all of them
+// under PublishImmediately.
 // RebuildFromDiskForVOD is identical to RebuildFromDisk but creates each
 // RepresentationState with an unbounded ring buffer (capacity=0). This allows
 // the full segment history of a live stream to be loaded into memory after a
@@ -199,7 +200,7 @@ func rebuildFromDisk(ci *ChannelIndex, dataDir, channelID string, capacity int) 
 					return tsStates[i].SegNo < tsStates[j].SegNo
 				})
 				for _, st := range tsStates {
-					rep.Commit(st)
+					rep.commit(st)
 				}
 
 				// Sort ascending by segment number so EndPTS can be derived
@@ -252,14 +253,15 @@ func rebuildFromDisk(ci *ChannelIndex, dataDir, channelID string, capacity int) 
 							}
 						}
 					}
-					rep.Commit(st)
+					rep.commit(st)
 				}
 			}
 		}
 
-		// After all AdaptationSets for this period are committed, run the
-		// A/V barrier so only time-aligned segments are published.
-		NewBarrier(ps, 0.5).CheckAndPublish()
+		// After all AdaptationSets for this period are committed, publish
+		// under the index's policy — the channel's, so the rebuilt index
+		// shows what the live one did.
+		ci.publishCommitted(ps)
 	}
 	return nil
 }

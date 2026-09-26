@@ -77,10 +77,72 @@ func (s *SegmentState) EndSec() float64 {
 type ChannelIndex struct {
 	mu      sync.RWMutex
 	Periods map[string]*PeriodState
+	// policy decides when a committed segment is published; see Commit.
+	policy PublishPolicy
 }
 
-func NewChannelIndex() *ChannelIndex {
-	return &ChannelIndex{Periods: make(map[string]*PeriodState)}
+// NewChannelIndex returns an empty index that publishes under policy, or
+// under PublishAVBarrier when none is given. The policy follows the channel's
+// source protocol, and every index built for a channel — live, rebuilt at a
+// restart, rebuilt for VOD — must use the same one, or segments a player has
+// already seen can vanish when the index is rebuilt.
+func NewChannelIndex(policy ...PublishPolicy) *ChannelIndex {
+	ci := &ChannelIndex{Periods: make(map[string]*PeriodState)}
+	if len(policy) > 0 {
+		ci.policy = policy[0]
+	}
+	return ci
+}
+
+// CommitResult is what one Commit did.
+type CommitResult struct {
+	// New is false when the segment number was already tracked and its state
+	// was replaced, so callers counting ingest progress must not count it a
+	// second time.
+	New bool
+	// Published is how many segments, in any representation of the period,
+	// the commit made visible to players.
+	Published int
+}
+
+// Commit records a newly written segment in ref's representation, creating
+// the period, AdaptationSet and representation (with ring capacity capacity)
+// as needed and recording ref.MediaType, then publishes whatever the index's
+// policy now allows.
+func (ci *ChannelIndex) Commit(ref RepRef, capacity int, seg SegmentState) CommitResult {
+	ps := ci.Period(ref.PeriodID)
+	as := ps.AS(ref.ASID)
+	if ref.MediaType != "" {
+		as.SetMediaType(ref.MediaType)
+	}
+	rep := as.Rep(ref.RepID, capacity)
+	res := CommitResult{New: rep.commit(seg)}
+	switch ci.policy {
+	case PublishImmediately:
+		res.Published = rep.markPublished(map[uint64]struct{}{seg.SegNo: {}})
+	default:
+		res.Published = ps.barrier.checkAndPublish()
+	}
+	return res
+}
+
+// publishCommitted publishes what the policy allows of everything committed
+// in ps. The rebuild commits a whole period first and publishes once, rather
+// than running the barrier per segment, which would be quadratic in the
+// period's length.
+func (ci *ChannelIndex) publishCommitted(ps *PeriodState) {
+	switch ci.policy {
+	case PublishImmediately:
+		ps.ForEachRep(func(_, _ string, rep *RepresentationState) {
+			segNos := make(map[uint64]struct{})
+			for _, s := range rep.Committed() {
+				segNos[s.SegNo] = struct{}{}
+			}
+			rep.markPublished(segNos)
+		})
+	default:
+		ps.barrier.checkAndPublish()
+	}
 }
 
 // Mu exposes the read-write mutex for callers that need to snapshot the Periods map.
@@ -235,10 +297,14 @@ type PeriodState struct {
 	mu             sync.RWMutex
 	ID             string
 	AdaptationSets map[string]*AdaptationState
+	// barrier publishes the period's segments under PublishAVBarrier.
+	barrier *barrier
 }
 
 func newPeriodState(id string) *PeriodState {
-	return &PeriodState{ID: id, AdaptationSets: make(map[string]*AdaptationState)}
+	ps := &PeriodState{ID: id, AdaptationSets: make(map[string]*AdaptationState)}
+	ps.barrier = newBarrier(ps, 0.5)
+	return ps
 }
 
 // Mu exposes the read-write mutex for callers that need to iterate AdaptationSets.
@@ -388,12 +454,9 @@ func (rs *RepresentationState) RestorePublished(seg SegmentState) {
 	rs.buf.Push(seg)
 }
 
-// Commit records a newly written segment in the ring buffer.
-//
-// It reports whether the segment was new. A false result means this segment
-// number was already tracked and its state was replaced, so callers counting
-// ingest progress must not count it a second time.
-func (rs *RepresentationState) Commit(seg SegmentState) bool {
+// commit records a newly written segment in the ring buffer, and reports
+// whether its number was new. Publication is ChannelIndex.Commit's business.
+func (rs *RepresentationState) commit(seg SegmentState) bool {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	seg.Status = StatusCommitted
@@ -429,16 +492,20 @@ func (rs *RepresentationState) Committed() []SegmentState {
 	return out
 }
 
-// MarkPublished transitions the given segment numbers to StatusPublished.
-func (rs *RepresentationState) MarkPublished(segNos map[uint64]struct{}) {
+// markPublished transitions the given segment numbers from StatusCommitted to
+// StatusPublished, and returns how many it transitioned.
+func (rs *RepresentationState) markPublished(segNos map[uint64]struct{}) int {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
+	n := 0
 	rs.buf.UpdateWhere(func(s *SegmentState) {
 		if _, ok := segNos[s.SegNo]; ok && s.Status == StatusCommitted {
 			s.Status = StatusPublished
 			rs.recordPublished(*s)
+			n++
 		}
 	})
+	return n
 }
 
 // ExpireOlderThan transitions segments whose EndSec is before cutoff to StatusExpired.

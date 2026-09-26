@@ -89,11 +89,11 @@ func TestCommitIsIdempotentPerSegNo(t *testing.T) {
 	rep := ci.Period("p0").AS("0").Rep("v0", 16)
 
 	for _, n := range []uint64{5, 6, 7} {
-		rep.Commit(SegmentState{SegNo: n, StartPTS: int64(n) * 90000, EndPTS: int64(n+1) * 90000, Timescale: 90000})
+		rep.commit(SegmentState{SegNo: n, StartPTS: int64(n) * 90000, EndPTS: int64(n+1) * 90000, Timescale: 90000})
 	}
 	// Segment 7 arrives a second time, as a slow fetch racing the next poll.
-	rep.Commit(SegmentState{SegNo: 7, StartPTS: 7 * 90000, EndPTS: 8 * 90000, Timescale: 90000})
-	rep.Commit(SegmentState{SegNo: 8, StartPTS: 8 * 90000, EndPTS: 9 * 90000, Timescale: 90000})
+	rep.commit(SegmentState{SegNo: 7, StartPTS: 7 * 90000, EndPTS: 8 * 90000, Timescale: 90000})
+	rep.commit(SegmentState{SegNo: 8, StartPTS: 8 * 90000, EndPTS: 9 * 90000, Timescale: 90000})
 
 	got := rep.Committed()
 	if len(got) != 4 {
@@ -171,13 +171,13 @@ func TestCommitReportsWhetherSegmentWasNew(t *testing.T) {
 	seg := func(n uint64) SegmentState {
 		return SegmentState{SegNo: n, StartPTS: int64(n) * 90000, EndPTS: int64(n+1) * 90000, Timescale: 90000}
 	}
-	if !rep.Commit(seg(5)) {
+	if !rep.commit(seg(5)) {
 		t.Error("Commit of a new segment returned false")
 	}
-	if rep.Commit(seg(5)) {
+	if rep.commit(seg(5)) {
 		t.Error("Commit of an already-committed segment returned true")
 	}
-	if !rep.Commit(seg(6)) {
+	if !rep.commit(seg(6)) {
 		t.Error("Commit of a new segment returned false after a duplicate")
 	}
 

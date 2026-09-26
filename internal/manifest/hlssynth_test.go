@@ -21,7 +21,7 @@ func cmafIndex(periodID string, repIDs []string, n int) *index.ChannelIndex {
 	for _, repID := range repIDs {
 		rep := as.Rep(repID, 0)
 		for i := 0; i < n; i++ {
-			rep.Commit(index.SegmentState{
+			rep.RestorePublished(index.SegmentState{
 				SegNo:     uint64(i),
 				StartPTS:  int64(i) * 4 * cmafTimescale,
 				EndPTS:    int64(i+1) * 4 * cmafTimescale,
@@ -34,7 +34,6 @@ func cmafIndex(periodID string, repIDs []string, n int) *index.ChannelIndex {
 		for i := 0; i < n; i++ {
 			segNos[uint64(i)] = struct{}{}
 		}
-		rep.MarkPublished(segNos)
 	}
 	return ci
 }
@@ -144,8 +143,7 @@ func TestSynthesizeHLSMPDPeriodsAreStablyOrdered(t *testing.T) {
 		as := ps.AS("0")
 		as.SetMediaType("video")
 		rep := as.Rep("v0", 0)
-		rep.Commit(index.SegmentState{SegNo: 0, EndPTS: 4 * cmafTimescale, Timescale: cmafTimescale})
-		rep.MarkPublished(map[uint64]struct{}{0: {}})
+		rep.RestorePublished(index.SegmentState{SegNo: 0, EndPTS: 4 * cmafTimescale, Timescale: cmafTimescale})
 	}
 
 	for i := 0; i < 5; i++ {
@@ -213,7 +211,7 @@ func commitAudioAS(ci *index.ChannelIndex, periodID, repID string, n int) {
 	as.SetMediaType("audio")
 	rep := as.Rep(repID, 0)
 	for i := 0; i < n; i++ {
-		rep.Commit(index.SegmentState{
+		rep.RestorePublished(index.SegmentState{
 			SegNo:     uint64(i),
 			StartPTS:  int64(i) * 4 * cmafTimescale,
 			EndPTS:    int64(i+1) * 4 * cmafTimescale,
@@ -221,7 +219,6 @@ func commitAudioAS(ci *index.ChannelIndex, periodID, repID string, n int) {
 			Path:      "a.m4s",
 			InitPath:  "ainit.mp4",
 		})
-		rep.MarkPublished(map[uint64]struct{}{uint64(i): {}})
 	}
 }
 

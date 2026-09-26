@@ -59,7 +59,7 @@ func TestForEachRepVisitsEveryRepresentation(t *testing.T) {
 // deadlocks the test times out rather than failing, which is the signal.
 func TestForEachRepAllowsRepMethodsInsideTheCallback(t *testing.T) {
 	ci := seedIndex(t)
-	ci.Period("p0").AS("0").Rep("v0", 8).Commit(SegmentState{SegNo: 1, Timescale: 90000})
+	ci.Period("p0").AS("0").Rep("v0", 8).commit(SegmentState{SegNo: 1, Timescale: 90000})
 
 	var total int
 	ci.ForEachRep(func(_ RepRef, rep *RepresentationState) {
@@ -145,7 +145,7 @@ func TestPeriodStateForEachRep(t *testing.T) {
 	}
 
 	// Representation methods must stay callable from inside the callback.
-	ci.Period("p0").AS("0").Rep("v0", 8).Commit(SegmentState{SegNo: 1, Timescale: 90000})
+	ci.Period("p0").AS("0").Rep("v0", 8).commit(SegmentState{SegNo: 1, Timescale: 90000})
 	committed := 0
 	ci.Period("p0").ForEachRep(func(_, _ string, rep *RepresentationState) {
 		_, c, _ := rep.StatusCounts()

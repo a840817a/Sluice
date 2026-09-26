@@ -78,7 +78,7 @@ func TestTimelineSurvivesRelativeBase(t *testing.T) {
 	rep := as.Rep("v0", 0)
 	published := make(map[uint64]struct{})
 	for n := uint64(1); n <= 3; n++ {
-		rep.Commit(index.SegmentState{
+		rep.RestorePublished(index.SegmentState{
 			SegNo:     n,
 			Timescale: 90000,
 			StartPTS:  int64(n-1) * 180000,
@@ -86,7 +86,6 @@ func TestTimelineSurvivesRelativeBase(t *testing.T) {
 		})
 		published[n] = struct{}{}
 	}
-	rep.MarkPublished(published)
 	snap := ci.Snapshot()
 
 	for _, base := range []string{"", "https://gw.example.com"} {

@@ -1,4 +1,4 @@
-package pipeline
+package index
 
 // PublishPolicy decides when a committed segment becomes visible to players.
 //
@@ -14,18 +14,16 @@ const (
 	// presentation with time-aligned tracks, so letting one track run ahead of
 	// the other in the manifest produces a stream it cannot play cleanly.
 	//
-	// It is the zero value, and therefore what a Processor does if nothing sets
+	// It is the zero value, and therefore what an index does if nothing sets
 	// a policy at all: an omission degrades to the stricter rule rather than to
 	// no gating.
 	PublishAVBarrier PublishPolicy = iota
 
-	// PublishImmediate publishes each committed segment as soon as it lands.
+	// PublishImmediately publishes each committed segment as soon as it lands.
 	// HLS serves each track as its own media playlist and the client aligns
 	// them itself, so gating one track behind another would only stall a
-	// playlist whose peer momentarily lagged.
-	PublishImmediate
+	// playlist whose peer momentarily lagged — or, when the index is rebuilt
+	// from disk, drop the segments at a track's end that its peer never
+	// matched.
+	PublishImmediately
 )
-
-// SetPublishPolicy selects when committed segments become visible.
-// Must be called before Run.
-func (p *Processor) SetPublishPolicy(pp PublishPolicy) { p.publish = pp }

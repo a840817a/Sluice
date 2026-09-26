@@ -64,8 +64,7 @@ type Processor struct {
 	ci            *index.ChannelIndex
 	broker        *queue.Broker
 	channelID     string
-	barriers      map[string]*index.Barrier // periodID → Barrier
-	repTimescales map[string]uint32         // repKey → actual track timescale from mdhd
+	repTimescales map[string]uint32 // repKey → actual track timescale from mdhd
 	keys          KeyFetcher
 	// sidecarAppends counts metadata records written per representation since
 	// that representation's file was last compacted.
@@ -84,8 +83,6 @@ type Processor struct {
 	// replaced by Run with the context the channel was started under; the
 	// Background default only applies to a Processor driven directly by a test.
 	keyCtx context.Context
-	// publish decides when a committed segment becomes visible; see publish.go.
-	publish PublishPolicy
 	// prog records ingest progress for the admin UI. Nil is valid and means
 	// "record nothing" — every Counters method tolerates a nil receiver.
 	prog *progress.Counters
@@ -101,7 +98,6 @@ func NewProcessor(cfg config.Config, channelID string, ci *index.ChannelIndex, b
 		ci:             ci,
 		broker:         broker,
 		channelID:      channelID,
-		barriers:       make(map[string]*index.Barrier),
 		repTimescales:  make(map[string]uint32),
 		sidecarAppends: make(map[string]int),
 		warmedKeys:     make(map[string]bool),
@@ -303,13 +299,6 @@ func (p *Processor) handle(res fetch.Result) {
 		endPTS = startPTS + int64(segSec*float64(trackTS))
 	}
 
-	// Commit segment to the channel index.
-	// Use ASID as the AS key so multiple ASes of the same MediaType are distinct.
-	periodState := p.ci.Period(task.PeriodID)
-	as := periodState.AS(task.ASID)
-	as.SetMediaType(task.MediaType)
-	rep := as.Rep(task.RepID, segmentCapacity(p.cfg))
-
 	// MPEG-TS and WebVTT segments are self-contained: there is no initialization
 	// segment, so the path stays empty and the init endpoint correctly 404s.
 	initPath := ""
@@ -332,13 +321,6 @@ func (p *Processor) handle(res fetch.Result) {
 		seg.KeyURI = task.KeyURI
 		seg.IV = task.IV
 	}
-	// Count the segment only if this number was not already tracked. The HLS
-	// backfill path legitimately re-fetches a segment that is still in flight, so
-	// counting every commit would let a download bar climb past its own total.
-	if rep.Commit(seg) {
-		p.prog.AddStored(1, uint64(len(data)))
-	}
-
 	// Persist what the segment file itself cannot tell us, so the channel's DVR
 	// window survives a restart. HLS opts in for every segment: MPEG-TS needs
 	// its whole timing recorded, and even fMP4 (whose timing is in the tfdt box)
@@ -347,41 +329,24 @@ func (p *Processor) handle(res fetch.Result) {
 		p.persistSegmentMeta(task, seg)
 	}
 
-	// Publish ready segments. HLS tracks are independent media playlists that
-	// the player aligns itself, so an HLS channel publishes each committed
-	// segment directly; gating audio behind video (or vice versa) via the A/V
-	// barrier would only stall a track whose peer momentarily lags. DASH, whose
-	// single MPD must present time-aligned tracks, keeps the barrier.
-	prevPub := countPublished(periodState)
-	if p.publish == PublishImmediate {
-		rep.MarkPublished(map[uint64]struct{}{task.SegNo: {}})
-	} else {
-		p.barrier(task.PeriodID).CheckAndPublish()
+	// Then commit it to the channel index, which publishes what its policy
+	// allows, so the record is appended before the segment is visible. Use
+	// ASID as the AS key so multiple ASes of the same MediaType are distinct.
+	committed := p.ci.Commit(index.RepRef{
+		PeriodID: task.PeriodID, ASID: task.ASID, RepID: task.RepID, MediaType: task.MediaType,
+	}, segmentCapacity(p.cfg), seg)
+	// Count the segment only if this number was not already tracked. The HLS
+	// backfill path legitimately re-fetches a segment that is still in flight, so
+	// counting every commit would let a download bar climb past its own total.
+	if committed.New {
+		p.prog.AddStored(1, uint64(len(data)))
 	}
-	newPub := countPublished(periodState) - prevPub
-	if newPub > 0 {
-		metrics.SegmentsPublished.WithLabelValues(p.channelID, task.MediaType).Add(float64(newPub))
+	if committed.Published > 0 {
+		metrics.SegmentsPublished.WithLabelValues(p.channelID, task.MediaType).Add(float64(committed.Published))
 	}
 
 	// Expire segments older than the sliding window.
-	p.expireOldSegments(periodState)
-}
-
-func countPublished(ps *index.PeriodState) int {
-	total := 0
-	ps.ForEachRep(func(_, _ string, rep *index.RepresentationState) {
-		total += len(rep.Published())
-	})
-	return total
-}
-
-func (p *Processor) barrier(periodID string) *index.Barrier {
-	if b, ok := p.barriers[periodID]; ok {
-		return b
-	}
-	b := index.NewBarrier(p.ci.Period(periodID), 0.5)
-	p.barriers[periodID] = b
-	return b
+	p.expireOldSegments(p.ci.Period(task.PeriodID))
 }
 
 // expiryCutoff returns the media-time boundary below which published segments

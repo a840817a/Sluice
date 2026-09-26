@@ -19,10 +19,9 @@ func TestExpireOldSegments_UsesLiveEdgeWindow(t *testing.T) {
 	rep := as.Rep("r0", 16)
 
 	// EndSec: 10, 20, 30 (timescale=10)
-	rep.Commit(index.SegmentState{SegNo: 1, StartPTS: 0, EndPTS: 100, Timescale: 10})
-	rep.Commit(index.SegmentState{SegNo: 2, StartPTS: 100, EndPTS: 200, Timescale: 10})
-	rep.Commit(index.SegmentState{SegNo: 3, StartPTS: 200, EndPTS: 300, Timescale: 10})
-	rep.MarkPublished(map[uint64]struct{}{1: {}, 2: {}, 3: {}})
+	rep.RestorePublished(index.SegmentState{SegNo: 1, StartPTS: 0, EndPTS: 100, Timescale: 10})
+	rep.RestorePublished(index.SegmentState{SegNo: 2, StartPTS: 100, EndPTS: 200, Timescale: 10})
+	rep.RestorePublished(index.SegmentState{SegNo: 3, StartPTS: 200, EndPTS: 300, Timescale: 10})
 
 	p := NewProcessor(config.Config{
 		Window: config.WindowConfig{
@@ -53,8 +52,11 @@ func TestExpireOldSegments_NoPublished_NoChange(t *testing.T) {
 	as := ps.AS("v0")
 	as.SetMediaType("video")
 	rep := as.Rep("r0", 8)
+	// An audio AdaptationSet that has not received a segment yet holds the A/V
+	// barrier, so the video segment stays committed and unpublished.
+	ps.AS("a0").SetMediaType(index.MediaAudio)
 
-	rep.Commit(index.SegmentState{SegNo: 1, StartPTS: 0, EndPTS: 100, Timescale: 10})
+	ci.Commit(index.RepRef{PeriodID: "p0", ASID: "v0", RepID: "r0"}, 8, index.SegmentState{SegNo: 1, StartPTS: 0, EndPTS: 100, Timescale: 10})
 
 	p := NewProcessor(config.Config{
 		Window: config.WindowConfig{
@@ -89,12 +91,11 @@ func expiryFixture(t *testing.T) (*index.ChannelIndex, *index.PeriodState, []str
 			t.Fatalf("write fixture segment: %v", err)
 		}
 		paths = append(paths, path)
-		rep.Commit(index.SegmentState{
+		rep.RestorePublished(index.SegmentState{
 			SegNo: uint64(i), StartPTS: int64(i-1) * 100, EndPTS: int64(i) * 100,
 			Timescale: 10, Path: path,
 		})
 	}
-	rep.MarkPublished(map[uint64]struct{}{1: {}, 2: {}, 3: {}})
 	return ci, ps, paths
 }
 

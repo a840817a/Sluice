@@ -20,10 +20,10 @@ func newRepWith(t *testing.T, segs ...SegmentState) *RepresentationState {
 	rep := NewChannelIndex().Period("p0").AS("v0").Rep("r0", 16)
 	published := map[uint64]struct{}{}
 	for _, s := range segs {
-		rep.Commit(s)
+		rep.commit(s)
 		published[s.SegNo] = struct{}{}
 	}
-	rep.MarkPublished(published)
+	rep.markPublished(published)
 	return rep
 }
 
@@ -77,7 +77,7 @@ func TestExpireAndCollectPathsIsNotRepeatable(t *testing.T) {
 // must not be swept out from under it.
 func TestExpireAndCollectPathsLeavesCommittedSegments(t *testing.T) {
 	rep := NewChannelIndex().Period("p0").AS("v0").Rep("r0", 16)
-	rep.Commit(expSeg(1, 10, "/data/ch/1.m4s")) // committed, never published
+	rep.commit(expSeg(1, 10, "/data/ch/1.m4s")) // committed, never published
 
 	got := rep.ExpireAndCollectPaths(25)
 

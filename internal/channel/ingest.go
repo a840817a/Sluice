@@ -60,6 +60,18 @@ func channelGatewayConfig(gwCfg gocfg.Config, cfg Config) gocfg.Config {
 	return chGwCfg
 }
 
+// publishPolicy is when the channel's index makes a committed segment visible.
+// HLS tracks are independent media playlists the player aligns itself, so an
+// HLS channel publishes each segment directly; a DASH MPD must present
+// time-aligned tracks, so a DASH channel gates on the A/V barrier. Every index
+// built for the channel uses it, so a rebuild shows what the live index did.
+func publishPolicy(cfg Config) index.PublishPolicy {
+	if cfg.IsHLS() {
+		return index.PublishImmediately
+	}
+	return index.PublishAVBarrier
+}
+
 // restoreIndex rebuilds the channel's segment index from what is already on
 // disk, so a restart resumes instead of re-fetching.
 //
@@ -67,7 +79,7 @@ func channelGatewayConfig(gwCfg gocfg.Config, cfg Config) gocfg.Config {
 // channel re-ingests, which is recoverable, whereas refusing to start leaves it
 // down until someone intervenes.
 func restoreIndex(chGwCfg gocfg.Config, id string, cfg Config) *index.ChannelIndex {
-	ci := index.NewChannelIndex()
+	ci := index.NewChannelIndex(publishPolicy(cfg))
 	if cfg.IsVOD {
 		// A channel already transitioned to VOD keeps its full history, so the
 		// rebuild uses unbounded rings.
@@ -161,10 +173,6 @@ func (p *ingestPipeline) attachSource(id string, cfg Config, chGwCfg gocfg.Confi
 	p.keys = hlskey.NewCache(nil, p.headers, keyStorePath)
 	p.source = hlsSource{w: hw, keys: p.keys}
 	p.processor.SetKeyFetcher(p.keys)
-
-	// HLS tracks are independent media playlists the player aligns itself, so
-	// publish each segment directly rather than gating on the A/V barrier.
-	p.processor.SetPublishPolicy(pipeline.PublishImmediate)
 }
 
 // ingestControl is the VOD transition's seam onto a channel's ingest: the three

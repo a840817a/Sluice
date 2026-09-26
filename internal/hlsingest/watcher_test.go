@@ -439,13 +439,12 @@ func commitToIndex(w *Watcher, tasks map[uint64]*queue.SegmentTask) {
 		as := ps.AS(task.ASID)
 		as.SetMediaType(task.MediaType)
 		rep := as.Rep(task.RepID, 0)
-		rep.Commit(index.SegmentState{
+		rep.RestorePublished(index.SegmentState{
 			SegNo:     task.SegNo,
 			StartPTS:  task.StartPTS,
 			EndPTS:    task.StartPTS + int64(task.Duration),
 			Timescale: task.Timescale,
 		})
-		rep.MarkPublished(map[uint64]struct{}{task.SegNo: {}})
 	}
 }
 

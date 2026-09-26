@@ -46,13 +46,12 @@ func publishedIndex(t *testing.T, timescale uint32, durTicks int64, segNos ...ui
 	published := map[uint64]struct{}{}
 	for _, n := range segNos {
 		start := int64(n-1) * durTicks
-		rep.Commit(index.SegmentState{
+		rep.RestorePublished(index.SegmentState{
 			SegNo: n, StartPTS: start, EndPTS: start + durTicks,
 			Timescale: timescale, Path: "/data/ch/v0/" + string(rune('0'+n)) + ".m4s",
 		})
 		published[n] = struct{}{}
 	}
-	rep.MarkPublished(published)
 	return ci.Snapshot()
 }
 
