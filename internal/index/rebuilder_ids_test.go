@@ -31,12 +31,15 @@ func TestRebuildReadsIDsBackFromDirectoryNames(t *testing.T) {
 	put(filepath.Dir(store.RepLocation{DataDir: dataDir, ChannelID: "ch", PeriodID: "..", MediaType: "video", ASID: "0", RepID: "a/b"}.InitPath()))
 	// Written before the encoding: the raw ID as the directory name.
 	put(filepath.Join(dataDir, "ch", "periods", "p 1", "video_0", "r:1"))
+	// A raw ID that looks like an encoding of another ID ("~YQ" is "a"
+	// encoded) is still that raw ID: the store never writes "a" as "~YQ".
+	put(filepath.Join(dataDir, "ch", "periods", "~YQ", "video_0", "v0"))
 
 	ci := NewChannelIndex(PublishAVBarrier)
 	if err := RebuildFromDisk(ci, dataDir, "ch"); err != nil {
 		t.Fatalf("RebuildFromDisk: %v", err)
 	}
-	for _, want := range []struct{ period, rep string }{{"", "v0"}, {"..", "a/b"}, {"p 1", "r:1"}} {
+	for _, want := range []struct{ period, rep string }{{"", "v0"}, {"..", "a/b"}, {"p 1", "r:1"}, {"~YQ", "v0"}} {
 		if ci.FindRep(want.period, "0", want.rep) == nil {
 			t.Errorf("representation %q of period %q not rebuilt; periods: %q", want.rep, want.period, ci.PeriodIDs())
 		}

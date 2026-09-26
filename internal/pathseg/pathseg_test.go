@@ -31,7 +31,9 @@ func TestEncodeRoundTripsThroughAURL(t *testing.T) {
 			}
 		}
 	}
-	for _, bad := range []string{"", "..", "a%2Fb", "~!!"} {
+	// "~YQ" is "a" encoded, which Encode writes as "a": accepting both would
+	// give one ID two segments.
+	for _, bad := range []string{"", "..", "a%2Fb", "~!!", "~YQ"} {
 		if _, ok := Decode(bad); ok {
 			t.Errorf("Decode(%q) accepted a segment Encode never writes", bad)
 		}

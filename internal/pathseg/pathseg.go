@@ -42,11 +42,14 @@ func Encode(id string) string {
 	return encodedPrefix + base64.RawURLEncoding.EncodeToString([]byte(id))
 }
 
-// Decode reverses Encode. It reports false for a segment Encode never returns.
+// Decode reverses Encode. It reports false for a segment Encode never returns,
+// including an encoded form of an ID Encode writes as is ("~YQ" for "a"), so
+// every ID has exactly one segment and a legacy directory named like that is
+// not mistaken for another ID.
 func Decode(seg string) (string, bool) {
 	if enc, ok := strings.CutPrefix(seg, encodedPrefix); ok {
 		id, err := base64.RawURLEncoding.DecodeString(enc)
-		return string(id), err == nil
+		return string(id), err == nil && !plain(string(id))
 	}
 	return seg, plain(seg)
 }
