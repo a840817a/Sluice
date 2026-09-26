@@ -1,9 +1,12 @@
 package channel
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
+
+	imdp "github.com/a840817a/sluice/internal/mpd"
 )
 
 // launch closes each exit signal only once everything it stands for has
@@ -45,4 +48,34 @@ func TestChannelIngestLaunchSignalsExits(t *testing.T) {
 	close(processor)
 	closed("pipelineDone", c.pipelineDone)
 	closed("the WaitGroup", joined)
+}
+
+// launchIngest also starts the watch for a finished upstream: a live channel
+// whose source says the upstream is a finished asset is shown as static
+// ingesting while the source is still enumerating it, not only once the
+// source returns.
+func TestLaunchIngestWatchesForAFinishedUpstream(t *testing.T) {
+	m := newTestManager(t, configForTest(t))
+	cfg := deadChannel()
+	pl := newIngestPipeline(m.gwCfg, "c", cfg)
+	src := &fakeSource{} // Run blocks until its context ends
+	src.finished.Store(true)
+	rt := &Runtime{ID: "c", Index: pl.index, Source: src, Progress: pl.progress, Broker: pl.broker}
+	rt.setConfig(cfg)
+	rt.modes.begin(ModeLive, false, 0)
+
+	lifecycleCtx, cancel := context.WithCancel(context.Background())
+	sourceCtx, sourceCancel := context.WithCancel(lifecycleCtx)
+	poolCtx, poolCancel := context.WithCancel(lifecycleCtx)
+	ingest := newChannelIngest(sourceCancel, poolCancel, pl.broker, func() *imdp.ParsedMPD { return nil })
+	m.launchIngest(sourceCtx, poolCtx, lifecycleCtx, rt, cfg, pl, ingest)
+	t.Cleanup(func() { cancel(); rt.wg.Wait() })
+
+	deadline := time.Now().Add(5 * staticUpstreamPollInterval)
+	for rt.Mode() != ModeStaticIngesting && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := rt.Mode(); got != ModeStaticIngesting {
+		t.Errorf("mode = %s with the source still running, want %s", got, ModeStaticIngesting)
+	}
 }
