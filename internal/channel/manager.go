@@ -339,27 +339,20 @@ func (m *Manager) restoreVODState(rt *Runtime, id string) {
 	slog.Info("channel restored in VOD mode", "id", id)
 }
 
-// launchIngest starts the channel's goroutines: the fetch pool, the processor,
-// and the supervisor that keeps the source running.
+// launchIngest starts the channel's goroutines: its ingest — the fetch pool,
+// the processor, and the supervisor that keeps the source running — and the
+// watch for a finished upstream, which lives as long as the source does.
 //
 // Every goroutine is counted in rt.wg, which is what lets Stop join them rather
 // than merely cancel them — see Stop for why that matters.
 func (m *Manager) launchIngest(sourceCtx, poolCtx, processorCtx context.Context, rt *Runtime, cfg Config, pl *ingestPipeline, ingest *channelIngest) {
-	// pipelineWG lets the VOD transition join just the pool and processor. It
-	// must not wait on rt.wg: the transition itself is counted there, so that
-	// would make a Stop racing a VOD transition deadlock.
-	var pipelineWG sync.WaitGroup
-	pipelineWG.Add(2)
-	rt.wg.Add(5)
-	go func() { defer rt.wg.Done(); defer pipelineWG.Done(); pl.pool.Run(poolCtx) }()
-	go func() { defer rt.wg.Done(); defer pipelineWG.Done(); pl.processor.Run(processorCtx, pl.pool) }()
-	go func() { defer rt.wg.Done(); defer close(ingest.sourceDone); m.superviseSource(sourceCtx, rt, cfg) }()
+	ingest.launch(&rt.wg,
+		func() { pl.pool.Run(poolCtx) },
+		func() { pl.processor.Run(processorCtx, pl.pool) },
+		func() { m.superviseSource(sourceCtx, rt, cfg) },
+	)
+	rt.wg.Add(1)
 	go func() { defer rt.wg.Done(); m.awaitStaticUpstream(sourceCtx, rt) }()
-	go func() {
-		defer rt.wg.Done()
-		pipelineWG.Wait()
-		close(ingest.pipelineDone)
-	}()
 }
 
 // staticUpstreamPollInterval is how often a running channel is asked whether

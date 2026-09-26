@@ -6,6 +6,7 @@ package channel
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	gocfg "github.com/a840817a/sluice/internal/config"
@@ -196,8 +197,9 @@ type ingestControl interface {
 const drainCheckInterval = 100 * time.Millisecond
 
 // channelIngest is the production ingestControl: the cancel functions and exit
-// signals of a running channel's source and pipeline. launchIngest closes the
-// two done channels; nothing else touches them.
+// signals of a running channel's source and pipeline. launch runs the
+// goroutines the signals describe and closes each one when they exit; nothing
+// else can, since nothing else runs them.
 type channelIngest struct {
 	sourceCancel context.CancelFunc
 	poolCancel   context.CancelFunc
@@ -216,6 +218,28 @@ func newChannelIngest(sourceCancel, poolCancel context.CancelFunc, broker *queue
 		broker:       broker,
 		parsedMPD:    parsedMPD,
 	}
+}
+
+// launch runs the channel's ingest, counting every goroutine in wg: the fetch
+// pool and the processor, whose exit closes pipelineDone, and the source,
+// whose exit closes sourceDone. Each function must return once the context it
+// was started under ends; they receive none here, because the caller built
+// those contexts along with the cancel functions this ingest holds.
+func (c *channelIngest) launch(wg *sync.WaitGroup, runPool, runProcessor, runSource func()) {
+	// pipeline lets the VOD transition join just the pool and processor. It
+	// must not be wg: the transition itself is counted there, so waiting on
+	// it would make a Stop racing a VOD transition deadlock.
+	var pipeline sync.WaitGroup
+	pipeline.Add(2)
+	wg.Add(4)
+	go func() { defer wg.Done(); defer pipeline.Done(); runPool() }()
+	go func() { defer wg.Done(); defer pipeline.Done(); runProcessor() }()
+	go func() { defer wg.Done(); defer close(c.sourceDone); runSource() }()
+	go func() {
+		defer wg.Done()
+		pipeline.Wait()
+		close(c.pipelineDone)
+	}()
 }
 
 func (c *channelIngest) StopAdmission(ctx context.Context) (*imdp.ParsedMPD, bool) {
