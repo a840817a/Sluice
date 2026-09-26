@@ -18,10 +18,10 @@ import (
 // where possible, then make the segment directory entries durable.
 //
 // Every failure is returned as a warning rather than an error: the rebuild
-// that follows reads whatever is on disk, and it already skips an MPEG-TS
-// segment with no sidecar record (index/rebuilder.go), so a missing record
-// costs that one segment, not the whole VOD. fMP4 segments carry their own
-// timing and need no record.
+// that follows reads whatever is on disk, and it already skips an MPEG-TS or
+// WebVTT segment with no sidecar record (index/rebuilder.go), so a missing
+// record costs that one segment, not the whole VOD. fMP4 segments carry their
+// own timing and need no record.
 //
 // It does not observe cancellation. It is local disk work inside publication,
 // and publication, once started, completes: Stop joins it rather than leaving
@@ -104,8 +104,8 @@ func (m *Manager) checkpointVODMedia(rt *Runtime) []string {
 
 // repairSidecar rewrites one representation's sidecar so it holds a record for
 // every segment on disk that the sidecar or the in-memory index knows. An
-// MPEG-TS segment neither knows is reported, because the rebuild skips it; an
-// fMP4 one is not, because the rebuild times it from its tfdt box.
+// MPEG-TS or WebVTT segment neither knows is reported, because the rebuild
+// skips it; an fMP4 one is not, because the rebuild times it from its tfdt box.
 func repairSidecar(dir string, segments map[uint64]string, known map[uint64]index.SegmentState) []string {
 	path := filepath.Join(dir, store.SidecarFileName)
 	records, err := store.ReadSegmentMeta(path)
@@ -132,7 +132,7 @@ func repairSidecar(dir string, segments map[uint64]string, known map[uint64]inde
 	for _, n := range numbers {
 		record, ok := byNo[n]
 		if !ok {
-			if segments[n] == store.ExtTS {
+			if ext := segments[n]; ext == store.ExtTS || ext == store.ExtVTT {
 				missing = append(missing, n)
 			}
 			continue

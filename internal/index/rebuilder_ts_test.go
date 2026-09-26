@@ -195,3 +195,35 @@ func TestRebuildIgnoresSidecarFileAsSegment(t *testing.T) {
 		t.Errorf("restored %d segments, want exactly 2", n)
 	}
 }
+
+// WebVTT, like MPEG-TS, carries no container timing: the rebuild must take a
+// subtitle segment's timing from the sidecar, not look for a tfdt box.
+func TestRebuildRestoresWebVTTSegmentsFromSidecar(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 3; i++ {
+		segNo := uint64(i)
+		path := store.SegmentPathExt(dir, "ch1", "0", MediaText, "2", "s0", segNo, store.ExtVTT)
+		if err := store.Write(path, []byte("WEBVTT\n")); err != nil {
+			t.Fatal(err)
+		}
+		side := store.SidecarPath(dir, "ch1", "0", MediaText, "2", "s0")
+		if err := store.AppendSegmentMeta(side, store.SegmentMeta{
+			SegNo: segNo, StartPTS: int64(i) * 4 * tsTimescale, EndPTS: int64(i+1) * 4 * tsTimescale, Timescale: tsTimescale,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ci := NewChannelIndex(PublishImmediately)
+	if err := RebuildFromDisk(ci, dir, "ch1"); err != nil {
+		t.Fatal(err)
+	}
+	segs := publishedSegs(t, ci)
+	if len(segs) != 3 {
+		t.Fatalf("rebuilt %d subtitle segments, want 3", len(segs))
+	}
+	for _, s := range segs {
+		if s.EndSec()-s.StartSec() != 4 || s.InitPath != "" {
+			t.Errorf("segment %d: %.1fs..%.1fs init %q, want 4s long with no init", s.SegNo, s.StartSec(), s.EndSec(), s.InitPath)
+		}
+	}
+}

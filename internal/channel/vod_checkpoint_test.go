@@ -63,23 +63,31 @@ func TestCheckpointVODMediaRepairsHLSSidecarsPerRepresentation(t *testing.T) {
 	}
 }
 
-func TestCheckpointVODMediaReportsUnknownHistoricalTSSegment(t *testing.T) {
-	dir := t.TempDir()
-	m := newTestManager(t, gocfg.Config{Store: gocfg.StoreConfig{DataDir: dir}})
-	rt := &Runtime{ID: "channel", Index: index.NewChannelIndex(), Source: hlsSource{w: &hlsingest.Watcher{}}}
-	path := store.SegmentPathExt(dir, rt.ID, "p0", index.MediaVideo, "0", "v0", 7, store.ExtTS)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("segment"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+func TestCheckpointVODMediaReportsUnknownSidecarTimedSegment(t *testing.T) {
+	// MPEG-TS and WebVTT both take their timing from the sidecar, so the
+	// rebuild skips either with no record, and the checkpoint reports it
+	// instead of refusing the whole VOD.
+	for _, tc := range []struct{ mediaType, rep, ext string }{
+		{index.MediaVideo, "v0", store.ExtTS},
+		{index.MediaText, "s0", store.ExtVTT},
+	} {
+		t.Run(tc.ext, func(t *testing.T) {
+			dir := t.TempDir()
+			m := newTestManager(t, gocfg.Config{Store: gocfg.StoreConfig{DataDir: dir}})
+			rt := &Runtime{ID: "channel", Index: index.NewChannelIndex(), Source: hlsSource{w: &hlsingest.Watcher{}}}
+			path := store.SegmentPathExt(dir, rt.ID, "p0", tc.mediaType, "0", tc.rep, 7, tc.ext)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("segment"), 0o644); err != nil {
+				t.Fatal(err)
+			}
 
-	// The rebuild skips a TS segment with no record, so the checkpoint reports
-	// it instead of refusing the whole VOD.
-	w := m.checkpointVODMedia(rt)
-	if len(w) != 1 || !strings.Contains(w[0], "no restart metadata") {
-		t.Fatalf("checkpointVODMedia warnings = %q, want one missing-metadata warning", w)
+			w := m.checkpointVODMedia(rt)
+			if len(w) != 1 || !strings.Contains(w[0], "no restart metadata") {
+				t.Fatalf("checkpointVODMedia warnings = %q, want one missing-metadata warning", w)
+			}
+		})
 	}
 }
 

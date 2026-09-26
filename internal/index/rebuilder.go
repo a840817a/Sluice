@@ -138,8 +138,8 @@ func rebuildFromDisk(ci *ChannelIndex, dataDir, channelID string, capacity int) 
 					path     string
 				}
 				var segs []segEntry
-				// TS segments are fully described by their sidecar record and
-				// need no neighbour arithmetic.
+				// TS and WebVTT segments are fully described by their sidecar
+				// record and need no neighbour arithmetic.
 				var tsStates []SegmentState
 
 				segFiles, err := os.ReadDir(repPath)
@@ -154,7 +154,9 @@ func rebuildFromDisk(ci *ChannelIndex, dataDir, channelID string, capacity int) 
 					}
 					segPath := filepath.Join(repPath, name)
 
-					if ext == store.ExtTS {
+					// Neither MPEG-TS nor WebVTT has container timing (no tfdt
+					// box), so their timing lives in the sidecar.
+					if ext == store.ExtTS || ext == store.ExtVTT {
 						m, ok := metaByNo[segNo]
 						if !ok {
 							// No record: the segment cannot be placed on the
