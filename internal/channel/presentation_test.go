@@ -127,16 +127,17 @@ func TestDASHPresentationRejectsRealDRMManifest(t *testing.T) {
 	}
 }
 
-// An encrypted DASH source still serves DASH, and a DASH source whose MPD has
-// not been fetched yet is servable both ways but not ready.
+// An encrypted DASH source still serves DASH but lists no HLS tracks, so it
+// is not ready; a DASH source whose MPD has not been fetched yet is servable
+// both ways but not ready.
 func TestDASHPresentationProtocols(t *testing.T) {
 	enc := &imdp.ParsedMPD{Periods: []*imdp.ParsedPeriod{{AdaptationSets: []*imdp.ParsedAdaptationSet{{
 		MediaType:       imdp.MediaVideo,
 		RawCPs:          []string{`<ContentProtection schemeIdUri="urn:uuid:..."/>`},
 		Representations: []*imdp.ParsedRepresentation{mpdRep("v0", 1, 1, 1, "avc1")},
 	}}}}}
-	if p := dashPresentation(enc); p.ServesHLS || !p.ServesDASH {
-		t.Errorf("encrypted DASH: ServesHLS %v ServesDASH %v, want false true", p.ServesHLS, p.ServesDASH)
+	if p := dashPresentation(enc); p.ServesHLS || !p.ServesDASH || p.Ready {
+		t.Errorf("encrypted DASH: ServesHLS %v ServesDASH %v Ready %v, want false true false", p.ServesHLS, p.ServesDASH, p.Ready)
 	}
 	rt := &Runtime{Index: index.NewChannelIndex()}
 	if p := rt.Serving().Presentation; !p.ServesHLS || !p.ServesDASH || p.Ready {

@@ -229,7 +229,7 @@ func TestEnqueueNewDetectsFMP4ViaMap(t *testing.T) {
 	if task.InitURL != "https://origin.example.com/live/init.mp4" {
 		t.Errorf("InitURL = %q", task.InitURL)
 	}
-	if !w.IsFMP4() {
+	if !w.Describe().FMP4 {
 		t.Error("watcher did not record the source as fMP4")
 	}
 }
@@ -263,7 +263,7 @@ func TestDiscoverMasterPlaylist(t *testing.T) {
 	if err := w.discover(context.Background()); err != nil {
 		t.Fatalf("discover: %v", err)
 	}
-	vs := w.Variants()
+	vs := w.Describe().Variants
 	if len(vs) != 2 {
 		t.Fatalf("len(Variants) = %d, want 2", len(vs))
 	}
@@ -273,10 +273,10 @@ func TestDiscoverMasterPlaylist(t *testing.T) {
 	if vs[0].Bandwidth != 1280000 || vs[0].Width != 1280 {
 		t.Errorf("variant 0 = %+v", vs[0])
 	}
-	if !w.IndependentSegments() {
+	if !w.Describe().IndependentSegments {
 		t.Error("IndependentSegments not recorded")
 	}
-	if !w.Ready() {
+	if !w.Describe().Ready {
 		t.Error("watcher should be ready after discovery")
 	}
 }
@@ -293,7 +293,7 @@ func TestDiscoverBareMediaPlaylist(t *testing.T) {
 	if err := w.discover(context.Background()); err != nil {
 		t.Fatalf("discover: %v", err)
 	}
-	vs := w.Variants()
+	vs := w.Describe().Variants
 	if len(vs) != 1 || vs[0].RepID != "v0" {
 		t.Fatalf("Variants = %+v, want a single v0", vs)
 	}
@@ -547,12 +547,12 @@ func TestDiscoverDemuxedAudioRenditions(t *testing.T) {
 	}
 
 	// Video variant carries its audio group.
-	vs := w.Variants()
+	vs := w.Describe().Variants
 	if len(vs) != 1 || vs[0].AudioGroup != "aac" {
 		t.Fatalf("variants = %+v, want one bound to AUDIO group aac", vs)
 	}
 	// Two demuxed audio renditions become separate poll targets.
-	rs := w.Renditions()
+	rs := w.Describe().Renditions
 	if len(rs) != 2 {
 		t.Fatalf("len(Renditions) = %d, want 2", len(rs))
 	}
@@ -580,7 +580,7 @@ func TestDiscoverMuxedAudioRenditionIgnored(t *testing.T) {
 	if err := w.discover(context.Background()); err != nil {
 		t.Fatalf("discover: %v", err)
 	}
-	if n := len(w.Renditions()); n != 0 {
+	if n := len(w.Describe().Renditions); n != 0 {
 		t.Errorf("muxed audio produced %d renditions, want 0", n)
 	}
 }
@@ -611,11 +611,11 @@ func TestSourceStateRoundTripsRenditions(t *testing.T) {
 	w2 := NewWatcher(config.Config{}, "ch1", srv.URL+"/master.m3u8", nil, false, statePath,
 		index.NewChannelIndex(), queue.NewBroker(16))
 
-	vs := w2.Variants()
+	vs := w2.Describe().Variants
 	if len(vs) != 1 || vs[0].RepID != "v0" || vs[0].AudioGroup != "aud" {
 		t.Fatalf("restored variants = %+v, want v0 bound to aud", vs)
 	}
-	rs := w2.Renditions()
+	rs := w2.Describe().Renditions
 	if len(rs) != 1 || rs[0].RepID != "a0" || rs[0].GroupID != "aud" || rs[0].Language != "en" || !rs[0].Default {
 		t.Fatalf("restored renditions = %+v", rs)
 	}
@@ -650,11 +650,11 @@ func TestDiscoverDemuxedSubtitles(t *testing.T) {
 	}
 
 	// The variant binds both audio and subtitle groups.
-	if v := w.Variants(); len(v) != 1 || v[0].AudioGroup != "aud" || v[0].SubtitleGroup != "subs" {
+	if v := w.Describe().Variants; len(v) != 1 || v[0].AudioGroup != "aud" || v[0].SubtitleGroup != "subs" {
 		t.Fatalf("variant = %+v, want bound to aud+subs", v)
 	}
 	// Two subtitle renditions (the URI-less one is ignored); audio stays separate.
-	subs := w.Subtitles()
+	subs := w.Describe().Subtitles
 	if len(subs) != 2 {
 		t.Fatalf("len(Subtitles) = %d, want 2 (URI-less ignored)", len(subs))
 	}
@@ -664,7 +664,7 @@ func TestDiscoverDemuxedSubtitles(t *testing.T) {
 	if subs[1].RepID != "s1" || !subs[1].Forced {
 		t.Errorf("subtitle 1 = %+v", subs[1])
 	}
-	if len(w.Renditions()) != 1 {
-		t.Errorf("audio renditions = %d, want 1 (subtitles must not leak in)", len(w.Renditions()))
+	if len(w.Describe().Renditions) != 1 {
+		t.Errorf("audio renditions = %d, want 1 (subtitles must not leak in)", len(w.Describe().Renditions))
 	}
 }

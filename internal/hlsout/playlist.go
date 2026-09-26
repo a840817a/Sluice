@@ -122,10 +122,10 @@ func (p PeriodSegments) discontinuityNos() []uint64 {
 
 // playlistEntry is one segment as the playlist numbers it.
 type playlistEntry struct {
-	seg    index.SegmentState
-	msn    int64 // media sequence number
-	period int   // position of its period in the playlist's period list
-	init   string
+	seg       index.SegmentState
+	msn       int64 // media sequence number
+	periodIdx int   // position of its period in the playlist's period list
+	init      string
 }
 
 // numberPeriods lays the periods' segments out on one media-sequence line.
@@ -150,7 +150,7 @@ func numberPeriods(periods []PeriodSegments, vod bool) []playlistEntry {
 			offset = prevLast + 1 - int64(first)
 		}
 		for _, s := range contiguousRun(p.Segments, vod) {
-			out = append(out, playlistEntry{seg: s, msn: offset + int64(s.SegNo), period: i, init: p.InitURI})
+			out = append(out, playlistEntry{seg: s, msn: offset + int64(s.SegNo), periodIdx: i, init: p.InitURI})
 		}
 		prevLast = offset + int64(last)
 		started = true
@@ -321,7 +321,7 @@ func Media(periods []PeriodSegments, o MediaOptions) []byte {
 	var keyLine string
 	for i, e := range run {
 		s := e.seg
-		newPeriod := i > 0 && e.period != run[i-1].period
+		newPeriod := i > 0 && e.periodIdx != run[i-1].periodIdx
 		// The leading discontinuity of the emitted run is meaningless: it
 		// describes a break from a segment the client never saw, and
 		// EXT-X-DISCONTINUITY-SEQUENCE already accounts for it.
@@ -342,7 +342,7 @@ func Media(periods []PeriodSegments, o MediaOptions) []byte {
 			}
 		}
 		fmt.Fprintf(&b, "#EXTINF:%.6f,\n", segmentDuration(s))
-		b.WriteString(gwurl.SegmentURL(base, o.ChannelID, periods[e.period].PeriodID, o.RepID, s.SegNo, segmentExt(s)) + "\n")
+		b.WriteString(gwurl.SegmentURL(base, o.ChannelID, periods[e.periodIdx].PeriodID, o.RepID, s.SegNo, segmentExt(s)) + "\n")
 	}
 
 	if o.VOD {
@@ -365,16 +365,16 @@ func Media(periods []PeriodSegments, o MediaOptions) []byte {
 // opens the stream, and is not counted a second time.
 func discontinuitiesBefore(periods []PeriodSegments, head playlistEntry) int {
 	n := 0
-	for i, p := range periods[:head.period+1] {
+	for i, p := range periods[:head.periodIdx+1] {
 		first, _, ok := p.segNoRange()
 		if !ok {
 			continue
 		}
-		if i < head.period {
+		if i < head.periodIdx {
 			n++
 		}
 		for _, d := range p.discontinuityNos() {
-			if d != first && (i < head.period || d <= head.seg.SegNo) {
+			if d != first && (i < head.periodIdx || d <= head.seg.SegNo) {
 				n++
 			}
 		}

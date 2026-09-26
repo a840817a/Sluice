@@ -172,7 +172,14 @@ func (rt *Runtime) enterVOD(vodCI *index.ChannelIndex, transitioned bool) {
 	rt.vodOnce.Do(func() {
 		rt.vodIndex.Store(vodCI)
 		if transitioned {
-			rt.modes.Complete()
+			// Only the transition that claimed the channel moves it out of
+			// transitioning, so a refusal here means that invariant broke.
+			// The index is already stored and there is no earlier state to
+			// return to, so it is reported rather than recovered from.
+			if from, ok := rt.modes.Complete(); !ok {
+				slog.Error("VOD transition completed but the channel was not transitioning",
+					"channel", rt.ID, "mode", from)
+			}
 		}
 		// The discovery total may never have been known — a restarted channel
 		// does not keep it on disk — so the stored count stands in for it.

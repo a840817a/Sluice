@@ -145,10 +145,8 @@ func windowSegments(depthSec float64, targetDur int, keepAll bool) int {
 }
 
 // periodSegmentsForRep collects repID's Published segments period by period,
-// in timeline order: a DASH source's periods in the order its MPD lists them,
-// an HLS source's epochs numerically (index.OrderPeriodIDs). Merging them into
-// one list would let two periods' identical segment numbers collide
-// (ADR-0005).
+// in timeline order (Serving.OrderPeriods). Merging them into one list would
+// let two periods' identical segment numbers collide (ADR-0005).
 func (s *Server) periodSegmentsForRep(sv ch.Serving, channelID, repID string) []hlsout.PeriodSegments {
 	byPeriod := map[string]*hlsout.PeriodSegments{}
 	var ids []string
@@ -169,14 +167,8 @@ func (s *Server) periodSegmentsForRep(sv ch.Serving, channelID, repID string) []
 		p.Discontinuities = append(p.Discontinuities, rep.Discontinuities()...)
 	})
 
-	var docOrder []string
-	if sv.ParsedMPD != nil {
-		for _, p := range sv.ParsedMPD.Periods {
-			docOrder = append(docOrder, p.ID)
-		}
-	}
 	out := make([]hlsout.PeriodSegments, 0, len(ids))
-	for _, id := range index.OrderPeriodIDs(ids, docOrder) {
+	for _, id := range sv.OrderPeriods(ids) {
 		p := *byPeriod[id]
 		// fMP4 representations need their initialization section advertised
 		// via EXT-X-MAP; a non-empty init path is exactly the fMP4 signal, and

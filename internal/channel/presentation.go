@@ -24,7 +24,9 @@ type Presentation struct {
 	Subtitles  []hlsdesc.Subtitle
 	// IndependentSegments mirrors the upstream EXT-X-INDEPENDENT-SEGMENTS tag.
 	IndependentSegments bool
-	// Ready is false until the source has discovered something playable.
+	// Ready is false until the tracks above describe something playable. An
+	// encrypted DASH source, which lists no tracks in HLS terms, is never
+	// Ready; it is served as DASH regardless.
 	Ready bool
 	// ServesHLS reports whether the channel can be served as HLS: an HLS
 	// source always, a DASH source only when its content is clear, because
@@ -60,14 +62,15 @@ func (p Presentation) KnownRep(repID string) bool {
 // already read for the same Serving, so the two cannot disagree.
 func (rt *Runtime) presentation(parsed *imdp.ParsedMPD) Presentation {
 	if rt.hls != nil {
+		d := rt.hls.Describe()
 		return Presentation{
-			Variants:            rt.hls.Variants(),
-			Renditions:          rt.hls.Renditions(),
-			Subtitles:           rt.hls.Subtitles(),
-			IndependentSegments: rt.hls.IndependentSegments(),
-			Ready:               rt.hls.Ready(),
+			Variants:            d.Variants,
+			Renditions:          d.Renditions,
+			Subtitles:           d.Subtitles,
+			IndependentSegments: d.IndependentSegments,
+			Ready:               d.Ready,
 			ServesHLS:           true,
-			ServesDASH:          rt.hls.IsFMP4(),
+			ServesDASH:          d.FMP4,
 		}
 	}
 	if parsed == nil {
@@ -88,7 +91,7 @@ func dashPresentation(p *imdp.ParsedMPD) Presentation {
 	for _, period := range p.Periods {
 		for _, as := range period.AdaptationSets {
 			if len(as.ContentProtections) > 0 || len(as.RawCPs) > 0 {
-				return Presentation{ServesDASH: true, Ready: true}
+				return Presentation{ServesDASH: true}
 			}
 		}
 	}

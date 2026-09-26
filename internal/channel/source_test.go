@@ -139,3 +139,25 @@ func TestVODTransitionCheckpointsTheSource(t *testing.T) {
 		t.Errorf("checkpoint context deadline = %v (set %v), want within %v", deadline, ok, keyCheckpointTimeout)
 	}
 }
+
+// The status lists periods in timeline order — a DASH source's in its MPD's
+// order, not the index's map order — so an operator reads them as they play.
+func TestStatusListsPeriodsInTimelineOrder(t *testing.T) {
+	ci := index.NewChannelIndex()
+	for _, id := range []string{"b", "c", "a"} {
+		ci.Period(id)
+	}
+	w := &dashingest.Watcher{}
+	w.SetParsedMPD(&imdp.ParsedMPD{Periods: []*imdp.ParsedPeriod{{ID: "c"}, {ID: "a"}, {ID: "b"}}}, nil)
+	rt := &Runtime{ID: "c", Index: ci, watcher: w}
+
+	for i := 0; i < 10; i++ { // map order varies run to run
+		var got []string
+		for _, p := range buildStatus(rt).Periods {
+			got = append(got, p.PeriodID)
+		}
+		if !slices.Equal(got, []string{"c", "a", "b"}) {
+			t.Fatalf("status periods = %v, want the MPD's order [c a b]", got)
+		}
+	}
+}

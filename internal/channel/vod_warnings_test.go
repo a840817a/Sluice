@@ -127,7 +127,7 @@ func TestVODCompletesWithStrayTSSegment(t *testing.T) {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
-	for rt.hls == nil || !rt.hls.Ready() {
+	for rt.hls == nil || !rt.hls.Describe().Ready {
 		if time.Now().After(deadline) {
 			t.Fatal("HLS source never completed discovery")
 		}

@@ -61,6 +61,19 @@ func (s Serving) IsVOD() bool { return s.Mode == ModeVOD }
 // deliberately still served from the live index.
 func (s Serving) IsStaticIngesting() bool { return s.Mode == ModeStaticIngesting }
 
+// OrderPeriods returns period IDs in timeline order: a DASH source's periods in
+// the order its MPD lists them, an HLS source's epochs numerically
+// (index.OrderPeriodIDs).
+func (s Serving) OrderPeriods(ids []string) []string {
+	var docOrder []string
+	if s.ParsedMPD != nil {
+		for _, p := range s.ParsedMPD.Periods {
+			docOrder = append(docOrder, p.ID)
+		}
+	}
+	return index.OrderPeriodIDs(ids, docOrder)
+}
+
 // Serving returns what the channel is offering right now.
 //
 // It reads each underlying atomic exactly once. Callers that need several of
@@ -68,8 +81,9 @@ func (s Serving) IsStaticIngesting() bool { return s.Mode == ModeStaticIngesting
 // individual accessors in sequence: that is what keeps the facts consistent
 // with one another.
 //
-// It is cheap by design — a handful of atomic loads and a config copy, no index
-// snapshot and no I/O — so that no caller has a reason to reach past it.
+// It does no I/O and takes no index snapshot, so that no caller has a reason
+// to reach past it. It does build the Presentation, which copies the channel's
+// track lists; a caller that needs only the config reads Runtime.Config.
 func (rt *Runtime) Serving() Serving {
 	mode := rt.Mode()
 

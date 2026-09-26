@@ -141,8 +141,10 @@ func (s *Server) handleLicense(drmType string) http.HandlerFunc {
 
 		// One read for the whole request: the admin API can swap the config
 		// mid-handler, and reading it per field could pair one DRM system's
-		// enable flag with the other's URL.
-		cfg := rt.Serving().Config
+		// enable flag with the other's URL. The config is all a license
+		// request needs, so it is read on its own rather than through Serving,
+		// which also describes the channel's tracks.
+		cfg := rt.Config()
 
 		var upstreamURL string
 		switch drmType {

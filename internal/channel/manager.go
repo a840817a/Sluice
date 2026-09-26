@@ -718,8 +718,12 @@ func buildStatus(rt *Runtime) ChannelStatus {
 	}
 	ci.Mu().RUnlock()
 
-	for _, ps := range stats {
-		s.Periods = append(s.Periods, *ps)
+	ids := make([]string, 0, len(stats))
+	for pid := range stats {
+		ids = append(ids, pid)
+	}
+	for _, pid := range sv.OrderPeriods(ids) {
+		s.Periods = append(s.Periods, *stats[pid])
 	}
 
 	s.Progress = buildProgress(rt)

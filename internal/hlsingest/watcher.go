@@ -237,28 +237,46 @@ func (w *Watcher) KeyURIForID(id string) (string, bool) {
 	return uri, ok
 }
 
-// Variants returns the discovered video variants. Empty until the first
-// successful fetch completes.
-func (w *Watcher) Variants() []hlsdesc.Variant {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	out := make([]hlsdesc.Variant, 0, len(w.variants))
-	for _, v := range w.variants {
-		if !v.rendition {
-			out = append(out, v.Variant)
-		}
-	}
-	return out
+// Description is what discovery has found in the upstream, read at one
+// instant.
+type Description struct {
+	// Variants are the video variants; Renditions and Subtitles the demuxed
+	// audio and WebVTT renditions. All are empty until the first successful
+	// fetch completes.
+	Variants   []hlsdesc.Variant
+	Renditions []hlsdesc.Rendition
+	Subtitles  []hlsdesc.Subtitle
+	// IndependentSegments reports whether the upstream master declared
+	// EXT-X-INDEPENDENT-SEGMENTS.
+	IndependentSegments bool
+	// FMP4 reports whether the source carries fMP4 segments rather than
+	// MPEG-TS. Only fMP4 sources can additionally be served as DASH, since TS
+	// would require remuxing, which this gateway deliberately does not do.
+	FMP4 bool
+	// Ready reports whether discovery has completed and playlists can be
+	// served.
+	Ready bool
 }
 
-// Renditions returns the discovered demuxed audio renditions.
-func (w *Watcher) Renditions() []hlsdesc.Rendition {
+// Describe returns what discovery has found. It takes the watcher's lock once,
+// so the tracks and flags it returns all come from the same moment: a
+// rediscovery cannot land between reading the variants and the renditions.
+func (w *Watcher) Describe() Description {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	var out []hlsdesc.Rendition
+	d := Description{
+		Variants:            make([]hlsdesc.Variant, 0, len(w.variants)),
+		IndependentSegments: w.independentSegments,
+		FMP4:                w.fmp4,
+		Ready:               len(w.variants) > 0,
+	}
 	for _, v := range w.variants {
-		if v.kind == renditionAudio {
-			out = append(out, hlsdesc.Rendition{
+		if !v.rendition {
+			d.Variants = append(d.Variants, v.Variant)
+		}
+		switch v.kind {
+		case renditionAudio:
+			d.Renditions = append(d.Renditions, hlsdesc.Rendition{
 				RepID:    v.RepID,
 				GroupID:  v.groupID,
 				Name:     v.name,
@@ -266,19 +284,8 @@ func (w *Watcher) Renditions() []hlsdesc.Rendition {
 				Default:  v.isDefault,
 				Channels: v.channels,
 			})
-		}
-	}
-	return out
-}
-
-// Subtitles returns the discovered demuxed WebVTT subtitle renditions.
-func (w *Watcher) Subtitles() []hlsdesc.Subtitle {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	var out []hlsdesc.Subtitle
-	for _, v := range w.variants {
-		if v.kind == renditionSubtitle {
-			out = append(out, hlsdesc.Subtitle{
+		case renditionSubtitle:
+			d.Subtitles = append(d.Subtitles, hlsdesc.Subtitle{
 				RepID:    v.RepID,
 				GroupID:  v.groupID,
 				Name:     v.name,
@@ -288,31 +295,7 @@ func (w *Watcher) Subtitles() []hlsdesc.Subtitle {
 			})
 		}
 	}
-	return out
-}
-
-// IndependentSegments reports whether the upstream master declared
-// EXT-X-INDEPENDENT-SEGMENTS.
-func (w *Watcher) IndependentSegments() bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.independentSegments
-}
-
-// IsFMP4 reports whether the source carries fMP4 segments rather than MPEG-TS.
-// Only fMP4 sources can additionally be served as DASH, since TS would require
-// remuxing, which this gateway deliberately does not do.
-func (w *Watcher) IsFMP4() bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.fmp4
-}
-
-// Ready reports whether discovery has completed and playlists can be served.
-func (w *Watcher) Ready() bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return len(w.variants) > 0
+	return d
 }
 
 // PeriodID returns the current period identifier. It changes when the upstream
