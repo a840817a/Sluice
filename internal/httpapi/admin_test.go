@@ -326,18 +326,27 @@ func TestHandleChannelStatus_NotFound(t *testing.T) {
 	}
 }
 
+// An edit to a channel that does not exist is a 404 whatever its body says:
+// the channel is looked up before the body is judged.
 func TestHandleUpdateChannel_NotFound(t *testing.T) {
-	admin := newTestAdminServer(t)
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("channelID", "ghost")
-	req := httptest.NewRequest(http.MethodPut, "/admin/api/channels/ghost",
-		bytes.NewBufferString(`{"mpd_url":"http://example.com/x.mpd"}`))
-	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-	w := httptest.NewRecorder()
-	admin.handleUpdateChannel(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Errorf("expected 404, got %d: %s", w.Code, w.Body.String())
+	for name, body := range map[string]string{
+		"valid config":   `{"mpd_url":"http://example.com/x.mpd"}`,
+		"invalid JSON":   `{`,
+		"invalid config": `{"mpd_url":""}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			admin := newTestAdminServer(t)
+			rctx := chi.NewRouteContext()
+			rctx.URLParams.Add("channelID", "ghost")
+			req := httptest.NewRequest(http.MethodPut, "/admin/api/channels/ghost", bytes.NewBufferString(body))
+			req.Header.Set("Content-Type", "application/json")
+			req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+			w := httptest.NewRecorder()
+			admin.handleUpdateChannel(w, req)
+			if w.Code != http.StatusNotFound {
+				t.Errorf("expected 404, got %d: %s", w.Code, w.Body.String())
+			}
+		})
 	}
 }
 

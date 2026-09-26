@@ -85,6 +85,13 @@ type updateResponse struct {
 // PUT /admin/api/channels/{channelID}
 func (a *AdminServer) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "channelID")
+	// An unknown channel is a 404 whatever the body says. UpdateConfig checks
+	// again under its operation lock, so a delete racing this request still
+	// ends in 404 rather than recreating the channel.
+	if _, ok := a.manager.Channel(id); !ok {
+		writeErr(w, http.StatusNotFound, "channel not found")
+		return
+	}
 	var cfg ch.Config
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
