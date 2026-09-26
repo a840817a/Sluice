@@ -190,15 +190,15 @@ func keyProxyURL(baseURL, channelID string) string {
 }
 
 // handleKeyProxy serves an AES-128 content key to players on behalf of the
-// upstream key server.
+// key server.
 //
 // GET /v1/channels/{channelID}/key/{keyID}
 //
 // keyID is the gateway's own identifier for a key URI, and is resolved through
-// the registry of URIs actually seen in this channel's playlists. The upstream
-// URL is deliberately never accepted from the request: taking it as a parameter
-// would turn the gateway into an open proxy that any caller could aim at
-// internal addresses.
+// the registry of URIs actually seen in this channel's playlists. The key
+// server's URL is deliberately never accepted from the request: taking it as
+// a parameter would turn the gateway into an open proxy that any caller could
+// aim at internal addresses.
 func (s *Server) handleKeyProxy(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "channelID")
 	keyID := chi.URLParam(r, "keyID")

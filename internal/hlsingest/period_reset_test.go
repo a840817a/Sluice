@@ -35,11 +35,11 @@ func audioVariant() variant {
 	}
 }
 
-// An upstream restart rewinds the media sequence on every rendition at once, but
+// An origin restart rewinds the media sequence on every rendition at once, but
 // each rendition has its own poll loop and notices at a different moment. All of
-// them must land in the SAME new period: a per-variant epoch would put video in
-// period 1 and audio in period 2, and the synthesized MPD would then describe
-// two periods that each carry only one track.
+// them must land in the SAME new period: a per-variant period number would put
+// video in period 1 and audio in period 2, and the synthesized MPD would then
+// describe two periods that each carry only one track.
 func TestStreamResetPutsAllRenditionsInOnePeriod(t *testing.T) {
 	w := newTestWatcher()
 	video, audio := testVariant(), audioVariant()
@@ -50,7 +50,7 @@ func TestStreamResetPutsAllRenditionsInOnePeriod(t *testing.T) {
 	w.enqueueNew(context.Background(), audio, aState, mediaPlaylist(100, 3, 6.0))
 	drain(w.broker)
 
-	// The upstream restarts. Video's poll loop notices first, audio's a moment
+	// The origin restarts. Video's poll loop notices first, audio's a moment
 	// later — the ordering here is the whole point.
 	w.enqueueNew(context.Background(), video, vState, mediaPlaylist(0, 3, 6.0))
 	w.enqueueNew(context.Background(), audio, aState, mediaPlaylist(0, 3, 6.0))

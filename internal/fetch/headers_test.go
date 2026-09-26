@@ -9,7 +9,7 @@ import (
 	"github.com/a840817a/sluice/internal/queue"
 )
 
-// A channel's upstream credentials are rotated by swapping the provider while
+// A channel's origin credentials are rotated by swapping the provider while
 // the fetch workers are running. If Fetcher ever captured the map instead of
 // reading it per request, a token rotation would silently keep using the stale
 // credential until the channel was restarted — which is exactly what the hot

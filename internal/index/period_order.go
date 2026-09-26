@@ -8,11 +8,11 @@ import (
 // OrderPeriodIDs returns ids in timeline order.
 //
 // A DASH source names its periods freely, so their order is the order the
-// upstream MPD lists them in: pass that as docOrder. An HLS source names them
-// by epoch, a decimal number the gateway increments on every upstream reset,
-// so numbers sort numerically — as strings, epoch 10 would come before epoch
-// 2. Periods docOrder does not mention follow those it does, numbers before
-// other names.
+// origin's MPD lists them in: pass that as docOrder. An HLS source names them
+// by period number, a decimal number the gateway increments on every origin
+// reset, so numbers sort numerically — as strings, period 10 would come
+// before period 2. Periods docOrder does not mention follow those it does,
+// numbers before other names.
 //
 // It is the one place period order is decided. Anything that lays periods out
 // in time — playlists, synthesized manifests, the snapshot — must use it, or

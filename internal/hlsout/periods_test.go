@@ -32,7 +32,7 @@ func tagValue(t *testing.T, out, tag string) string {
 	return m[1]
 }
 
-// An upstream reset rewinds the numbering: the new period's segments are
+// An origin reset rewinds the numbering: the new period's segments are
 // numbered after the old period's, not below them, and the boundary carries a
 // discontinuity and the new period's init.
 func TestMediaNumbersARewoundPeriodAfterThePreviousOne(t *testing.T) {
@@ -154,12 +154,12 @@ func discontinuitySequences(out string) map[string]int {
 // discontinuity sequence number (RFC 8216 §6.2.2): a discontinuity whose tag
 // leaves the playlist — or is dropped because its segment now opens the
 // playlist — is carried by EXT-X-DISCONTINUITY-SEQUENCE instead. That holds
-// for a period boundary and for an upstream discontinuity inside a period,
+// for a period boundary and for an origin discontinuity inside a period,
 // which the representation's lifetime record still knows once its segment has
 // gone. A discontinuity on a period's first segment is the boundary itself.
 func TestDiscontinuitySequenceStableWhileTheWindowSlides(t *testing.T) {
 	// period holds segments present..6 of a period that has published 1..6,
-	// with upstream discontinuities at discs.
+	// with origin discontinuities at discs.
 	period := func(id string, present uint64, discs ...uint64) PeriodSegments {
 		segs := segRange(present, 6)
 		for i := range segs {
@@ -176,15 +176,15 @@ func TestDiscontinuitySequenceStableWhileTheWindowSlides(t *testing.T) {
 		name          string
 		before, after []PeriodSegments
 	}{
-		{"upstream discontinuity leaves the window",
+		{"origin discontinuity leaves the window",
 			[]PeriodSegments{period("0", 1, 4)}, []PeriodSegments{period("0", 5, 4)}},
-		{"upstream discontinuity opens the window",
+		{"origin discontinuity opens the window",
 			[]PeriodSegments{period("0", 1, 4)}, []PeriodSegments{period("0", 4, 4)}},
-		{"several upstream discontinuities leave the window",
+		{"several origin discontinuities leave the window",
 			[]PeriodSegments{period("0", 1, 2, 3, 5)}, []PeriodSegments{period("0", 6, 2, 3, 5)}},
 		{"period boundary leaves the window",
 			[]PeriodSegments{period("0", 4), period("1", 1)}, []PeriodSegments{gone(period("0", 4)), period("1", 2)}},
-		{"earlier period's upstream discontinuity leaves the window",
+		{"earlier period's origin discontinuity leaves the window",
 			[]PeriodSegments{period("0", 3, 4), period("1", 1)}, []PeriodSegments{gone(period("0", 3, 4)), period("1", 2)}},
 		{"discontinuity on a period's first segment is its boundary",
 			[]PeriodSegments{period("0", 4), period("1", 1, 1, 3)}, []PeriodSegments{gone(period("0", 4)), period("1", 4, 1, 3)}},

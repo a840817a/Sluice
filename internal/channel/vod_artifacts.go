@@ -1,7 +1,7 @@
 package channel
 
 // VOD artifacts are the files that make a completed channel usable after the
-// gateway restarts: the served DASH manifest, the raw upstream MPD it was
+// gateway restarts: the served DASH manifest, the raw origin MPD it was
 // generated from, and optional filesystem-relative playlists. They belong to
 // the channel lifecycle because their inputs are the final runtime state and
 // their consumer is VOD restore, not HTTP request handling.
@@ -75,9 +75,9 @@ func (m *Manager) captureVODArtifacts(rt *Runtime, candidate *index.ChannelIndex
 var keyCheckpointTimeout = 60 * time.Second
 
 // persistDASHManifests writes the DASH files a VOD restart needs: the served
-// manifest and the raw upstream MPD. A failure is returned as a warning, not
+// manifest and the raw origin MPD. A failure is returned as a warning, not
 // an error, because a restart can still serve the VOD without either file: it
-// falls back to the saved manifest when the upstream snapshot is missing.
+// falls back to the saved manifest when the origin snapshot is missing.
 // Optional local artifacts are written separately, after publication.
 func (a vodArtifacts) persistDASHManifests() []string {
 	if a.serving.IsHLSSource {
@@ -103,7 +103,7 @@ func (a vodArtifacts) persistDASHManifests() []string {
 }
 
 // requiredKeyURIs returns the key material a passthrough HLS VOD still needs
-// after its upstream has gone away. The segment snapshot is the authority: a
+// after its origin has gone away. The segment snapshot is the authority: a
 // URI merely observed during discovery but absent from the completed asset is
 // not required for its offline playback.
 func requiredKeyURIs(snapshot index.Snapshot) []string {
@@ -235,7 +235,7 @@ func (m *Manager) vodArtifactPath(channelID, file string) string {
 
 // SavedVODManifestPath returns the persisted served manifest when it exists.
 // HTTP uses this only as a fallback when an old VOD record has no parseable
-// upstream MPD; lifecycle code owns both the name and existence check.
+// origin MPD; lifecycle code owns both the name and existence check.
 func (m *Manager) SavedVODManifestPath(channelID string) string {
 	path := m.vodArtifactPath(channelID, vodManifestFile)
 	if _, err := os.Stat(path); err != nil {
@@ -244,7 +244,7 @@ func (m *Manager) SavedVODManifestPath(channelID string) string {
 	return path
 }
 
-func (m *Manager) restoreVODUpstreamMPD(rt *Runtime) {
+func (m *Manager) restoreVODOriginMPD(rt *Runtime) {
 	if rt.watcher == nil {
 		return
 	}

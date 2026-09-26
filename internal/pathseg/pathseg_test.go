@@ -10,7 +10,7 @@ import (
 var ids = []string{"", "_", "~", "0", "10", "p1", "P-1.a_b", "a/b", `a\b`, "../../x", "p 1", "x$Number$", "%", "%41", ".", "..", "é", "~YQ"}
 
 // An ID must survive the trip through one URL path segment, whatever the
-// upstream called it, and stay out of DASH template syntax.
+// origin called it, and stay out of DASH template syntax.
 //
 // A router may hand the handler either the escaped or the decoded form of the
 // segment, depending on how the request path was escaped, so both must decode

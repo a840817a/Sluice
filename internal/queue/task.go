@@ -54,7 +54,7 @@ type HLSFields struct {
 	PersistMeta bool
 
 	// Encrypted marks a segment protected by HLS AES-128 (EXT-X-KEY). KeyURI is
-	// the upstream key URL and IV the 16-byte initialization vector, either
+	// the key server URL and IV the 16-byte initialization vector, either
 	// taken from the tag or derived from the media sequence number.
 	Encrypted bool
 	KeyURI    string

@@ -1,4 +1,4 @@
-// Package fetch provides the worker pool that downloads segments from upstream.
+// Package fetch provides the worker pool that downloads segments from origins.
 package fetch
 
 import (
@@ -13,7 +13,7 @@ import (
 	"github.com/a840817a/sluice/internal/queue"
 )
 
-// httpError carries the upstream HTTP status code so callers can apply
+// httpError carries the origin's HTTP status code so callers can apply
 // status-specific retry strategies (e.g. 410 Gone → drop, 425 Too Early → short backoff).
 type httpError struct {
 	statusCode int
@@ -30,20 +30,20 @@ type Result struct {
 	Data       []byte // nil on error
 	InitData   []byte // non-nil only on first fetch of this rep's init segment
 	Err        error
-	StatusCode int // upstream HTTP status when Err != nil; 0 for non-HTTP errors
+	StatusCode int // origin HTTP status when Err != nil; 0 for non-HTTP errors
 }
 
-// Fetcher wraps an http.Client and upstream credential configuration.
+// Fetcher wraps an http.Client and origin credential configuration.
 type Fetcher struct {
 	client       *http.Client
-	extraHeaders Headers // injected into every upstream request; may be rotated live
+	extraHeaders Headers // injected into every origin request; may be rotated live
 	// maxSegmentBytes bounds a full-file download. Range requests are bounded by
 	// the range itself, which is tighter.
 	maxSegmentBytes int64
 }
 
-// NewFetcher creates a Fetcher with the given HTTP client and upstream headers.
-// Pass nil for headers if no upstream auth is required, and zero for
+// NewFetcher creates a Fetcher with the given HTTP client and origin headers.
+// Pass nil for headers if no origin auth is required, and zero for
 // maxSegmentBytes or timeout to accept the defaults.
 //
 // timeout builds the client's own http.Client.Timeout and therefore applies

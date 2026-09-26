@@ -12,7 +12,7 @@ import (
 	"github.com/a840817a/sluice/internal/store"
 )
 
-// SourceStateFileName holds the discovered description of an HLS upstream.
+// SourceStateFileName holds the discovered description of an HLS origin.
 const SourceStateFileName = "hls-source.json"
 
 // SourceStatePath returns where a channel's source description is kept.
@@ -21,10 +21,10 @@ func SourceStatePath(dataDir, channelID string) string {
 }
 
 // sourceState is what a restart needs to serve playlists without re-contacting
-// the upstream.
+// the origin.
 //
 // The variant attributes (rep IDs, bandwidth, codecs, resolution) exist only in
-// the upstream master playlist, not in the segment index or on-disk layout. A
+// the origin's master playlist, not in the segment index or on-disk layout. A
 // channel restored in VOD mode never runs the watcher, so without this file it
 // would come back up unable to name its own representations. This is the HLS
 // counterpart of the upstream.mpd snapshot the DASH path keeps.

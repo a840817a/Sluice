@@ -117,7 +117,7 @@ func decodeUpdate(t *testing.T, w *httptest.ResponseRecorder) updateResponse {
 }
 
 // liveChannel points at a port nothing listens on, so ingest goroutines really
-// run but no upstream is contacted. Mirrors channel.deadChannel.
+// run but no origin is contacted. Mirrors channel.deadChannel.
 func liveChannel() ch.Config {
 	return ch.Config{
 		MPDURL:     "http://127.0.0.1:1/index.m3u8",
@@ -477,7 +477,7 @@ func TestAdminDeleteStopsARunningChannel(t *testing.T) {
 	}
 }
 
-// The manual transition is the escape hatch for an upstream that never signals
+// The manual transition is the escape hatch for an origin that never signals
 // the end of the stream. Its refusals are the operator's feedback, so they must
 // arrive as a 400 carrying the reason rather than a generic failure.
 func TestAdminTransitionToVODRejectsAChannelThatIsNotRunning(t *testing.T) {

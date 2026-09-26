@@ -308,15 +308,15 @@ func TestMediaEmitsKeyForEncryptedSegments(t *testing.T) {
 	if !strings.Contains(out, "#EXT-X-KEY:METHOD=AES-128") {
 		t.Fatalf("no EXT-X-KEY emitted:\n%s", out)
 	}
-	// The key URI must point at the gateway proxy, never at the upstream server.
+	// The key URI must point at the gateway proxy, never at the key server.
 	if strings.Contains(out, "drm.example.com") {
-		t.Errorf("playlist leaks the upstream key URL:\n%s", out)
+		t.Errorf("playlist leaks the key server URL:\n%s", out)
 	}
 	if !strings.Contains(out, "https://gw.example.com/v1/channels/ch1/key/") {
 		t.Errorf("key URI does not point at the gateway proxy:\n%s", out)
 	}
 	// An explicit IV means the output never depends on our segment numbering
-	// matching the upstream's.
+	// matching the key server's.
 	if !strings.Contains(out, "IV=0x00000000000000000000000000000001") {
 		t.Errorf("first segment IV not emitted explicitly:\n%s", out)
 	}
@@ -372,7 +372,7 @@ func TestMediaEmitsNoKeyForCleartextSegments(t *testing.T) {
 
 func TestMediaOmitsKeyWithoutProxyBase(t *testing.T) {
 	// Without a proxy base there is no safe URI to publish, so the key must be
-	// left out rather than pointing players at the upstream key server.
+	// left out rather than pointing players at the key server.
 	o := mediaOpts()
 	o.KeyProxyBase = ""
 	out := string(Media(inPeriod([]index.SegmentState{
@@ -380,7 +380,7 @@ func TestMediaOmitsKeyWithoutProxyBase(t *testing.T) {
 	}), o))
 
 	if strings.Contains(out, "drm.example.com") {
-		t.Errorf("upstream key URL leaked when no proxy base was configured:\n%s", out)
+		t.Errorf("key server URL leaked when no proxy base was configured:\n%s", out)
 	}
 }
 

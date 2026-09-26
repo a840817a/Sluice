@@ -118,7 +118,7 @@ func segmentContentType(path string) string {
 
 // publishedSegPath returns the on-disk path of the Published segment segNo of
 // repID in periodID, or "" if there is none. The period is part of the key:
-// after an upstream reset two periods can hold the same representation and
+// after an origin reset two periods can hold the same representation and
 // segment number (ADR-0005).
 func publishedSegPath(ci *index.ChannelIndex, periodID, repID string, segNo uint64) string {
 	var path string
@@ -139,7 +139,7 @@ func publishedSegPath(ci *index.ChannelIndex, periodID, repID string, segNo uint
 
 // publishedInitPath returns the InitPath from any Published segment of repID in
 // periodID. Falls back to Committed if no Published segment exists yet (covers
-// init-only requests). An upstream reset may change the init section, so the
+// init-only requests). An origin reset may change the init section, so the
 // period is part of the key here too.
 func publishedInitPath(ci *index.ChannelIndex, periodID, repID string) string {
 	var published, committed string

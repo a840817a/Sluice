@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// ErrTooLarge reports that an upstream response exceeded the size the caller was
+// ErrTooLarge reports that an origin response exceeded the size the caller was
 // willing to hold in memory.
 var ErrTooLarge = errors.New("upstream response too large")
 
@@ -28,7 +28,7 @@ const (
 	// as worker.segment_timeout.
 	DefaultSegmentTimeout = 30 * time.Second
 
-	// MaxManifestBytes bounds an upstream MPD or HLS playlist. Manifests are text
+	// MaxManifestBytes bounds an origin's MPD or HLS playlist. Manifests are text
 	// and run to a few MB at the very most, so this needs no per-deployment
 	// tuning — it exists so a misbehaving origin cannot stream indefinitely into
 	// the watcher goroutine.
@@ -38,7 +38,7 @@ const (
 // ReadAtMost reads r fully, failing with ErrTooLarge if it yields more than
 // limit bytes. A body of exactly limit bytes is accepted.
 //
-// Upstream bodies are controlled by whoever operates the origin — and, if that
+// Response bodies are controlled by whoever operates the origin — and, if that
 // origin is compromised or simply broken, by an attacker — so every read of one
 // is bounded. A limit of zero or less means unlimited, which callers should
 // avoid.

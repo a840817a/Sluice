@@ -37,7 +37,7 @@ func (s *Server) handleChannelHealth(w http.ResponseWriter, r *http.Request) {
 		ChannelID string `json:"channel_id"`
 		Title     string `json:"title,omitempty"`
 		Running   bool   `json:"running"`
-		// SourceType is the upstream protocol: "dash" or "hls".
+		// SourceType is the source's protocol: "dash" or "hls".
 		SourceType string `json:"source_type"`
 		// ManifestURL is the URL clients should play. The gateway serves DASH
 		// or HLS depending on the channel's source, so clients ask rather than

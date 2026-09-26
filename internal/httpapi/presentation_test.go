@@ -14,18 +14,18 @@ import (
 )
 
 // startDASHChannel starts a DASH channel and returns the public router. When
-// upstreamMPD is non-empty the channel is a VOD restored with that MPD as its
-// upstream snapshot; otherwise it is live against an origin that never answers.
-func startDASHChannel(t *testing.T, id string, upstreamMPD []byte) http.Handler {
+// originMPD is non-empty the channel is a VOD restored with that MPD as its
+// origin snapshot; otherwise it is live against an origin that never answers.
+func startDASHChannel(t *testing.T, id string, originMPD []byte) http.Handler {
 	t.Helper()
 	dataDir := t.TempDir()
 	cfg := config.Config{Store: config.StoreConfig{DataDir: dataDir}, Server: config.ServerConfig{BaseURL: "http://gw.test"}}
 	chCfg := ch.Config{MPDURL: "http://127.0.0.1:1/never.mpd", Enabled: true}
-	if upstreamMPD != nil {
+	if originMPD != nil {
 		if err := os.MkdirAll(filepath.Join(dataDir, id), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dataDir, id, "upstream.mpd"), upstreamMPD, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dataDir, id, "upstream.mpd"), originMPD, 0o644); err != nil {
 			t.Fatal(err)
 		}
 		chCfg.IsVOD = true

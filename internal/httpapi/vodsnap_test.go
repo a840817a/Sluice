@@ -13,7 +13,7 @@ import (
 )
 
 // A VOD transition synchronously snapshots its required manifest state before
-// it publishes VOD, so a restarted gateway can serve without reaching upstream.
+// it publishes VOD, so a restarted gateway can serve without reaching the origin.
 func TestVODTransitionSnapshotsManifestToDisk(t *testing.T) {
 	origin := startClearDASHOrigin(t)
 
@@ -35,10 +35,10 @@ func TestVODTransitionSnapshotsManifestToDisk(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 
-	// The upstream MPD is static, so the channel ingests everything and
+	// The origin's MPD is static, so the channel ingests everything and
 	// transitions to VOD on its own once the broker drains.
 	manifestPath := filepath.Join(dataDir, "vodsnap", "manifest.mpd")
-	upstreamPath := filepath.Join(dataDir, "vodsnap", "upstream.mpd")
+	originSnapshotPath := filepath.Join(dataDir, "vodsnap", "upstream.mpd")
 
 	deadline := time.Now().Add(30 * time.Second)
 	for {
@@ -67,9 +67,9 @@ func TestVODTransitionSnapshotsManifestToDisk(t *testing.T) {
 		t.Errorf("saved manifest does not point at this gateway:\n%s", truncate(string(data), 400))
 	}
 
-	// The raw upstream MPD is saved beside it so the channel can be restored
+	// The raw origin MPD is saved beside it so the channel can be restored
 	// without re-fetching.
-	if _, err := os.Stat(upstreamPath); err != nil {
+	if _, err := os.Stat(originSnapshotPath); err != nil {
 		t.Errorf("upstream.mpd not saved alongside manifest.mpd: %v", err)
 	}
 }

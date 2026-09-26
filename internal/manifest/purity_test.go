@@ -28,7 +28,7 @@ func testMPD(t *testing.T) *imdp.ParsedMPD {
 //
 // It used to not: the period loop called ci.Period(id), which takes the channel
 // index's WRITE lock and inserts an empty PeriodState for every period the
-// upstream declares. That made GET manifest.mpd a mutating request — one that
+// origin declares. That made GET manifest.mpd a mutating request — one that
 // changed what GET health subsequently reported — and it took a write lock on
 // the hot serving path for no benefit, since the lookups that follow create
 // nothing and tolerate a missing period.

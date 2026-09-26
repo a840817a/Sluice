@@ -1,6 +1,6 @@
-// Package pathseg encodes an upstream ID as one path segment.
+// Package pathseg encodes an ID an origin chose as one path segment.
 //
-// Period and representation IDs are arbitrary strings chosen by the upstream,
+// Period and representation IDs are arbitrary strings chosen by the origin,
 // and the gateway puts them in two kinds of path: the segment URLs it serves
 // (ADR-0005) and the directories it stores segments in (ADR-0006). Raw, an ID
 // can be empty, which a path join silently drops, or contain "/" and "..",

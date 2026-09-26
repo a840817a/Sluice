@@ -26,7 +26,7 @@ import (
 //
 // The test pins that by never draining the broker: enqueueing cannot get past
 // the queue's capacity, so anything observable here is observable mid-ingest.
-func TestVODUpstreamIsKnownBeforeEnqueueFinishes(t *testing.T) {
+func TestVODOriginIsKnownBeforeEnqueueFinishes(t *testing.T) {
 	const segCount = 300
 	const brokerCap = 32
 
@@ -63,14 +63,14 @@ func TestVODUpstreamIsKnownBeforeEnqueueFinishes(t *testing.T) {
 	// for the whole of this wait.
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		if w.UpstreamIsVOD() && prog.Snapshot().TotalKnown {
+		if w.OriginIsVOD() && prog.Snapshot().TotalKnown {
 			break
 		}
 		if time.Now().After(deadline) {
 			snap := prog.Snapshot()
-			t.Fatalf("after 10s: UpstreamIsVOD()=%v TotalKnown=%v expected=%d — "+
+			t.Fatalf("after 10s: OriginIsVOD()=%v TotalKnown=%v expected=%d — "+
 				"a VOD ingest cannot report itself as one until it has finished queueing",
-				w.UpstreamIsVOD(), snap.TotalKnown, snap.ExpectedSegments)
+				w.OriginIsVOD(), snap.TotalKnown, snap.ExpectedSegments)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

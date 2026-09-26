@@ -8,12 +8,12 @@ import (
 	imdp "github.com/a840817a/sluice/internal/mpd"
 )
 
-// A SegmentList upstream is republished as a SegmentTemplate: the segments are
+// A SegmentList origin is republished as a SegmentTemplate: the segments are
 // already on disk under the gateway's numbered layout, so the output addresses
-// them the same way every other source does. A player never learns the upstream
+// them the same way every other source does. A player never learns the origin
 // used SegmentList.
 
-const segmentListUpstream = `<?xml version="1.0" encoding="utf-8"?>
+const segmentListOrigin = `<?xml version="1.0" encoding="utf-8"?>
 <MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static"
      mediaPresentationDuration="PT12S" minBufferTime="PT2S"
      profiles="urn:mpeg:dash:profile:isoff-on-demand:2011">
@@ -36,7 +36,7 @@ const segmentListUpstream = `<?xml version="1.0" encoding="utf-8"?>
 //
 // The AdaptationSet key is "0", not the id="1" the MPD carries: this parser
 // numbers AdaptationSets by position across the whole manifest rather than
-// trusting the upstream's attribute, so that the index key is stable even for a
+// trusting the origin's attribute, so that the index key is stable even for a
 // manifest that reuses or omits ids.
 func publishedIndex(t *testing.T, timescale uint32, durTicks int64, segNos ...uint64) index.Snapshot {
 	t.Helper()
@@ -73,7 +73,7 @@ func generateOrFail(t *testing.T, raw string, snap index.Snapshot) string {
 
 func TestSegmentListIsRepublishedAsAGatewaySegmentTemplate(t *testing.T) {
 	snap := publishedIndex(t, 90000, 360000, 1, 2, 3)
-	xml := generateOrFail(t, segmentListUpstream, snap)
+	xml := generateOrFail(t, segmentListOrigin, snap)
 
 	if strings.Contains(xml, "<SegmentList") {
 		t.Error("output still carries a SegmentList; the gateway serves numbered segments")
@@ -81,10 +81,10 @@ func TestSegmentListIsRepublishedAsAGatewaySegmentTemplate(t *testing.T) {
 	if !strings.Contains(xml, "<SegmentTemplate") {
 		t.Fatalf("output has no SegmentTemplate:\n%s", xml)
 	}
-	// The upstream's own segment filenames must not survive into the output.
-	for _, upstream := range []string{"seg-1.m4s", "seg-2.m4s", "seg-3.m4s", "init.mp4"} {
-		if strings.Contains(xml, upstream) {
-			t.Errorf("output leaks the upstream filename %q", upstream)
+	// The origin's own segment filenames must not survive into the output.
+	for _, origin := range []string{"seg-1.m4s", "seg-2.m4s", "seg-3.m4s", "init.mp4"} {
+		if strings.Contains(xml, origin) {
+			t.Errorf("output leaks the origin filename %q", origin)
 		}
 	}
 	if !strings.Contains(xml, "v1/channels/ch1/segments/") {
@@ -98,23 +98,23 @@ func TestSegmentListIsRepublishedAsAGatewaySegmentTemplate(t *testing.T) {
 	}
 }
 
-// startNumber follows what is actually published, not the upstream's numbering:
+// startNumber follows what is actually published, not the origin's numbering:
 // after a restart or a window slide the first segment the gateway holds may not
 // be segment 1, and announcing 1 would point players at a segment that is gone.
 func TestSegmentListStartNumberFollowsWhatIsPublished(t *testing.T) {
 	snap := publishedIndex(t, 90000, 360000, 5, 6, 7)
-	xml := generateOrFail(t, segmentListUpstream, snap)
+	xml := generateOrFail(t, segmentListOrigin, snap)
 
 	if !strings.Contains(xml, `startNumber="5"`) {
 		t.Errorf("startNumber does not match the first published segment:\n%s", xml)
 	}
 }
 
-// Unlike a SegmentTemplate upstream, there is no template to fall back on, so a
+// Unlike a SegmentTemplate origin, there is no template to fall back on, so a
 // representation with nothing published yet is dropped rather than advertised
 // as something a player can request.
 func TestSegmentListRepresentationIsDroppedUntilSomethingIsPublished(t *testing.T) {
-	xml := generateOrFail(t, segmentListUpstream, index.NewChannelIndex(index.PublishAVBarrier).Snapshot())
+	xml := generateOrFail(t, segmentListOrigin, index.NewChannelIndex(index.PublishAVBarrier).Snapshot())
 
 	if strings.Contains(xml, `id="v0"`) {
 		t.Errorf("a representation with nothing published was advertised:\n%s", xml)

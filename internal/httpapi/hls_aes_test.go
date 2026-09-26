@@ -162,7 +162,7 @@ func TestAES128DecryptMode(t *testing.T) {
 }
 
 // TestAES128PassthroughMode: segments stay encrypted on disk and the playlist
-// points at the gateway's key proxy rather than the upstream key server.
+// points at the gateway's key proxy rather than the key server.
 func TestAES128PassthroughMode(t *testing.T) {
 	origin := startEncryptedOrigin(t, 3, true, nil)
 	srv := startChannelWithKeyMode(t, origin.URL, ch.KeyModePassthrough)
@@ -172,7 +172,7 @@ func TestAES128PassthroughMode(t *testing.T) {
 		t.Fatalf("passthrough playlist must advertise a key:\n%s", body)
 	}
 	if strings.Contains(body, origin.URL) {
-		t.Errorf("playlist leaks the upstream key URL:\n%s", body)
+		t.Errorf("playlist leaks the key server URL:\n%s", body)
 	}
 	if !strings.Contains(body, "http://gw.test/v1/channels/enc/key/") {
 		t.Errorf("key URI does not point at the gateway proxy:\n%s", body)
@@ -242,7 +242,7 @@ func TestKeyProxyRejectsUnknownKeyID(t *testing.T) {
 }
 
 // TestKeyProxyDisabledInDecryptMode: content is already republished in the
-// clear, so handing out the upstream key would leak it for nothing.
+// clear, so handing out the key would leak it for nothing.
 func TestKeyProxyDisabledInDecryptMode(t *testing.T) {
 	origin := startEncryptedOrigin(t, 2, true, nil)
 	srv := startChannelWithKeyMode(t, origin.URL, ch.KeyModeDecrypt)
@@ -281,11 +281,11 @@ func encChannelConfig(originURL string) ch.Config {
 	}
 }
 
-// TestPassthroughKeySurvivesUpstreamDownRestart is the acceptance test for
+// TestPassthroughKeySurvivesKeyServerDownRestart is the acceptance test for
 // gateway-side key persistence: after the origin (and its key server) is gone,
 // a restarted passthrough channel must still hand players a working key from
 // disk, so the still-encrypted segments remain decryptable.
-func TestPassthroughKeySurvivesUpstreamDownRestart(t *testing.T) {
+func TestPassthroughKeySurvivesKeyServerDownRestart(t *testing.T) {
 	dataDir := t.TempDir()
 	origin := startEncryptedOrigin(t, 3, true, nil)
 
@@ -329,11 +329,11 @@ func TestPassthroughKeySurvivesUpstreamDownRestart(t *testing.T) {
 	t.Cleanup(func() { h2.stop("enc") })
 
 	// The playlist still advertises the key (from the sidecar), and the proxy
-	// must now serve the key from the persisted store — no upstream needed.
+	// must now serve the key from the persisted store — no key server needed.
 	kw := executeRequest(h2.srv.handleKeyProxy, http.MethodGet,
 		"/v1/channels/enc/key/"+keyID, map[string]string{"channelID": "enc", "keyID": keyID})
 	if kw.Code != http.StatusOK {
-		t.Fatalf("key proxy after upstream-down restart: got %d, want 200", kw.Code)
+		t.Fatalf("key proxy after key-server-down restart: got %d, want 200", kw.Code)
 	}
 	if !bytesEqual(kw.Body.Bytes(), aesTestKey) {
 		t.Errorf("restored key = %x, want %x", kw.Body.Bytes(), aesTestKey)
@@ -354,7 +354,7 @@ func TestPassthroughKeySurvivesUpstreamDownRestart(t *testing.T) {
 		t.Fatalf("decrypt with disk-served key: %v", err)
 	}
 	if !bytesEqual(plain, tsSegment(0)) {
-		t.Error("segment did not decrypt to the original after upstream-down restart")
+		t.Error("segment did not decrypt to the original after key-server-down restart")
 	}
 }
 

@@ -67,14 +67,14 @@ func newEndOfStreamWatcher(t *testing.T, mpdURL string) *Watcher {
 	return NewWatcher(cfg, "eos", nil, index.NewChannelIndex(index.PublishAVBarrier), queue.NewBroker(0))
 }
 
-// TestRunReturnsWhenUpstreamGoesStatic is the DASH half of "the upstream ended".
+// TestRunReturnsWhenOriginGoesStatic is the DASH half of "the origin ended".
 //
 // Returning nil is the only way a source reports that: the channel manager turns
 // a clean Run return into the VOD transition, for both protocols. A watcher that
 // keeps polling a finished stream leaves the channel live forever, which is what
 // this asserts against — before the change the poll loop had no exit at all and
 // this test fails by timing out with ctx.Err() instead of nil.
-func TestRunReturnsWhenUpstreamGoesStatic(t *testing.T) {
+func TestRunReturnsWhenOriginGoesStatic(t *testing.T) {
 	var flip atomic.Bool
 	origin := startFlippingOrigin(t, &flip)
 	w := newEndOfStreamWatcher(t, origin.URL+"/manifest.mpd")
@@ -96,10 +96,10 @@ func TestRunReturnsWhenUpstreamGoesStatic(t *testing.T) {
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("Run() = %v, want nil after the upstream went static", err)
+			t.Fatalf("Run() = %v, want nil after the origin went static", err)
 		}
 	case <-ctx.Done():
-		t.Fatal("Run() did not return after the upstream went static")
+		t.Fatal("Run() did not return after the origin went static")
 	}
 
 	if got := w.UpstreamType(); got != string(imdp.PresentationStatic) {
@@ -139,7 +139,7 @@ func TestRunEnqueuesFinalStaticTimeline(t *testing.T) {
 			t.Fatalf("Run() = %v, want nil", err)
 		}
 	case <-ctx.Done():
-		t.Fatal("Run() did not return after the upstream went static")
+		t.Fatal("Run() did not return after the origin went static")
 	}
 
 	if got := highestQueuedSegment(w); got <= live {

@@ -15,7 +15,7 @@ import (
 )
 
 // registerRuntime puts a minimal running channel into the manager without going
-// through Start, which would need an upstream origin and an ingest pipeline.
+// through Start, which would need a real origin and an ingest pipeline.
 // A source snapshot supplies the required restart artifacts without network I/O.
 func registerRuntime(t *testing.T, m *Manager, id string, mode ChannelMode) *Runtime {
 	t.Helper()
@@ -94,7 +94,7 @@ func TestTransitionToVODRefusesWhatItCannotTransition(t *testing.T) {
 }
 
 // Both modes an operator can legitimately cut short: a live channel, and one
-// whose static upstream is still downloading.
+// whose static origin is still downloading.
 func TestTransitionToVODAcceptsLiveAndStaticIngesting(t *testing.T) {
 	for _, tc := range []struct {
 		name string

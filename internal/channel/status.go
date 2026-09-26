@@ -69,7 +69,7 @@ type ChannelStatus struct {
 	// Tracks is the per-representation breakdown. Absent until the first segment
 	// is indexed.
 	Tracks []TrackStats `json:"tracks,omitempty"`
-	// Source reports how close the upstream is to being finished. A pointer so
+	// Source reports how close the origin is to being finished. A pointer so
 	// a status with nothing to say serialises to the same keys it always had.
 	Source *SourceStatus `json:"source_status,omitempty"`
 	// VODWarnings lists restart-safety steps that failed while this channel
@@ -77,7 +77,7 @@ type ChannelStatus struct {
 	VODWarnings []string `json:"vod_warnings,omitempty"`
 }
 
-// SourceStatus reports the upstream's end-of-stream signal, which is what
+// SourceStatus reports the origin's end-of-stream signal, which is what
 // decides when a channel transitions to VOD: the MPD's presentation type for
 // DASH, and the EXT-X-ENDLIST count across poll targets for HLS.
 type SourceStatus struct {
@@ -114,7 +114,7 @@ func storedSegments(ci *index.ChannelIndex) uint64 {
 	return n
 }
 
-// sourceStatus reports what the channel's source knows about the upstream
+// sourceStatus reports what the channel's source knows about the origin
 // ending, or nil when it knows nothing yet.
 func sourceStatus(rt *Runtime) *SourceStatus {
 	if rt.Source == nil {

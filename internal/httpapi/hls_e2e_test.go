@@ -319,7 +319,7 @@ func TestHealthAdvertisesPlayableURL(t *testing.T) {
 	}
 }
 
-// TestDASHChannelHLSNotReadyBeforeMPD checks that a DASH channel whose upstream
+// TestDASHChannelHLSNotReadyBeforeMPD checks that a DASH channel whose origin
 // MPD has not been fetched yet reports its HLS output as not-ready (503) rather
 // than unavailable — clear DASH sources are serveable as HLS once discovered.
 func TestDASHChannelHLSNotReadyBeforeMPD(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// HLS names periods by epoch. Sorted as strings, epoch 10 would come before
-// epoch 2, and every consumer of the order would put a later stream first.
+// HLS names periods by number. Sorted as strings, period 10 would come before
+// period 2, and every consumer of the order would put a later stream first.
 func TestSnapshotOrdersNumericPeriodsNumerically(t *testing.T) {
 	ci := NewChannelIndex(PublishAVBarrier)
 	for _, id := range []string{"10", "2", "0", "1"} {
@@ -49,7 +49,7 @@ func TestSegNoRangeSurvivesEviction(t *testing.T) {
 	}
 }
 
-// Like the range, the record of upstream discontinuities outlives the ring:
+// Like the range, the record of origin discontinuities outlives the ring:
 // EXT-X-DISCONTINUITY-SEQUENCE must keep counting one whose segment has been
 // evicted. Only publication records one, and a restored segment counts.
 func TestDiscontinuitiesSurviveEviction(t *testing.T) {

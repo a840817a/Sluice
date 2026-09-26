@@ -4,7 +4,7 @@
 // It serves both of the gateway's encryption modes: in decrypt-on-ingest mode
 // the processor uses Decrypt to store cleartext, and in passthrough mode the
 // key proxy uses the same cache to serve keys to players without ever exposing
-// the upstream key URL.
+// the key server's URL.
 package hlskey
 
 import (
@@ -31,7 +31,7 @@ import (
 // KeyLength is the size of an HLS AES-128 content key.
 const KeyLength = 16
 
-// KeyID returns the stable identifier the gateway publishes for an upstream key
+// KeyID returns the stable identifier the gateway publishes for a key server
 // URI. It is the hex SHA-256 of the URI.
 //
 // Publishing a hash rather than the URI itself is what keeps the key proxy from
@@ -46,21 +46,21 @@ func KeyID(uri string) string {
 // Cache fetches content keys over HTTP and remembers them.
 //
 // Keys are small, immutable, and referenced by every segment in a key period,
-// so they are cached for the process lifetime. Concurrent requests for the same
-// key are collapsed into one upstream fetch — segments are downloaded in
-// parallel, and without this a key rotation would burst N simultaneous requests
-// at the key server.
+// so they are cached for the process lifetime. Concurrent requests for the
+// same key are collapsed into one fetch to the key server — segments are
+// downloaded in parallel, and without this a key rotation would burst N
+// simultaneous requests at the key server.
 type Cache struct {
 	client *http.Client
 	// headers is shared with the channel's fetcher and watcher, so rotating the
-	// channel's upstream credentials reaches key requests too. Note this only
+	// channel's origin credentials reaches key requests too. Note this only
 	// affects key URIs not yet fetched: a key already in entries is never
 	// re-requested (see the caching note above), which is the intended
 	// behaviour — the key itself does not expire, only the credential does.
 	headers fetch.Headers
 	// storePath, when set, persists fetched keys to disk so a passthrough
-	// channel can keep serving them after a restart even if the upstream key
-	// server has gone away. Empty means memory-only.
+	// channel can keep serving them after a restart even if the key server
+	// has gone away. Empty means memory-only.
 	storePath string
 
 	mu      sync.Mutex
@@ -87,8 +87,8 @@ type entry struct {
 // storePath, when non-empty, is a JSON file the cache persists keys to and
 // reloads on construction. Pass it only for passthrough channels: it trades
 // at-rest protection (the key sits on disk beside the ciphertext) for the
-// ability to serve keys after the upstream key server is gone. Decrypt-mode
-// channels do not need it and should pass "".
+// ability to serve keys after the key server is gone. Decrypt-mode channels
+// do not need it and should pass "".
 func NewCache(client *http.Client, headers fetch.Headers, storePath string) *Cache {
 	if client == nil {
 		client = &http.Client{Timeout: 15 * time.Second}
@@ -219,9 +219,9 @@ func KeyStorePath(dataDir, channelID string) string {
 	return filepath.Join(dataDir, channelID, "keys.json")
 }
 
-// loadStore reads any persisted keys into memory as completed cache entries, so
-// they are served without contacting the upstream. A missing or corrupt file is
-// ignored: the cache simply falls back to fetching.
+// loadStore reads any persisted keys into memory as completed cache entries,
+// so they are served without contacting the key server. A missing or corrupt
+// file is ignored: the cache simply falls back to fetching.
 func (c *Cache) loadStore() {
 	if c.storePath == "" {
 		return

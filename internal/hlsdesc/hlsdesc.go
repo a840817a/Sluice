@@ -10,8 +10,8 @@
 // existed twice, field for field, with a copy loop bridging them.
 //
 // These types describe what the gateway PUBLISHES. They are deliberately not
-// hlssrc's parse shapes, which carry the upstream URI and no RepID because
-// RepID is assigned here rather than upstream.
+// hlssrc's parse shapes, which carry the origin URI and no RepID because
+// RepID is assigned here rather than while parsing.
 package hlsdesc
 
 // Variant is one video rendition offered in the multivariant playlist.

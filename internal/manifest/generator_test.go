@@ -35,7 +35,7 @@ func TestGenerateStaticMPD(t *testing.T) {
 
 	// Segment URLs must point to gateway, not origin
 	if strings.Contains(xml, "manifest_6m_") {
-		t.Error("output contains original upstream segment filename")
+		t.Error("output contains original origin segment filename")
 	}
 	if !strings.Contains(xml, "v1/channels/ch1/segments/") {
 		t.Error("output does not contain gateway segment path")

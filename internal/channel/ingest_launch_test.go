@@ -50,11 +50,11 @@ func TestChannelIngestLaunchSignalsExits(t *testing.T) {
 	closed("the WaitGroup", joined)
 }
 
-// launchIngest also starts the watch for a finished upstream: a live channel
-// whose source says the upstream is a finished asset is shown as static
+// launchIngest also starts the watch for a finished origin: a live channel
+// whose source says the origin is a finished asset is shown as static
 // ingesting while the source is still enumerating it, not only once the
 // source returns.
-func TestLaunchIngestWatchesForAFinishedUpstream(t *testing.T) {
+func TestLaunchIngestWatchesForAFinishedOrigin(t *testing.T) {
 	m := newTestManager(t, configForTest(t))
 	cfg := deadChannel()
 	pl := newIngestPipeline(m.gwCfg, "c", cfg)
@@ -71,7 +71,7 @@ func TestLaunchIngestWatchesForAFinishedUpstream(t *testing.T) {
 	m.launchIngest(sourceCtx, poolCtx, lifecycleCtx, rt, cfg, pl, ingest)
 	t.Cleanup(func() { cancel(); rt.wg.Wait() })
 
-	deadline := time.Now().Add(5 * staticUpstreamPollInterval)
+	deadline := time.Now().Add(5 * staticOriginPollInterval)
 	for rt.Mode() != ModeStaticIngesting && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}

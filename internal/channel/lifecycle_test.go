@@ -25,7 +25,7 @@ func configForTest(t *testing.T) gocfg.Config {
 
 // deadChannel points at a port nothing listens on. Discovery fails and retries
 // with backoff, which is what we want: the lifecycle is exercised without any
-// real upstream, and the ingest goroutines are genuinely running.
+// real origin, and the ingest goroutines are genuinely running.
 func deadChannel() Config {
 	return Config{
 		MPDURL:     "http://127.0.0.1:1/index.m3u8",

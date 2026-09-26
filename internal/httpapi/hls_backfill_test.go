@@ -54,7 +54,7 @@ func startFlakyHLSOrigin(t *testing.T, flakySeg, failCount int32) *httptest.Serv
 
 // TestHLSBackfillsInteriorGap proves the gateway re-fetches a segment that was
 // lost to a transient failure (a hole below the high-water mark still in the
-// upstream window), rather than leaving the playlist permanently short.
+// origin's window), rather than leaving the playlist permanently short.
 func TestHLSBackfillsInteriorGap(t *testing.T) {
 	// Segment 2 fails enough times to exhaust its retries and become a hole,
 	// then recovers so a later poll can backfill it.

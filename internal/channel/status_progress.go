@@ -48,7 +48,7 @@ type ProgressStats struct {
 	// LastSegmentAt is absent until the channel stores its first segment.
 	LastSegmentAt *time.Time `json:"last_segment_at,omitempty"`
 
-	// SourceError is a live condition: it appears while the upstream manifest or
+	// SourceError is a live condition: it appears while the origin's manifest or
 	// playlist is failing and clears on the next successful poll.
 	SourceError *progress.ErrorRecord `json:"source_error,omitempty"`
 	// LastSegmentError is sticky, so a UI polling every couple of seconds cannot
@@ -93,7 +93,7 @@ func buildProgress(rt *Runtime) *ProgressStats {
 }
 
 // TrackStats describes one representation: what it is, and how much of it the
-// gateway holds. The descriptive fields come from the upstream manifest and the
+// gateway holds. The descriptive fields come from the origin's manifest and the
 // counts from the index, so a track appears here even when the manifest no longer
 // mentions it — segments already on disk are still served.
 type TrackStats struct {
@@ -123,7 +123,7 @@ type TrackStats struct {
 // buildTracks assembles the per-track breakdown for a channel.
 //
 // The index is the source of truth for which tracks exist, not the manifest: a
-// representation that has been dropped upstream still has segments on disk and
+// representation that has been dropped by the origin still has segments on disk and
 // still serves, so it must remain visible. Manifest data only decorates.
 func buildTracks(sv Serving, ci *index.ChannelIndex) []TrackStats {
 	var tracks []TrackStats
@@ -192,7 +192,7 @@ func decorateHLSTracks(p Presentation, tracks []TrackStats) {
 	}
 }
 
-// decorateDASHTracks fills in codec, bitrate and resolution from the upstream
+// decorateDASHTracks fills in codec, bitrate and resolution from the origin's
 // MPD. A DASH RepID is only unique within its AdaptationSet, so the lookup is
 // keyed on the full period/AS/rep triple.
 func decorateDASHTracks(p *imdp.ParsedMPD, tracks []TrackStats) {

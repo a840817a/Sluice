@@ -98,10 +98,10 @@ func TestKeepAllSegmentsDefaultsToKeeping(t *testing.T) {
 	}
 }
 
-// TestUpstreamEndTransitionsToVOD covers the whole point of the change: a
+// TestOriginEndTransitionsToVOD covers the whole point of the change: a
 // channel whose config says nothing about retention or transitions still ends
-// up as a persisted VOD when the upstream finishes.
-func TestUpstreamEndTransitionsToVOD(t *testing.T) {
+// up as a persisted VOD when the origin finishes.
+func TestOriginEndTransitionsToVOD(t *testing.T) {
 	origin := startEndedHLSOrigin(t, 3)
 	m, store, _ := managerWithStore(t)
 
@@ -128,7 +128,7 @@ func TestUpstreamEndTransitionsToVOD(t *testing.T) {
 // TestWindowModeChannelStillTransitions pins the decision that the transition
 // is unconditional. Retention decides how much history the VOD covers, never
 // whether the channel is allowed to finish — a window-mode channel whose
-// upstream ended must not keep claiming to be live.
+// origin ended must not keep claiming to be live.
 func TestWindowModeChannelStillTransitions(t *testing.T) {
 	origin := startEndedHLSOrigin(t, 3)
 	m, store, _ := managerWithStore(t)
@@ -157,8 +157,8 @@ func TestWindowModeChannelStillTransitions(t *testing.T) {
 // TestRestoreToLiveSuppressesImmediateRetransition is the reverse operation,
 // and the suppression that makes it worth having.
 //
-// The upstream in this test is still finished, which is the realistic case: an
-// operator restores a channel that transitioned on an upstream hiccup. Without
+// The origin in this test is still finished, which is the realistic case: an
+// operator restores a channel that transitioned on an origin hiccup. Without
 // the suppression the source completes cleanly again and the 2-second drain
 // ticker puts the channel straight back into VOD, so the button would appear to
 // do nothing. The late re-check is what fails in that case.
@@ -205,7 +205,7 @@ func TestRestoreToLiveSuppressesImmediateRetransition(t *testing.T) {
 	time.Sleep(6 * time.Second)
 	if got := rt.Mode(); got != ModeLive {
 		t.Errorf("mode is %v six seconds after a restore, want live: "+
-			"the finished upstream transitioned the channel straight back to VOD", got)
+			"the finished origin transitioned the channel straight back to VOD", got)
 	}
 
 	if after := filesUnder(t, filepath.Join(dataDir, "ch")); len(after) != len(before) {

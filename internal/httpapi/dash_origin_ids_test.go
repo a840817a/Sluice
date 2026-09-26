@@ -14,11 +14,11 @@ import (
 	"github.com/a840817a/sluice/internal/config"
 )
 
-// Period and representation IDs are whatever the upstream MPD says, and the
+// Period and representation IDs are whatever the origin's MPD says, and the
 // gateway stores segments in directories named after them (ADR-0006). A period
 // with no id attribute must still survive the VOD rebuild from disk, and no ID
 // may place a file outside the data directory.
-func TestDASHUpstreamIDsStayPlayableAndContained(t *testing.T) {
+func TestDASHOriginIDsStayPlayableAndContained(t *testing.T) {
 	for _, tc := range []struct{ name, from, to string }{
 		{"period without id", ` id="0"`, ``},
 		{"period id that climbs out", `id="0"`, `id="../../../escaped"`},

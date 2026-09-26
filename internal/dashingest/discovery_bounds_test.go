@@ -7,7 +7,7 @@ import (
 	imdp "github.com/a840817a/sluice/internal/mpd"
 )
 
-// Segment counts are derived entirely from upstream manifest numbers. A manifest
+// Segment counts are derived entirely from origin manifest numbers. A manifest
 // that asks for billions of segments must be truncated rather than allocated,
 // otherwise one bad channel OOMs the process and takes every other channel with
 // it. These cases all complete instantly when the cap holds and hang or exhaust

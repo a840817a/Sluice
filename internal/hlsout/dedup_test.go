@@ -20,7 +20,7 @@ func run(segs []index.SegmentState) []uint64 {
 // "next == prev+1" test, which silently truncated the playlist to a couple of
 // segments and stalled every player. The index now collapses duplicates before
 // they get here; this keeps the output layer from turning a duplicate into an
-// outage if anything upstream regresses.
+// outage if the index regresses.
 func TestContiguousRunToleratesDuplicates(t *testing.T) {
 	segs := []index.SegmentState{
 		{SegNo: 5, Status: index.StatusPublished},

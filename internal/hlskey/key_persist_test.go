@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-func TestPersistedKeySurvivesUpstreamDeath(t *testing.T) {
+func TestPersistedKeySurvivesKeyServerDeath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keys.json")
 
 	var hits int32
@@ -22,7 +22,8 @@ func TestPersistedKeySurvivesUpstreamDeath(t *testing.T) {
 	}))
 	uri := srv.URL + "/k1.bin"
 
-	// First process: fetch the key while upstream is alive; it must be persisted.
+	// First process: fetch the key while the key server is alive; it must
+	// be persisted.
 	c1 := NewCache(nil, nil, path)
 	if _, err := c1.Get(context.Background(), uri); err != nil {
 		t.Fatalf("initial Get: %v", err)
@@ -31,21 +32,21 @@ func TestPersistedKeySurvivesUpstreamDeath(t *testing.T) {
 		t.Fatalf("key store not written: %v", err)
 	}
 
-	// Upstream disappears entirely.
+	// The key server disappears entirely.
 	srv.Close()
 
 	// Second process (simulated restart) loads the same store: the key must be
-	// served from disk without any upstream contact.
+	// served from disk without any key server contact.
 	c2 := NewCache(nil, nil, path)
 	got, err := c2.Get(context.Background(), uri)
 	if err != nil {
-		t.Fatalf("Get after restart with upstream down: %v", err)
+		t.Fatalf("Get after restart with the key server down: %v", err)
 	}
 	if string(got) != string(testKey()) {
 		t.Errorf("restored key = %q, want %q", got, testKey())
 	}
 	if n := atomic.LoadInt32(&hits); n != 1 {
-		t.Errorf("upstream hit %d times, want 1 (restart must not re-fetch)", n)
+		t.Errorf("key server hit %d times, want 1 (restart must not re-fetch)", n)
 	}
 }
 
@@ -88,7 +89,7 @@ func TestKeyStoreFileIsNotWorldReadable(t *testing.T) {
 	}
 }
 
-func TestCorruptKeyStoreFallsBackToUpstream(t *testing.T) {
+func TestCorruptKeyStoreFallsBackToKeyServer(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keys.json")
 	if err := os.WriteFile(path, []byte("{ not json"), 0o600); err != nil {
 		t.Fatal(err)
@@ -98,7 +99,7 @@ func TestCorruptKeyStoreFallsBackToUpstream(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// A damaged store must not break key serving; it falls back to upstream.
+	// A damaged store must not break key serving; it falls back to the key server.
 	c := NewCache(nil, nil, path)
 	got, err := c.Get(context.Background(), srv.URL+"/k.bin")
 	if err != nil {

@@ -20,16 +20,16 @@ import (
 	"github.com/a840817a/sluice/internal/validate"
 )
 
-// Watcher polls the upstream MPD and enqueues new segment tasks.
+// Watcher polls the origin's MPD and enqueues new segment tasks.
 type Watcher struct {
 	cfg       config.Config
 	ci        *index.ChannelIndex
 	broker    *queue.Broker
 	channelID string
 
-	// headers are the channel's FetchHeaders, applied to every upstream request
+	// headers are the channel's FetchHeaders, applied to every origin request
 	// this watcher makes. The provider is shared with the channel's fetcher and
-	// swapped atomically by the admin API, so rotating upstream credentials does
+	// swapped atomically by the admin API, so rotating origin credentials does
 	// not require restarting the channel.
 	headers fetch.Headers
 
@@ -51,7 +51,7 @@ func (w *Watcher) SetProgress(p *progress.Counters) { w.prog = p }
 // NewWatcher creates a Watcher for the given channel.
 // lastKnown is seeded from ci so that segments already on disk are not
 // re-downloaded, while segments missed during downtime (still in the
-// upstream DVR window) are discovered and fetched on the first MPD poll.
+// origin's DVR window) are discovered and fetched on the first MPD poll.
 //
 // headers carries the channel's FetchHeaders. They are needed here and not only
 // in the segment fetcher: an origin that requires an auth header for segments
@@ -70,10 +70,10 @@ func NewWatcher(cfg config.Config, channelID string, headers fetch.Headers, ci *
 	}
 }
 
-// applyUpstreamHeaders sets the channel's FetchHeaders followed by the
+// applyOriginHeaders sets the channel's FetchHeaders followed by the
 // gateway-wide auth header, so a gateway-level credential wins over a
 // same-named per-channel one. This matches hlsingest.Watcher.fetch.
-func (w *Watcher) applyUpstreamHeaders(req *http.Request) {
+func (w *Watcher) applyOriginHeaders(req *http.Request) {
 	fetch.ApplyHeaders(req, w.headers)
 	if w.cfg.Upstream.AuthHeader != "" {
 		req.Header.Set(w.cfg.Upstream.AuthHeader, w.cfg.Upstream.AuthValue)
@@ -118,7 +118,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 					"url", w.cfg.Upstream.MPDURL,
 					"err", err,
 				)
-				// A failing upstream is a live condition, not a historical event:
+				// A failing origin is a live condition, not a historical event:
 				// it is cleared as soon as a poll succeeds, so the admin UI shows
 				// "degraded now" rather than "was unhappy at some point".
 				w.prog.SetSourceError("manifest", err.Error())
@@ -126,7 +126,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 			}
 			w.prog.ClearSourceError()
 			w.processMPD(ctx, p)
-			// The stream ended: the upstream now describes a finished asset.
+			// The stream ended: the origin now describes a finished asset.
 			// Returning nil is how a source reports "ingest complete" — the
 			// channel manager turns that into the VOD transition, the same way
 			// it does for an HLS source whose variants all reach ENDLIST.
@@ -154,7 +154,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 // ("dynamic" or "static"), or "" before the first fetch.
 //
 // It is the DASH answer to the same question EndListProgress answers for HLS:
-// has the upstream declared the stream finished yet.
+// has the origin declared the stream finished yet.
 func (w *Watcher) UpstreamType() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -193,7 +193,7 @@ func (w *Watcher) fetchMPD(ctx context.Context) (*imdp.ParsedMPD, error) {
 	if err != nil {
 		return nil, err
 	}
-	w.applyUpstreamHeaders(req)
+	w.applyOriginHeaders(req)
 	resp, err := w.client.Do(req)
 	if err != nil {
 		return nil, err
@@ -383,7 +383,7 @@ func (w *Watcher) discoverSegmentBaseTasks(
 					}
 					// Match SegmentTemplate/SegmentList scheduling: oldest
 					// in-window segments are fetched first so they do not
-					// disappear from the upstream DVR window.
+					// disappear from the origin's DVR window.
 					priority := int(segNo - 1)
 					tasks = append(tasks, &queue.SegmentTask{
 						ChannelID:      w.channelID,
@@ -432,7 +432,7 @@ func (w *Watcher) fetchRange(ctx context.Context, url string, start, end uint64)
 	if err != nil {
 		return nil, err
 	}
-	w.applyUpstreamHeaders(req)
+	w.applyOriginHeaders(req)
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
 
 	resp, err := w.client.Do(req)

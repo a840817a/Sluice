@@ -385,13 +385,13 @@ type RepresentationState struct {
 	// window slides. A restart recomputes them from what is on disk.
 	//
 	// Only publication widens them. A segment committed but never published —
-	// its A/V partner never arrived before an upstream reset — is not in any
+	// its A/V partner never arrived before an origin reset — is not in any
 	// playlist, and counting it would open a gap in the numbering at the
 	// period boundary.
 	first, last uint64
 	seen        bool
 	// discontinuities holds the number of every segment this representation
-	// has published that begins with an upstream discontinuity. Like the range
+	// has published that begins with an origin discontinuity. Like the range
 	// it outlives the ring: once such a segment leaves a live playlist,
 	// EXT-X-DISCONTINUITY-SEQUENCE must still count its tag (RFC 8216
 	// §6.2.2), and the segment itself is no longer there to say so.
@@ -425,7 +425,7 @@ func (rs *RepresentationState) SegNoRange() (first, last uint64, ok bool) {
 }
 
 // Discontinuities returns, in ascending order, the number of every segment
-// this representation has ever published that begins with an upstream
+// this representation has ever published that begins with an origin
 // discontinuity. A restart recomputes them from what is on disk.
 func (rs *RepresentationState) Discontinuities() []uint64 {
 	rs.mu.Lock()

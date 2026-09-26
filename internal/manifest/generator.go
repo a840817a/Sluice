@@ -32,13 +32,13 @@ type GeneratorConfig struct {
 	WindowDepth time.Duration
 	// SafeEdgeBuffer subtracts from live edge to produce the safe edge.
 	SafeEdgeBuffer time.Duration
-	// FallbackMinimumUpdatePeriod is used for dynamic MPDs when the upstream
+	// FallbackMinimumUpdatePeriod is used for dynamic MPDs when the origin
 	// omits minimumUpdatePeriod or sets it to zero.
 	FallbackMinimumUpdatePeriod time.Duration
 	// VODMode forces static MPD output with all published segments (no sliding
 	// window). Used after a live→VOD transition.
 	VODMode bool
-	// FinalDuration is the mediaPresentationDuration announced by the upstream
+	// FinalDuration is the mediaPresentationDuration announced by the origin
 	// static MPD at the moment of transition. When non-zero it takes precedence
 	// over the duration computed by scanning the index, giving a more accurate
 	// value when the final segments were not fully downloaded.
@@ -112,7 +112,7 @@ func Generate(
 	} else {
 		// Static or post-transition VOD: set mediaPresentationDuration.
 		// For VOD mode, always prefer the index-scanned span (maxEndPTS-minStartPTS)
-		// because the upstream static MPD may only reflect the last live window (~30s).
+		// because the origin's static MPD may only reflect the last live window (~30s).
 		// FinalDuration is used only as a fallback when the index is empty.
 		var dur time.Duration
 		switch {
@@ -145,7 +145,7 @@ func Generate(
 		if origPeriod.Start >= 0 {
 			period.Start = xsdDurationPtr(origPeriod.Start)
 		}
-		// In VOD mode the upstream static MPD may only reflect the last live
+		// In VOD mode the origin's static MPD may only reflect the last live
 		// window (~30s), so skip its period duration; the segment timeline is authoritative.
 		if orig.Type == imdp.PresentationStatic && origPeriod.Duration > 0 && !cfg.VODMode {
 			period.Duration = xsdDurationPtr(origPeriod.Duration)
@@ -319,7 +319,7 @@ func buildRepresentation(
 }
 
 // buildRepFromSegmentList synthesises a gateway SegmentTemplate for a
-// representation whose upstream uses SegmentList. The segments are already
+// representation whose origin uses SegmentList. The segments are already
 // stored on disk under the normal numbered layout, so the output template
 // points to the same gateway paths as SegmentTemplate representations.
 func buildRepFromSegmentList(
@@ -334,7 +334,7 @@ func buildRepFromSegmentList(
 ) (*gompeg.Representation, *gompeg.SegmentTemplate, error) {
 	// Unlike buildRepresentation, a SegmentList representation with nothing
 	// published is dropped from the manifest rather than emitted with a fixed
-	// duration: there is no upstream template to fall back on.
+	// duration: there is no origin template to fall back on.
 	published := projectPublishedSegments(origType, snap.Published(origPeriod.ID, origAS.ID, origRep.ID), cfg)
 	if len(published) == 0 {
 		return nil, nil, nil // not ready yet

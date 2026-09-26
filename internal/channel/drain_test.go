@@ -231,7 +231,7 @@ func startHangingKeyHLSOrigin(t *testing.T, segCount int, keyHit chan<- struct{}
 // it is deterministically observable.
 //
 // A passthrough AES-128 channel captures the content key during ingest so
-// playback survives the upstream dying. That fetch runs off the ingest path with
+// playback survives the origin dying. That fetch runs off the ingest path with
 // its own 15s timeout. If it is rooted at context.Background() rather than the
 // channel's context, Stop returns while it is still running: the goroutine, its
 // HTTP connection and its write into the key cache outlive the channel by up to

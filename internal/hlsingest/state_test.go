@@ -12,7 +12,7 @@ import (
 	"github.com/a840817a/sluice/internal/queue"
 )
 
-// hls-source.json is the only record of the upstream master playlist's
+// hls-source.json is the only record of the origin master playlist's
 // attributes: a channel restored in VOD mode never runs discovery again, so a
 // field lost in this round trip means representations the gateway can name but
 // not serve. Until now the format was only covered indirectly, through the

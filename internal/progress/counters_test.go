@@ -261,7 +261,7 @@ func TestSourceErrorClears(t *testing.T) {
 	if got := c.Snapshot().SourceError; got == nil || got.Stage != "poll" {
 		t.Fatalf("SourceError = %+v, want stage poll", got)
 	}
-	// Unlike a segment error, an upstream error is a live condition.
+	// Unlike a segment error, an origin error is a live condition.
 	c.ClearSourceError()
 	if got := c.Snapshot().SourceError; got != nil {
 		t.Errorf("SourceError = %+v after clear, want nil", got)

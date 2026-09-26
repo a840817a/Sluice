@@ -22,7 +22,7 @@ type Presentation struct {
 	Variants   []hlsdesc.Variant
 	Renditions []hlsdesc.Rendition
 	Subtitles  []hlsdesc.Subtitle
-	// IndependentSegments mirrors the upstream EXT-X-INDEPENDENT-SEGMENTS tag.
+	// IndependentSegments mirrors the origin's EXT-X-INDEPENDENT-SEGMENTS tag.
 	IndependentSegments bool
 	// Ready is false until the tracks above describe something playable. An
 	// encrypted DASH source, which lists no tracks in HLS terms, is never
@@ -169,7 +169,7 @@ var (
 // decrypt-on-ingest channel republishes cleartext, and handing out its key
 // would leak a credential for content already stripped of protection. The key
 // ID must be one this channel issued for a URI in its own playlists — the
-// upstream URL is never taken from the request, which would make the gateway
+// key server URL is never taken from the request, which would make the gateway
 // an open proxy. Any other error is a failed fetch.
 func (rt *Runtime) ResolveKey(ctx context.Context, keyID string) ([]byte, error) {
 	if rt.hls == nil || rt.keys == nil || rt.Config().DecryptOnIngest() {

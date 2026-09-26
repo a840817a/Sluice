@@ -13,7 +13,7 @@ import (
 
 // The LA_URL inside a PlayReady mspr:pro blob is what a player contacts for a
 // licence. Rewriting it to point at this gateway is the entire reason the licence
-// proxy exists: miss one and that player talks to the upstream licence server
+// proxy exists: miss one and that player talks to the licence server
 // directly, bypassing the proxy's headers, its credentials and its logging —
 // and it works, which is why nothing complains.
 
@@ -32,7 +32,7 @@ func proBlob(t *testing.T, xml string) string {
 func laURLsIn(t *testing.T, doc string) []string {
 	t.Helper()
 	var out []string
-	// <mspr:pro> is the usual upstream spelling; <pro ...> covers an upstream
+	// <mspr:pro> is the usual origin spelling; <pro ...> covers an origin
 	// that binds the namespace as the default on the element itself.
 	for _, re := range []*regexp.Regexp{
 		regexp.MustCompile(`(?s)<mspr:pro>(.*?)</mspr:pro>`),
@@ -63,10 +63,10 @@ const wrmHeader = `<WRMHEADER xmlns="http://schemas.microsoft.com/DRM/2007/03/Pl
 	`<LA_URL>https://upstream.example/license</LA_URL>` +
 	`<CHECKSUM>abcdefgh</CHECKSUM></DATA></WRMHEADER>`
 
-// The end that matters: no player is ever handed the upstream licence server's
+// The end that matters: no player is ever handed the licence server's
 // address. This asserts the result in the output rather than the rewrite that
 // produces it.
-func TestGeneratedManifestNeverPointsAtTheUpstreamLicenceServer(t *testing.T) {
+func TestGeneratedManifestNeverPointsAtTheLicenceServer(t *testing.T) {
 	data, err := os.ReadFile("../../testdata/manifest.mpd")
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
@@ -76,13 +76,13 @@ func TestGeneratedManifestNeverPointsAtTheUpstreamLicenceServer(t *testing.T) {
 		t.Fatalf("parse fixture: %v", err)
 	}
 
-	const upstream = "https://dummy.drmasp-nextscape.net/license"
+	const licenseServer = "https://dummy.drmasp-nextscape.net/license"
 	if urls := laURLsIn(t, string(data)); len(urls) == 0 {
 		t.Fatal("the fixture carries no LA_URL, so this test proves nothing")
 	} else {
 		for _, u := range urls {
-			if u != upstream {
-				t.Fatalf("fixture LA_URL = %q, want %q — update this test", u, upstream)
+			if u != licenseServer {
+				t.Fatalf("fixture LA_URL = %q, want %q — update this test", u, licenseServer)
 			}
 		}
 	}
@@ -102,8 +102,8 @@ func TestGeneratedManifestNeverPointsAtTheUpstreamLicenceServer(t *testing.T) {
 		t.Fatal("the generated manifest carries no LA_URL at all; protection signalling was lost")
 	}
 	for _, u := range urls {
-		if u == upstream {
-			t.Error("a player following this manifest would contact the upstream licence " +
+		if u == licenseServer {
+			t.Error("a player following this manifest would contact the licence " +
 				"server directly, bypassing the gateway's proxy")
 		}
 		if u != gateway {
@@ -112,7 +112,7 @@ func TestGeneratedManifestNeverPointsAtTheUpstreamLicenceServer(t *testing.T) {
 	}
 }
 
-// The same assertion for a minimal upstream that writes the namespace-prefixed
+// The same assertion for a minimal origin that writes the namespace-prefixed
 // spelling. The parser keeps ContentProtection elements as source bytes, so
 // <mspr:pro> reaches the rewrite spelled exactly so, and the rewrite has to
 // find the element by namespace rather than by its literal name.
@@ -154,7 +154,7 @@ func TestGeneratedManifestRewritesTheNamespacePrefixedSpelling(t *testing.T) {
 	}
 	for _, u := range urls {
 		if u != gateway {
-			t.Errorf("LA_URL = %q, want the gateway's proxy %q — an <mspr:pro> upstream "+
+			t.Errorf("LA_URL = %q, want the gateway's proxy %q — an <mspr:pro> origin "+
 				"is still pointing players at its own licence server", u, gateway)
 		}
 	}

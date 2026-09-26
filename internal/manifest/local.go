@@ -163,8 +163,8 @@ func GenerateLocalMPD(orig *imdp.ParsedMPD, snap index.Snapshot, channelDir stri
 	}
 
 	// The duration describes what is actually on disk, which for a channel that
-	// lost segments is shorter than what the upstream advertised. Announcing
-	// the upstream's figure would describe an asset this file cannot deliver.
+	// lost segments is shorter than what the origin advertised. Announcing
+	// the origin's figure would describe an asset this file cannot deliver.
 	doc.MediaPresentationDuration = fmt.Sprintf("PT%.3fS", maxEndSec)
 
 	out, err := xml.MarshalIndent(doc, "", "  ")

@@ -77,8 +77,8 @@ var modeTransitions = map[modeTransition]struct {
 //
 // The suppression lives here because it is a rule about the mode: it decides
 // whether the channel may leave Live on its own. A channel restored to live
-// would otherwise fall straight back into VOD, since its upstream is normally
-// still finished; the suppression holds it until the upstream produces a new
+// would otherwise fall straight back into VOD, since its origin is normally
+// still finished; the suppression holds it until the origin produces a new
 // segment, or an operator asks for the transition by hand.
 type channelModeMachine struct {
 	mode atomic.Int32 // ChannelMode
@@ -102,7 +102,7 @@ func (c *channelModeMachine) begin(initial ChannelMode, suppress bool, baseline 
 // Mode returns the current Channel mode.
 func (c *channelModeMachine) Mode() ChannelMode { return ChannelMode(c.mode.Load()) }
 
-// PromoteStatic moves a live channel to static ingesting, once its upstream
+// PromoteStatic moves a live channel to static ingesting, once its origin
 // has shown itself to be a finished asset.
 func (c *channelModeMachine) PromoteStatic() (from ChannelMode, ok bool) {
 	return c.apply(transitionPromoteStatic)

@@ -139,7 +139,7 @@ func TestEnqueueNewIdenticalReloadAddsNothing(t *testing.T) {
 }
 
 func TestEnqueueNewTreatsSequenceRewindAsReset(t *testing.T) {
-	// An upstream encoder restart rewinds EXT-X-MEDIA-SEQUENCE. Segment 5 after
+	// An origin encoder restart rewinds EXT-X-MEDIA-SEQUENCE. Segment 5 after
 	// the restart has nothing to do with segment 5 before it, so the channel
 	// must move to a new period instead of silently deduplicating the new
 	// segments away — that is what would stall ingest indefinitely.
@@ -174,7 +174,7 @@ func TestEnqueueNewTreatsSequenceRewindAsReset(t *testing.T) {
 }
 
 func TestEnqueueNewSurvivesWindowJump(t *testing.T) {
-	// The gateway fell behind and the upstream window moved past it. Ingest
+	// The gateway fell behind and the origin's window moved past it. Ingest
 	// must resume at the new window rather than refuse the segments.
 	w := newTestWatcher()
 	st := &variantState{}
@@ -235,7 +235,7 @@ func TestEnqueueNewDetectsFMP4ViaMap(t *testing.T) {
 }
 
 func TestSegmentPriorityFavoursOlderSegments(t *testing.T) {
-	// Older segments are closest to falling out of the upstream window, so they
+	// Older segments are closest to falling out of the origin's window, so they
 	// must be fetched first. Lower priority value = more urgent.
 	if segmentPriority(100) >= segmentPriority(101) {
 		t.Error("older segment must have the more urgent priority")

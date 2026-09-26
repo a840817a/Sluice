@@ -72,10 +72,10 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 		windowDepth = 24 * time.Hour
 	}
 
-	// An fMP4 HLS channel has no upstream MPD; synthesize one from the
+	// An fMP4 HLS channel has no origin MPD; synthesize one from the
 	// discovered variants and the segment index so the DASH output is generated
 	// from the very same files the HLS output serves. DASH channels use the
-	// real upstream MPD.
+	// real origin MPD.
 	var p *imdp.ParsedMPD
 	if sv.IsHLSSource {
 		p = s.synthesizeHLSManifest(sv, snap, isVOD, windowDepth)
@@ -129,7 +129,8 @@ func licenseProxyURL(baseURL, channelID, drmType string, enabled bool) string {
 }
 
 // handleLicense returns a handler that proxies DRM license requests to the
-// upstream URL configured for this channel. drmType is "playready" or "widevine".
+// license server URL configured for this channel. drmType is "playready" or
+// "widevine".
 func (s *Server) handleLicense(drmType string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		channelID := chi.URLParam(r, "channelID")
@@ -146,27 +147,27 @@ func (s *Server) handleLicense(drmType string) http.HandlerFunc {
 		// which also describes the channel's tracks.
 		cfg := rt.Config()
 
-		var upstreamURL string
+		var licenseServerURL string
 		switch drmType {
 		case "playready":
 			if !cfg.PlayReadyEnabled() {
 				http.Error(w, "playready disabled", http.StatusForbidden)
 				return
 			}
-			upstreamURL = cfg.PlayReadyLicenseURL
+			licenseServerURL = cfg.PlayReadyLicenseURL
 		case "widevine":
 			if !cfg.WidevineEnabled() {
 				http.Error(w, "widevine disabled", http.StatusForbidden)
 				return
 			}
-			upstreamURL = cfg.WidevineLicenseURL
+			licenseServerURL = cfg.WidevineLicenseURL
 		}
-		if upstreamURL == "" {
+		if licenseServerURL == "" {
 			http.Error(w, drmType+" license URL not configured", http.StatusServiceUnavailable)
 			return
 		}
 
-		proxy := license.NewProxy(upstreamURL, ch.HeaderMap(cfg.LicenseHeaders), cfg.ForwardClientIP)
+		proxy := license.NewProxy(licenseServerURL, ch.HeaderMap(cfg.LicenseHeaders), cfg.ForwardClientIP)
 		proxy.Handler()(w, r)
 	}
 }

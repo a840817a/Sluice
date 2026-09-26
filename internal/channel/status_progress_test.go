@@ -156,7 +156,7 @@ func TestBuildProgressSurfacesErrors(t *testing.T) {
 }
 
 // TestBuildTracksCoversEveryIndexedRep pins that the index, not the manifest,
-// decides which tracks exist. A representation dropped upstream still has
+// decides which tracks exist. A representation dropped by the origin still has
 // segments on disk and still serves, so hiding it would misreport the channel.
 func TestBuildTracksCoversEveryIndexedRep(t *testing.T) {
 	rt := &Runtime{ID: "ch1", Index: statusIndex(t)}

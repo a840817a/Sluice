@@ -57,7 +57,7 @@ func TestProjectPublishedSegmentsAppliesWindowAndSafeEdge(t *testing.T) {
 
 func TestDynamicMinimumUpdatePeriodFallback(t *testing.T) {
 	if got := dynamicMinimumUpdatePeriod(3*time.Second, 5*time.Second); got != 3*time.Second {
-		t.Fatalf("expected upstream MUP to win, got %s", got)
+		t.Fatalf("expected origin MUP to win, got %s", got)
 	}
 	if got := dynamicMinimumUpdatePeriod(0, 5*time.Second); got != 5*time.Second {
 		t.Fatalf("expected fallback MUP, got %s", got)

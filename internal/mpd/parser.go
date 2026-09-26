@@ -1,4 +1,4 @@
-// Package mpd handles parsing of upstream MPD files into our internal model.
+// Package mpd handles parsing of origin MPD files into our internal model.
 package mpd
 
 import (
@@ -31,7 +31,7 @@ const (
 	MediaUnknown MediaType = "unknown"
 )
 
-// ParsedMPD is our internal representation of an upstream MPD.
+// ParsedMPD is our internal representation of an origin MPD.
 type ParsedMPD struct {
 	Type                      PresentationType
 	AvailabilityStartTime     time.Time // only meaningful for dynamic

@@ -69,9 +69,9 @@ type Processor struct {
 	// sidecarAppends counts metadata records written per representation since
 	// that representation's file was last compacted.
 	sidecarAppends map[string]int
-	// warmedKeys tracks upstream key URIs already fetched into the key cache, so
+	// warmedKeys tracks key server URIs already fetched into the key cache, so
 	// a passthrough channel captures each key on disk exactly once while the
-	// upstream is still alive. Guarded by warmedMu because the reset-on-failure
+	// key server is still alive. Guarded by warmedMu because the reset-on-failure
 	// happens in a background goroutine.
 	warmedKeys map[string]bool
 	warmedMu   sync.Mutex
@@ -185,8 +185,8 @@ func (p *Processor) handle(res fetch.Result) {
 		data = plain
 	} else if task.Encrypted {
 		// Passthrough: the ciphertext is stored as-is, but the key is captured
-		// into the (disk-backed) cache now, while the upstream is reachable, so
-		// the channel can still serve the key after the upstream goes away.
+		// into the (disk-backed) cache now, while the key server is reachable, so
+		// the channel can still serve the key after the key server goes away.
 		p.warmKey(task.KeyURI)
 	}
 
@@ -358,7 +358,7 @@ func (p *Processor) handle(res fetch.Result) {
 //
 // The cutoff is media time, not wall clock. A segment's EndSec comes from
 // tfdt/timescale — presentation time — so the window has to be measured from
-// the period's own live edge or a channel whose upstream clock differs from
+// the period's own live edge or a channel whose origin's clock differs from
 // ours expires the wrong segments.
 func expiryCutoff(cfg config.Config, liveEdgeSec float64) (float64, bool) {
 	// Keeping every segment outranks the cleanup mode: a channel that will
@@ -493,10 +493,10 @@ func (p *Processor) persistSegmentMeta(task *queue.SegmentTask, seg index.Segmen
 	}
 }
 
-// warmKey fetches an upstream content key into the cache once, off the ingest
-// path so a slow key server never stalls segment processing. For passthrough
-// channels the cache is disk-backed, so this is what captures the key for
-// restart recovery.
+// warmKey fetches a content key from the key server into the cache once, off
+// the ingest path so a slow key server never stalls segment processing. For
+// passthrough channels the cache is disk-backed, so this is what captures the
+// key for restart recovery.
 func (p *Processor) warmKey(uri string) {
 	if uri == "" || p.keys == nil {
 		return

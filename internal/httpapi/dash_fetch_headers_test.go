@@ -94,7 +94,7 @@ func waitForOriginRequests(t *testing.T, rec *headerRecorder, kinds ...string) {
 	t.Logf("origin did not receive every expected request kind %v within 10s", kinds)
 }
 
-// channel.Config documents FetchHeaders as "injected into upstream MPD/segment
+// channel.Config documents FetchHeaders as "injected into origin MPD/segment
 // requests". The segment half was wired through fetch.Fetcher; the manifest
 // half was not — ingest.NewWatcher never received the headers, so a DASH
 // channel behind an authenticating origin could download segments but not its

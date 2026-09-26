@@ -1,4 +1,4 @@
-// Package dashingest polls an upstream DASH source: it watches the MPD and
+// Package dashingest polls a channel's DASH origin: it watches the MPD and
 // turns what it advertises into segment download tasks.
 //
 // It is the DASH counterpart of internal/hlsingest. Everything downstream of
@@ -258,7 +258,7 @@ func DiscoverTasks(
 
 // maxSegmentsPerPass bounds how many segments one discovery pass may derive for
 // a single representation. Every input to that count — timeShiftBufferDepth,
-// period duration, SegmentTimeline @r — comes from the upstream manifest, so a
+// period duration, SegmentTimeline @r — comes from the origin's manifest, so a
 // malformed or hostile one can otherwise ask for an allocation large enough to
 // OOM the gateway and take every channel down with it. 100k segments is roughly
 // two days of 2-second segments: far past any real DVR window or VOD asset,
@@ -277,8 +277,8 @@ type segRef struct {
 
 // segmentNumbers enumerates one representation's segments. The second result
 // reports that the enumeration hit maxSegmentsPerPass and is therefore a floor
-// rather than the true count — which matters upstream, because a progress total
-// derived from a floor must not be used to compute a percentage or an ETA.
+// rather than the true count — which matters to the caller, because a progress
+// total derived from a floor must not be used to compute a percentage or an ETA.
 func segmentNumbers(p *imdp.ParsedMPD, period *imdp.ParsedPeriod, tmpl *imdp.ParsedSegmentTemplate) ([]segRef, bool) {
 	if len(tmpl.Timeline) > 0 {
 		return segmentNumbersFromTimeline(p, period, tmpl)

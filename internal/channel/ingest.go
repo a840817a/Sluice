@@ -142,7 +142,7 @@ func newIngestPipeline(gwCfg gocfg.Config, id string, cfg Config) *ingestPipelin
 	return p
 }
 
-// attachSource picks the ingest driver for this channel's upstream protocol.
+// attachSource picks the ingest driver for this channel's source protocol.
 // Both feed the same broker, processor, store and index; only discovery and the
 // publish rule differ.
 //
@@ -163,8 +163,8 @@ func (p *ingestPipeline) attachSource(id string, cfg Config, chGwCfg gocfg.Confi
 	p.hls = hw
 
 	// One key cache per channel, shared by decrypt-on-ingest and the key proxy,
-	// so a key is fetched from the upstream server at most once. Passthrough
-	// channels persist keys to disk so playback survives the upstream key server
+	// so a key is fetched from the key server at most once. Passthrough
+	// channels persist keys to disk so playback survives the key server
 	// going away; decrypt channels never serve keys and keep them in memory only.
 	keyStorePath := ""
 	if !cfg.DecryptOnIngest() {
@@ -291,7 +291,7 @@ func (c *channelIngest) Join(ctx context.Context) bool {
 
 // launchIngest starts the channel's goroutines: its ingest — the fetch pool,
 // the processor, and the supervisor that keeps the source running — and the
-// watch for a finished upstream, which lives as long as the source does.
+// watch for a finished origin, which lives as long as the source does.
 //
 // Every goroutine is counted in rt.wg, which is what lets Stop join them rather
 // than merely cancel them — see Stop for why that matters.
@@ -302,15 +302,15 @@ func (m *Manager) launchIngest(sourceCtx, poolCtx, processorCtx context.Context,
 		func() { m.superviseSource(sourceCtx, rt, cfg) },
 	)
 	rt.wg.Add(1)
-	go func() { defer rt.wg.Done(); m.awaitStaticUpstream(sourceCtx, rt) }()
+	go func() { defer rt.wg.Done(); m.awaitStaticOrigin(sourceCtx, rt) }()
 }
 
-// staticUpstreamPollInterval is how often a running channel is asked whether
-// its upstream turned out to be a finished asset.
-const staticUpstreamPollInterval = time.Second
+// staticOriginPollInterval is how often a running channel is asked whether
+// its origin turned out to be a finished asset.
+const staticOriginPollInterval = time.Second
 
-// awaitStaticUpstream moves a channel into ModeStaticIngesting as soon as the
-// watcher has seen that the upstream is a finished asset.
+// awaitStaticOrigin moves a channel into ModeStaticIngesting as soon as the
+// watcher has seen that the origin is a finished asset.
 //
 // superviseSource also sets that mode, but only once the source returns, and
 // the two used to be the same instant: enumeration was a tight push loop that
@@ -324,11 +324,11 @@ const staticUpstreamPollInterval = time.Second
 // return and the pipeline to drain, because that is what says the work is done.
 // A channel whose auto-VOD is suppressed is left alone, matching the same
 // exemption in superviseSource.
-func (m *Manager) awaitStaticUpstream(ctx context.Context, rt *Runtime) {
+func (m *Manager) awaitStaticOrigin(ctx context.Context, rt *Runtime) {
 	if rt.Source == nil {
 		return
 	}
-	ticker := time.NewTicker(staticUpstreamPollInterval)
+	ticker := time.NewTicker(staticOriginPollInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -348,10 +348,10 @@ func (m *Manager) awaitStaticUpstream(ctx context.Context, rt *Runtime) {
 }
 
 // staticIngestVisible reports whether a live channel should already be shown as
-// ingesting a finished asset: the upstream has said so, and this channel is not
+// ingesting a finished asset: the origin has said so, and this channel is not
 // one whose auto-VOD was deliberately suppressed.
-func staticIngestVisible(upstreamFinished, autoVODAllowed bool) bool {
-	return upstreamFinished && autoVODAllowed
+func staticIngestVisible(originFinished, autoVODAllowed bool) bool {
+	return originFinished && autoVODAllowed
 }
 
 // superviseSource runs the channel's source, restarting it with backoff until
@@ -374,7 +374,7 @@ func (m *Manager) superviseSource(ctx context.Context, rt *Runtime, cfg Config) 
 			// transition.
 			//
 			// Unless this channel was just restored to live, in which case the
-			// upstream is expected to still be finished: fall through to the
+			// origin is expected to still be finished: fall through to the
 			// backoff and keep re-running the source, so that a stream which
 			// does come back is picked up (and lifts the suppression) instead
 			// of the restore being undone within seconds.
@@ -394,7 +394,7 @@ func (m *Manager) superviseSource(ctx context.Context, rt *Runtime, cfg Config) 
 			if cfg.IsVOD {
 				return
 			}
-			// awaitStaticUpstream may have promoted the channel already.
+			// awaitStaticOrigin may have promoted the channel already.
 			if from, ok := rt.modes.PromoteStatic(); ok || from == ModeStaticIngesting {
 				if rt.StaticIngestStartTime().IsZero() {
 					rt.setStaticIngestStart(time.Now())

@@ -9,7 +9,7 @@ import (
 )
 
 // The rebuild reads period and representation IDs back from the directories
-// the store named after them (ADR-0006): encoded names decode to the upstream
+// the store named after them (ADR-0006): encoded names decode to the origin
 // ID, and a raw name written before the encoding existed still reads as the ID
 // it was.
 func TestRebuildReadsIDsBackFromDirectoryNames(t *testing.T) {

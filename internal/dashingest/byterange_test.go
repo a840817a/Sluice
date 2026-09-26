@@ -3,7 +3,7 @@ package dashingest
 import "testing"
 
 // parseByteRange feeds SegmentBase/SegmentList byte ranges straight from the
-// upstream MPD, so a malformed range must be rejected rather than silently
+// origin's MPD, so a malformed range must be rejected rather than silently
 // turned into a range that reads the wrong bytes.
 func TestParseByteRange(t *testing.T) {
 	tests := []struct {

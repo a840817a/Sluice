@@ -16,7 +16,7 @@ package channel
 // hot-applying it would actually produce wrong behaviour.
 func RestartRequired(old, next Config, mode ChannelMode) []string {
 	// A VOD channel has no ingest goroutines at all: Start returns early once
-	// the index is rebuilt. Nothing is watching an upstream, so the fields that
+	// the index is rebuilt. Nothing is watching an origin, so the fields that
 	// only ever configure ingest are inert and safe to swap. They still matter
 	// for the *next* start, which is exactly what the store already records.
 	//

@@ -32,9 +32,9 @@ type HLSSynthOptions struct {
 	TimeShiftBufferDepth time.Duration
 }
 
-// SynthesizeHLSMPD builds the upstream manifest an HLS source does not have.
+// SynthesizeHLSMPD builds the MPD an HLS source does not have.
 //
-// The gateway's MPD generator is written against a parsed upstream MPD. An HLS
+// The gateway's MPD generator is written against a parsed origin MPD. An HLS
 // source has none, but everything the generator actually needs is either known
 // from the master playlist (representation IDs, bandwidth, codecs, resolution)
 // or already in the segment index (timing). Producing a stand-in ParsedMPD lets

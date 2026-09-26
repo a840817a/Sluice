@@ -161,7 +161,7 @@ func TestNewGatewayPersistsVODArtifacts(t *testing.T) {
 	}
 	t.Cleanup(gw.manager.StopAll)
 
-	// The restore loop started the channel; the upstream MPD is static, so the
+	// The restore loop started the channel; the origin's MPD is static, so the
 	// channel ingests everything and transitions to VOD once the broker drains.
 	if gw.manager.Get("gwvod") == nil {
 		t.Fatal("newGateway did not start the enabled channel from channels.json")
@@ -190,7 +190,7 @@ func TestNewGatewayPersistsVODArtifacts(t *testing.T) {
 	if !strings.Contains(got, `type="static"`) {
 		t.Errorf("saved manifest is not static:\n%s", truncateForLog(got, 400))
 	}
-	// And it must address this gateway, not the upstream origin.
+	// And it must address this gateway, not the origin.
 	if !strings.Contains(got, "v1/channels/gwvod/segments/") {
 		t.Errorf("saved manifest does not point at this gateway:\n%s", truncateForLog(got, 400))
 	}

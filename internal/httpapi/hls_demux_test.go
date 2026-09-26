@@ -132,12 +132,12 @@ func TestDemuxedHLSAudioIngestedAndServed(t *testing.T) {
 		t.Fatalf("audio segment: got %d", aw.Code)
 	}
 	if !bytesEqual(aw.Body.Bytes(), tsSegment(100)) {
-		t.Error("audio segment 0 is not the upstream audio bytes")
+		t.Error("audio segment 0 is not the origin audio bytes")
 	}
 	vw := executeRequest(srv.handleSegment, http.MethodGet,
 		"/v1/channels/dx/segments/0/v0/0.ts",
 		map[string]string{"channelID": "dx", "periodID": "0", "repID": "v0", "segFile": "0.ts"})
 	if !bytesEqual(vw.Body.Bytes(), tsSegment(0)) {
-		t.Error("video segment 0 is not the upstream video bytes")
+		t.Error("video segment 0 is not the origin video bytes")
 	}
 }

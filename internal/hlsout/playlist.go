@@ -33,7 +33,7 @@ import (
 type MasterOptions struct {
 	GatewayBaseURL string
 	ChannelID      string
-	// IndependentSegments mirrors the upstream EXT-X-INDEPENDENT-SEGMENTS tag.
+	// IndependentSegments mirrors the origin's EXT-X-INDEPENDENT-SEGMENTS tag.
 	IndependentSegments bool
 	// Renditions are demuxed audio tracks, emitted as EXT-X-MEDIA and bound to
 	// variants by their AudioGroup.
@@ -59,7 +59,7 @@ type MediaOptions struct {
 	// KeyProxyBase is the base URL of this gateway's key proxy, e.g.
 	// "https://gw/v1/channels/ch1/key". Segments stored as ciphertext get an
 	// EXT-X-KEY pointing under it. When empty no key is advertised at all —
-	// publishing the upstream key URL instead would hand clients a credential
+	// publishing the key server's URL instead would hand clients a credential
 	// the gateway was meant to broker.
 	KeyProxyBase string
 }
@@ -79,7 +79,7 @@ type PeriodSegments struct {
 	First, Last uint64
 	RangeKnown  bool
 	// Discontinuities are the numbers of every segment the representation has
-	// ever published in this period that begins with an upstream
+	// ever published in this period that begins with an origin
 	// discontinuity (index.RepresentationState.Discontinuities). They let
 	// EXT-X-DISCONTINUITY-SEQUENCE keep counting a discontinuity whose segment
 	// has left the window. When RangeKnown is false they are taken from
@@ -133,7 +133,7 @@ type playlistEntry struct {
 // Within a period a segment keeps its own number, offset so that the period's
 // lowest number ever follows the previous period's highest: a stream that
 // continues its numbering across periods keeps its numbers, and one that
-// rewound after an upstream reset is numbered after what came before it
+// rewound after an origin reset is numbered after what came before it
 // instead of below it, which players would read as going backwards. Each
 // period contributes its contiguous run (contiguousRun) in the requested mode.
 func numberPeriods(periods []PeriodSegments, vod bool) []playlistEntry {
@@ -267,7 +267,7 @@ func Master(variants []hlsdesc.Variant, o MasterOptions) []byte {
 // Only a run of consecutive media sequence numbers is ever emitted: a playlist
 // that skips one desynchronises players. Which run is chosen depends on the
 // mode — see contiguousRun. Each period boundary inside the run is marked
-// with EXT-X-DISCONTINUITY and a fresh EXT-X-MAP, as is each upstream
+// with EXT-X-DISCONTINUITY and a fresh EXT-X-MAP, as is each origin
 // discontinuity, and EXT-X-DISCONTINUITY-SEQUENCE counts both kinds already
 // before it (discontinuitiesBefore).
 func Media(periods []PeriodSegments, o MediaOptions) []byte {
@@ -360,7 +360,7 @@ func Media(periods []PeriodSegments, o MediaOptions) []byte {
 // it keeps its discontinuity sequence number as the window slides.
 //
 // A discontinuity is either a period boundary — every period before head's
-// that holds segments ended in one — or an upstream discontinuity inside a
+// that holds segments ended in one — or an origin discontinuity inside a
 // period. One on a period's first segment is that period's boundary, or
 // opens the stream, and is not counted a second time.
 func discontinuitiesBefore(periods []PeriodSegments, head playlistEntry) int {
@@ -387,7 +387,7 @@ func discontinuitiesBefore(periods []PeriodSegments, head playlistEntry) int {
 //
 // The IV is always emitted explicitly rather than relying on the client
 // deriving it from the media sequence number: the gateway renumbers segments
-// relative to the upstream, so an implicit IV would be computed from the wrong
+// relative to the origin, so an implicit IV would be computed from the wrong
 // value and decryption would silently produce garbage.
 func keyLineFor(s index.SegmentState, keyProxyBase string) string {
 	if s.KeyURI == "" || keyProxyBase == "" {
@@ -416,8 +416,8 @@ func contiguousRun(segs []index.SegmentState, vod bool) []index.SegmentState {
 	// A repeated segment number is not a break in coverage, but it fails the
 	// "next == prev+1" test below and would truncate the playlist to a couple of
 	// segments — a silent stall for every player. The index collapses duplicates
-	// before they reach here; this keeps a regression upstream from turning into
-	// an outage.
+	// before they reach here; this keeps a regression in the index from turning
+	// into an outage.
 	uniq := sorted[:1]
 	for _, s := range sorted[1:] {
 		if s.SegNo == uniq[len(uniq)-1].SegNo {
@@ -444,7 +444,7 @@ func contiguousRun(segs []index.SegmentState, vod bool) []index.SegmentState {
 }
 
 // segmentDuration returns the segment's duration in seconds. For TS sources
-// this round-trips the upstream EXTINF, which was stored as a PTS span at
+// this round-trips the origin's EXTINF, which was stored as a PTS span at
 // timescale 90000.
 func segmentDuration(s index.SegmentState) float64 {
 	if s.Timescale == 0 {

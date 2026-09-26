@@ -5,7 +5,7 @@ import (
 	"sync/atomic"
 )
 
-// Headers supplies the per-channel upstream headers applied to every outbound
+// Headers supplies the per-channel origin headers applied to every outbound
 // request. It exists so a channel's credentials can be rotated while ingest is
 // running: the admin API swaps the whole set rather than restarting the channel,
 // which would reset the DVR window and the HLS media sequence.
@@ -60,11 +60,11 @@ func (a *AtomicHeaders) Snapshot() map[string]string {
 	return nil
 }
 
-// ApplyHeaders sets the current header set on req. Every upstream request in
+// ApplyHeaders sets the current header set on req. Every origin request in
 // this codebase goes through it, so rotation reaches segment fetches, manifest
 // and playlist polls, and AES key requests alike.
 //
-// h may be nil — channels with no upstream auth, and most tests, pass nil — and
+// h may be nil — channels with no origin auth, and most tests, pass nil — and
 // a nil interface cannot be called, so the check belongs here rather than at
 // each of the call sites.
 func ApplyHeaders(req *http.Request, h Headers) {

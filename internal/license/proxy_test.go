@@ -10,9 +10,9 @@ import (
 	"time"
 )
 
-// upstreamRecorder stands in for the DRM license server and records what the
+// licenseServerRecorder stands in for the DRM license server and records what the
 // proxy actually sent it.
-type upstreamRecorder struct {
+type licenseServerRecorder struct {
 	mu     sync.Mutex
 	gotReq *http.Request
 	gotBdy string
@@ -22,7 +22,7 @@ type upstreamRecorder struct {
 	headers map[string]string
 }
 
-func newUpstream(t *testing.T, rec *upstreamRecorder) *httptest.Server {
+func newLicenseServer(t *testing.T, rec *licenseServerRecorder) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
@@ -52,11 +52,11 @@ func serve(t *testing.T, p *Proxy, req *http.Request) *httptest.ResponseRecorder
 }
 
 // A license challenge is a POST. Anything else is a client that has misread the
-// protocol, and forwarding it would hand an arbitrary method to the upstream
-// license server.
+// protocol, and forwarding it would hand an arbitrary method to the license
+// server.
 func TestProxyRejectsNonPOST(t *testing.T) {
-	rec := &upstreamRecorder{body: "license"}
-	up := newUpstream(t, rec)
+	rec := &licenseServerRecorder{body: "license"}
+	up := newLicenseServer(t, rec)
 	p := NewProxy(up.URL, nil, false)
 
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodHead} {
@@ -68,15 +68,15 @@ func TestProxyRejectsNonPOST(t *testing.T) {
 		reached := rec.gotReq != nil
 		rec.mu.Unlock()
 		if reached {
-			t.Errorf("%s reached the upstream license server", method)
+			t.Errorf("%s reached the license server", method)
 		}
 	}
 }
 
 // The challenge is opaque bytes; the proxy must not reinterpret it.
 func TestProxyForwardsBodyVerbatim(t *testing.T) {
-	rec := &upstreamRecorder{body: "ok"}
-	up := newUpstream(t, rec)
+	rec := &licenseServerRecorder{body: "ok"}
+	up := newLicenseServer(t, rec)
 	p := NewProxy(up.URL, nil, false)
 
 	challenge := "\x00\x01binary challenge\xff"
@@ -86,10 +86,10 @@ func TestProxyForwardsBodyVerbatim(t *testing.T) {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	if rec.gotBdy != challenge {
-		t.Errorf("upstream body = %q, want %q", rec.gotBdy, challenge)
+		t.Errorf("request body seen by the license server = %q, want %q", rec.gotBdy, challenge)
 	}
 	if rec.gotReq.Method != http.MethodPost {
-		t.Errorf("upstream method = %s, want POST", rec.gotReq.Method)
+		t.Errorf("method seen by the license server = %s, want POST", rec.gotReq.Method)
 	}
 }
 
@@ -97,8 +97,8 @@ func TestProxyForwardsBodyVerbatim(t *testing.T) {
 // what of the viewer's request reaches a third-party license server. Both halves
 // matter — what crosses, and what does not.
 func TestProxyForwardsOnlyAllowlistedHeaders(t *testing.T) {
-	rec := &upstreamRecorder{body: "ok"}
-	up := newUpstream(t, rec)
+	rec := &licenseServerRecorder{body: "ok"}
+	up := newLicenseServer(t, rec)
 	p := NewProxy(up.URL, nil, false)
 
 	req := httptest.NewRequest(http.MethodPost, "/license", strings.NewReader("c"))
@@ -127,7 +127,7 @@ func TestProxyForwardsOnlyAllowlistedHeaders(t *testing.T) {
 	defer rec.mu.Unlock()
 	for k, want := range forwarded {
 		if got := rec.gotReq.Header.Get(k); got != want {
-			t.Errorf("upstream %s = %q, want %q", k, got, want)
+			t.Errorf("license server saw %s = %q, want %q", k, got, want)
 		}
 	}
 	for k, clientValue := range dropped {
@@ -135,15 +135,15 @@ func TestProxyForwardsOnlyAllowlistedHeaders(t *testing.T) {
 		// on the outgoing request. What must not happen is the client's value
 		// crossing over.
 		if got := rec.gotReq.Header.Get(k); got == clientValue {
-			t.Errorf("the client's %s (%q) reached the upstream license server; it is not on the allowlist", k, got)
+			t.Errorf("the client's %s (%q) reached the license server; it is not on the allowlist", k, got)
 		}
 	}
 }
 
 // Per-channel credentials for the license server itself.
 func TestProxyInjectsConfiguredHeaders(t *testing.T) {
-	rec := &upstreamRecorder{body: "ok"}
-	up := newUpstream(t, rec)
+	rec := &licenseServerRecorder{body: "ok"}
+	up := newLicenseServer(t, rec)
 	p := NewProxy(up.URL, map[string]string{
 		"X-License-Token": "channel-secret",
 		"Authorization":   "Bearer gateway-owned",
@@ -197,8 +197,8 @@ func TestProxyClientIPForwarding(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			rec := &upstreamRecorder{body: "ok"}
-			up := newUpstream(t, rec)
+			rec := &licenseServerRecorder{body: "ok"}
+			up := newLicenseServer(t, rec)
 			p := NewProxy(up.URL, nil, tc.forward)
 
 			req := httptest.NewRequest(http.MethodPost, "/license", strings.NewReader("c"))
@@ -219,13 +219,13 @@ func TestProxyClientIPForwarding(t *testing.T) {
 
 // The license server's answer is the product: status, headers and body all
 // belong to the player, including a refusal.
-func TestProxyPassesUpstreamResponseThrough(t *testing.T) {
-	rec := &upstreamRecorder{
+func TestProxyPassesLicenseServerResponseThrough(t *testing.T) {
+	rec := &licenseServerRecorder{
 		status:  http.StatusForbidden,
 		body:    "entitlement denied",
 		headers: map[string]string{"Content-Type": "application/octet-stream", "X-License-Reason": "no-subscription"},
 	}
-	up := newUpstream(t, rec)
+	up := newLicenseServer(t, rec)
 	p := NewProxy(up.URL, nil, false)
 
 	w := serve(t, p, httptest.NewRequest(http.MethodPost, "/license", strings.NewReader("c")))
@@ -241,9 +241,9 @@ func TestProxyPassesUpstreamResponseThrough(t *testing.T) {
 	}
 }
 
-// An unreachable license server is an upstream failure, not a gateway failure,
-// and the player must not be handed the internal error text.
-func TestProxyUpstreamFailureIsBadGateway(t *testing.T) {
+// An unreachable license server is the remote side's failure, not the
+// gateway's, and the player must not be handed the internal error text.
+func TestProxyLicenseServerFailureIsBadGateway(t *testing.T) {
 	down := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	downURL := down.URL
 	down.Close() // nothing is listening now
@@ -255,13 +255,13 @@ func TestProxyUpstreamFailureIsBadGateway(t *testing.T) {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusBadGateway)
 	}
 	if strings.Contains(w.Body.String(), downURL) {
-		t.Errorf("response body leaks the upstream URL: %q", w.Body.String())
+		t.Errorf("response body leaks the license server URL: %q", w.Body.String())
 	}
 }
 
 // A channel configured with an unusable license URL is a configuration error,
 // and saying so is more useful than a bad gateway.
-func TestProxyBadUpstreamURLIsConfigurationError(t *testing.T) {
+func TestProxyBadLicenseServerURLIsConfigurationError(t *testing.T) {
 	p := NewProxy("://not-a-url", nil, false)
 	w := serve(t, p, httptest.NewRequest(http.MethodPost, "/license", strings.NewReader("c")))
 
@@ -275,7 +275,7 @@ func TestProxyBadUpstreamURLIsConfigurationError(t *testing.T) {
 // client; this test replaces it rather than waiting out the real 15 seconds,
 // which is available here because the test sits in the same package — the client
 // needs no injection seam for this.
-func TestProxyTimesOutASlowUpstream(t *testing.T) {
+func TestProxyTimesOutASlowLicenseServer(t *testing.T) {
 	release := make(chan struct{})
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-release // stall until the test is done

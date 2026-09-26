@@ -164,7 +164,7 @@ func (a *AdminServer) handleChannelStatus(w http.ResponseWriter, r *http.Request
 }
 
 // handleTransitionToVOD manually triggers a live→VOD transition for a channel.
-// Used when the upstream does not emit a type=static MPD signal.
+// Used when the origin does not emit a type=static MPD signal.
 //
 // POST /admin/api/channels/{channelID}/transition-to-vod
 func (a *AdminServer) handleTransitionToVOD(w http.ResponseWriter, r *http.Request) {
@@ -180,7 +180,7 @@ func (a *AdminServer) handleTransitionToVOD(w http.ResponseWriter, r *http.Reque
 }
 
 // handleRestoreToLive brings a VOD channel back to live ingest, undoing an
-// automatic transition that fired on an upstream hiccup.
+// automatic transition that fired on an origin hiccup.
 //
 // POST /admin/api/channels/{channelID}/restore-to-live
 func (a *AdminServer) handleRestoreToLive(w http.ResponseWriter, r *http.Request) {

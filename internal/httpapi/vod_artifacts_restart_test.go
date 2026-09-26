@@ -18,12 +18,12 @@ import (
 func TestDASHArtifactsSurviveRestartWithOriginOffline(t *testing.T) {
 	// A blocked artifact must not stop the channel completing as VOD. A
 	// required one is reported as a warning; the optional local export is
-	// isolated and reports nothing. "upstream_removed" writes everything, then
-	// loses the upstream snapshot before the restart, as a VOD written by an
+	// isolated and reports nothing. "origin_removed" writes everything, then
+	// loses the origin snapshot before the restart, as a VOD written by an
 	// older gateway can: restore then serves the saved manifest.
-	for _, name := range []string{"all_outputs", "local.mpd", "upstream.mpd", "manifest.mpd", "upstream_removed"} {
+	for _, name := range []string{"all_outputs", "local.mpd", "upstream.mpd", "manifest.mpd", "origin_removed"} {
 		blocked := name
-		if name == "all_outputs" || name == "upstream_removed" {
+		if name == "all_outputs" || name == "origin_removed" {
 			blocked = ""
 		}
 		t.Run(name, func(t *testing.T) {
@@ -67,8 +67,8 @@ func TestDASHArtifactsSurviveRestartWithOriginOffline(t *testing.T) {
 					t.Fatalf("artifact %s missing or empty: %v", file, err)
 				}
 			}
-			noUpstream := blocked == "upstream.mpd" || name == "upstream_removed"
-			if name == "upstream_removed" {
+			noOriginSnapshot := blocked == "upstream.mpd" || name == "origin_removed"
+			if name == "origin_removed" {
 				if err := os.Remove(filepath.Join(dataDir, id, "upstream.mpd")); err != nil {
 					t.Fatal(err)
 				}
@@ -82,13 +82,13 @@ func TestDASHArtifactsSurviveRestartWithOriginOffline(t *testing.T) {
 			if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `type="static"`) {
 				t.Fatalf("manifest after offline restart: %d %s", w.Code, w.Body.String())
 			}
-			if !noUpstream && h2.mgr.Get(id).Serving().ParsedMPD == nil {
-				t.Fatal("saved upstream MPD was not restored")
+			if !noOriginSnapshot && h2.mgr.Get(id).Serving().ParsedMPD == nil {
+				t.Fatal("saved origin MPD was not restored")
 			}
-			if noUpstream {
+			if noOriginSnapshot {
 				saved, err := os.ReadFile(filepath.Join(dataDir, id, "manifest.mpd"))
 				if err != nil || !bytes.Equal(saved, w.Body.Bytes()) {
-					t.Fatal("missing upstream MPD did not fall back to the saved served manifest")
+					t.Fatal("missing origin MPD did not fall back to the saved served manifest")
 				}
 			}
 			init := executeRequest(h2.srv.handleInit, http.MethodGet,

@@ -40,7 +40,7 @@ func get(t *testing.T, h http.Handler, path string) (int, []byte) {
 }
 
 // Two periods of one channel both hold segment 5 of representation v0, with
-// different content: what an upstream reset that rewinds the media sequence
+// different content: what an origin reset that rewinds the media sequence
 // leaves on disk. Each period's segment and init must be reachable, and each
 // URL must name exactly one file.
 func TestSegmentAndInitURLsNameOnePeriod(t *testing.T) {
@@ -139,11 +139,11 @@ func resetSegment(name string) []byte {
 
 var playlistURI = regexp.MustCompile(`(?m)^http://gw\.test(/\S+)$`)
 
-// An upstream reset starts a new period whose numbers rewind below the old
+// An origin reset starts a new period whose numbers rewind below the old
 // ones. The live playlist must move on to the new stream after a
 // discontinuity, keep media sequence numbers increasing, and every URL it
 // lists must return the segment it stands for.
-func TestLivePlaylistFollowsUpstreamReset(t *testing.T) {
+func TestLivePlaylistFollowsOriginReset(t *testing.T) {
 	var reset atomic.Bool
 	origin := resettingCMAFOrigin(t, &reset)
 	cfg := config.Config{
@@ -223,7 +223,7 @@ func mediaSequence(t *testing.T, playlist string) int {
 	return n
 }
 
-// DASH period IDs are arbitrary upstream strings. One that needs encoding must
+// DASH period IDs are arbitrary strings the origin assigns. One that needs encoding must
 // still reach its own files through the real router, whichever form of the
 // path segment the router hands the handler.
 func TestUnusualPeriodIDReachesItsSegment(t *testing.T) {
@@ -258,8 +258,8 @@ func TestUnusualPeriodIDReachesItsSegment(t *testing.T) {
 
 // The playlist numbers a later period after an earlier one's lifetime range,
 // so the handler must pass that range on rather than let it be recomputed
-// from whatever the ring still holds, and must order epochs numerically. The
-// same holds for the lifetime record of upstream discontinuities, which
+// from whatever the ring still holds, and must order periods numerically. The
+// same holds for the lifetime record of origin discontinuities, which
 // EXT-X-DISCONTINUITY-SEQUENCE counts.
 func TestPeriodSegmentsCarryLifetimeRangeInOrder(t *testing.T) {
 	ci := index.NewChannelIndex(index.PublishAVBarrier)
@@ -285,7 +285,7 @@ func TestPeriodSegmentsCarryLifetimeRangeInOrder(t *testing.T) {
 }
 
 // A segment the index committed but never published — a video segment whose
-// audio never arrived before an upstream reset, say — is not part of what the
+// audio never arrived before an origin reset, say — is not part of what the
 // playlist can list. It must not open a gap in the media sequence at a period
 // boundary, or the playlist cuts at the gap and loses whole periods.
 //

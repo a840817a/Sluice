@@ -2,7 +2,7 @@
 //
 // The gateway rewrites the LA_URL inside the mspr:pro blob to point to itself,
 // so players POST license challenges here. This handler forwards the request
-// body verbatim to the upstream license server and pipes the response back.
+// body verbatim to the license server and pipes the response back.
 package license
 
 import (
@@ -16,21 +16,21 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// Proxy forwards DRM license requests to the upstream license server.
+// Proxy forwards DRM license requests to the license server.
 type Proxy struct {
-	upstreamURL     string
-	extraHeaders    map[string]string // injected into every upstream license request
-	client          *http.Client
-	forwardClientIP bool
+	licenseServerURL string
+	extraHeaders     map[string]string // injected into every license request
+	client           *http.Client
+	forwardClientIP  bool
 }
 
-// NewProxy creates a license Proxy. headers are injected into every upstream request.
-func NewProxy(upstreamURL string, headers map[string]string, forwardClientIP bool) *Proxy {
+// NewProxy creates a license Proxy. headers are injected into every request.
+func NewProxy(licenseServerURL string, headers map[string]string, forwardClientIP bool) *Proxy {
 	return &Proxy{
-		upstreamURL:     upstreamURL,
-		extraHeaders:    headers,
-		forwardClientIP: forwardClientIP,
-		client:          &http.Client{Timeout: 15 * time.Second},
+		licenseServerURL: licenseServerURL,
+		extraHeaders:     headers,
+		forwardClientIP:  forwardClientIP,
+		client:           &http.Client{Timeout: 15 * time.Second},
 	}
 }
 
@@ -46,7 +46,7 @@ func (p *Proxy) Handler() http.HandlerFunc {
 
 		channelID := chi.URLParam(r, "channelID")
 
-		target, err := url.Parse(p.upstreamURL)
+		target, err := url.Parse(p.licenseServerURL)
 		if err != nil {
 			slog.Error("license proxy: bad upstream URL", "err", err)
 			http.Error(w, "proxy configuration error", http.StatusInternalServerError)
@@ -72,7 +72,7 @@ func (p *Proxy) Handler() http.HandlerFunc {
 			}
 		}
 
-		// Inject upstream license headers.
+		// Inject license server headers.
 		for k, v := range p.extraHeaders {
 			req.Header.Set(k, v)
 		}

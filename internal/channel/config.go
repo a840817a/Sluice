@@ -8,11 +8,11 @@ type Header struct {
 
 // Source protocols a channel can ingest from.
 const (
-	// SourceDASH ingests an upstream MPD. It is the historical behavior and the
+	// SourceDASH ingests an origin MPD. It is the historical behavior and the
 	// meaning of an empty SourceType, so channels.json files written before
 	// HLS support keep working unchanged.
 	SourceDASH = "dash"
-	// SourceHLS ingests an upstream HLS master or media playlist.
+	// SourceHLS ingests an origin HLS master or media playlist.
 	SourceHLS = "hls"
 )
 
@@ -31,14 +31,14 @@ const (
 // renamed or retagged field breaks both stored configs and API clients.
 type Config struct {
 	Title string `json:"title,omitempty"`
-	// SourceType selects the upstream protocol: "dash" (or empty) or "hls".
+	// SourceType selects the source protocol: "dash" (or empty) or "hls".
 	SourceType string `json:"source_type,omitempty"`
 	// HLSKeyMode selects how AES-128 encrypted HLS sources are handled:
 	// "passthrough" (or empty) keeps segments encrypted on disk and rewrites
 	// EXT-X-KEY to the gateway's key proxy; "decrypt" decrypts during ingest and
 	// republishes in the clear.
 	HLSKeyMode string `json:"hls_key_mode,omitempty"`
-	// MPDURL is the upstream source URL. Despite the name it holds the HLS
+	// MPDURL is the source URL. Despite the name it holds the HLS
 	// playlist URL for HLS channels too; the field keeps its original name and
 	// JSON tag so existing stored configs and the admin UI stay valid.
 	MPDURL              string `json:"mpd_url"`
@@ -48,7 +48,7 @@ type Config struct {
 	// without these fields keep the historical default: both DRM systems enabled.
 	EnablePlayReady *bool    `json:"enable_playready,omitempty"`
 	EnableWidevine  *bool    `json:"enable_widevine,omitempty"`
-	FetchHeaders    []Header `json:"fetch_headers,omitempty"`   // injected into upstream MPD/segment requests
+	FetchHeaders    []Header `json:"fetch_headers,omitempty"`   // injected into origin MPD/segment requests
 	LicenseHeaders  []Header `json:"license_headers,omitempty"` // injected into DRM license proxy requests
 	ForwardClientIP bool     `json:"forward_client_ip"`
 	Enabled         bool     `json:"enabled"`
@@ -62,7 +62,7 @@ type Config struct {
 	// "window": only an explicit false selects the sliding window.
 	//
 	// It does not decide whether the channel transitions to VOD when the
-	// upstream ends; that happens either way. It decides how much history the
+	// origin ends; that happens either way. It decides how much history the
 	// live channel still holds when it does.
 	KeepAllSegments *bool `json:"keep_all_segments,omitempty"`
 }
@@ -111,7 +111,7 @@ func (c Config) canonicalHLSKeyMode() string {
 
 // DecryptOnIngest reports whether encrypted HLS segments should be decrypted
 // before being stored. Defaults to false (passthrough) so segments keep their
-// upstream protection unless the operator opts out of it.
+// origin protection unless the operator opts out of it.
 func (c Config) DecryptOnIngest() bool { return c.HLSKeyMode == KeyModeDecrypt }
 
 // PlayReadyEnabled returns true unless the channel explicitly disables

@@ -1,4 +1,4 @@
-// Package hlsingest polls an upstream HLS source and feeds its segments into
+// Package hlsingest polls a channel's HLS origin and feeds its segments into
 // the same download queue, store, and index the DASH ingest path uses.
 //
 // It is the HLS counterpart of internal/dashingest.Watcher. Segments are never
@@ -110,7 +110,7 @@ const AudioASID = "1"
 // indexed under.
 const SubtitleASID = "2"
 
-// Watcher polls an upstream HLS source and enqueues its segments.
+// Watcher polls a channel's HLS origin and enqueues its segments.
 type Watcher struct {
 	cfg       config.Config
 	ci        *index.ChannelIndex
@@ -118,7 +118,7 @@ type Watcher struct {
 	channelID string
 	sourceURL string
 	// headers is shared with the channel's fetcher and key cache and swapped
-	// atomically by the admin API, so rotating upstream credentials reaches
+	// atomically by the admin API, so rotating origin credentials reaches
 	// playlist polls without restarting the channel (which would reset each
 	// variant's media sequence).
 	headers fetch.Headers
@@ -127,7 +127,7 @@ type Watcher struct {
 	// encrypted task so the processor never needs to know channel config.
 	decryptOnIngest bool
 	// statePath is where the discovered source description is persisted so a
-	// restart can serve playlists without re-contacting the upstream.
+	// restart can serve playlists without re-contacting the origin.
 	statePath string
 
 	// prog records ingest progress for the admin UI. Nil is valid and means
@@ -151,14 +151,14 @@ type Watcher struct {
 	// first-poll-only and means something else.
 	pollTargets  int
 	endedTargets map[string]bool
-	// keyURIs maps the published key ID back to the upstream key URI. Only URIs
+	// keyURIs maps the published key ID back to the key server URI. Only URIs
 	// actually seen in this channel's playlists are ever resolvable, which is
 	// what stops the key proxy from being turned into an open relay.
 	keyURIs map[string]string
-	// periodEpoch increments whenever the upstream restarts its media sequence.
+	// period increments whenever the origin restarts its media sequence.
 	// Rather than trying to reconcile rewound segment numbers against what is
 	// already indexed, a reset starts a fresh period with fresh state.
-	periodEpoch int
+	period int
 }
 
 // NewWatcher creates a Watcher for the given channel. sourceURL may be either a
@@ -190,15 +190,15 @@ func NewWatcher(
 	// immediately after a restart, including for channels resumed in VOD mode
 	// that never run discovery again.
 	w.loadState()
-	w.periodEpoch = latestPeriodEpoch(ci)
+	w.period = latestPeriod(ci)
 	return w
 }
 
-// latestPeriodEpoch returns the highest period epoch the index already holds,
+// latestPeriod returns the highest period number the index already holds,
 // or 0 for an empty index. A gateway restart is not a period boundary, so
 // ingest resumes in the period it was in when the gateway went down; starting
 // again at 0 would append new segments to the channel's first period.
-func latestPeriodEpoch(ci *index.ChannelIndex) int {
+func latestPeriod(ci *index.ChannelIndex) int {
 	latest := 0
 	for _, id := range ci.PeriodIDs() {
 		if n, err := strconv.Atoi(id); err == nil && n > latest {
@@ -208,7 +208,7 @@ func latestPeriodEpoch(ci *index.ChannelIndex) int {
 	return latest
 }
 
-// registerKey records an upstream key URI so the gateway's key proxy can later
+// registerKey records a key server URI so the gateway's key proxy can later
 // resolve its published ID back to it.
 func (w *Watcher) registerKey(uri string) {
 	if uri == "" {
@@ -225,7 +225,7 @@ func (w *Watcher) registerKey(uri string) {
 	}
 }
 
-// KeyURIForID resolves a published key ID to the upstream key URI. It returns
+// KeyURIForID resolves a published key ID to the key server URI. It returns
 // false for any ID that did not come from this channel's playlists.
 func (w *Watcher) KeyURIForID(id string) (string, bool) {
 	w.mu.Lock()
@@ -234,7 +234,7 @@ func (w *Watcher) KeyURIForID(id string) (string, bool) {
 	return uri, ok
 }
 
-// Description is what discovery has found in the upstream, read at one
+// Description is what discovery has found at the origin, read at one
 // instant.
 type Description struct {
 	// Variants are the video variants; Renditions and Subtitles the demuxed
@@ -243,7 +243,7 @@ type Description struct {
 	Variants   []hlsdesc.Variant
 	Renditions []hlsdesc.Rendition
 	Subtitles  []hlsdesc.Subtitle
-	// IndependentSegments reports whether the upstream master declared
+	// IndependentSegments reports whether the origin's master declared
 	// EXT-X-INDEPENDENT-SEGMENTS.
 	IndependentSegments bool
 	// FMP4 reports whether the source carries fMP4 segments rather than
@@ -295,12 +295,12 @@ func (w *Watcher) Describe() Description {
 	return d
 }
 
-// PeriodID returns the current period identifier. It changes when the upstream
+// PeriodID returns the current period identifier. It changes when the origin
 // restarts its media sequence.
 func (w *Watcher) PeriodID() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return fmt.Sprintf("%d", w.periodEpoch)
+	return fmt.Sprintf("%d", w.period)
 }
 
 // Run discovers the source's variants and then polls each variant's media
@@ -368,14 +368,14 @@ func (w *Watcher) PollTargets() int {
 	return w.pollTargets
 }
 
-// UpstreamIsVOD reports whether every playlist this watcher polls announced
+// OriginIsVOD reports whether every playlist this watcher polls announced
 // itself as a finished asset on its first poll.
 //
 // This is what the channel's mode is promoted on. It is deliberately not
 // EndListProgress: that counts variants whose *ingest* has finished, which a
 // paced producer does not reach until the asset is queued — far too late to say
 // what the channel has been doing all along.
-func (w *Watcher) UpstreamIsVOD() bool {
+func (w *Watcher) OriginIsVOD() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.pollTargets > 0 && len(w.vodVariantTotals) == w.pollTargets
@@ -517,14 +517,14 @@ type variantState struct {
 	// lastSeq is the highest media sequence number already enqueued.
 	lastSeq uint64
 	// lastMediaSequence is the previous playlist's EXT-X-MEDIA-SEQUENCE, used
-	// to detect an upstream restart.
+	// to detect an origin restart.
 	lastMediaSequence uint64
 	// ptsAccum is the running presentation time in TSTimescale units.
 	ptsAccum int64
 	// seen marks that at least one playlist has been processed.
 	seen bool
-	// epoch is the period epoch this state belongs to.
-	epoch int
+	// period is the period number this state belongs to.
+	period int
 	// resumed marks state seeded from the index at startup that has not yet
 	// seen a playlist. lastMediaSequence is unknown until then, so an origin
 	// restart during the gateway's downtime is detected from segment numbers.
@@ -545,14 +545,14 @@ type variantState struct {
 // current one's.
 func (w *Watcher) newVariantState(v variant) *variantState {
 	w.mu.Lock()
-	st := &variantState{epoch: w.periodEpoch}
+	st := &variantState{period: w.period}
 	w.mu.Unlock()
 
 	var maxSeg uint64
 	var endPTS int64
 	found := false
 
-	if rep := w.ci.FindRep(fmt.Sprintf("%d", st.epoch), v.asID, v.RepID); rep != nil {
+	if rep := w.ci.FindRep(fmt.Sprintf("%d", st.period), v.asID, v.RepID); rep != nil {
 		for _, s := range append(rep.Published(), rep.Committed()...) {
 			if !found || s.SegNo > maxSeg {
 				maxSeg, endPTS, found = s.SegNo, s.EndPTS, true
@@ -655,10 +655,10 @@ func (w *Watcher) pollVariant(ctx context.Context, v variant) {
 // as it sees EXT-X-ENDLIST — so every segment it names has one chance to be
 // queued and the producer must pace itself against the pipeline rather than
 // hand the broker more than it holds. A live playlist keeps the old behaviour:
-// shedding is how a channel survives an upstream it cannot keep up with, and
+// shedding is how a channel survives an origin it cannot keep up with, and
 // the next poll re-advertises whatever is still in the window.
 func (w *Watcher) enqueueNew(ctx context.Context, v variant, st *variantState, m *hlssrc.Media) int {
-	// An upstream restart rewinds the media sequence. Reconciling the new
+	// An origin restart rewinds the media sequence. Reconciling the new
 	// numbering against what is already indexed is not possible in general
 	// (segment N after the restart is unrelated to segment N before it), so the
 	// channel moves to a fresh period and the variant starts over.
@@ -684,7 +684,7 @@ func (w *Watcher) enqueueNew(ctx context.Context, v variant, st *variantState, m
 			"current", m.MediaSequence,
 			"across_restart", acrossRestart,
 		)
-		st.epoch = w.resetPeriodEpoch(st.epoch)
+		st.period = w.resetPeriod(st.period)
 		st.lastSeq, st.ptsAccum, st.seen = 0, 0, false
 	}
 	if len(m.Segments) > 0 {
@@ -694,11 +694,11 @@ func (w *Watcher) enqueueNew(ctx context.Context, v variant, st *variantState, m
 	}
 	st.lastMediaSequence = m.MediaSequence
 
-	periodID := fmt.Sprintf("%d", st.epoch)
+	periodID := fmt.Sprintf("%d", st.period)
 	deadline := playlistDeadline(m)
 
 	// Segments already committed for this rep in the current period. Used to
-	// tell a genuine hole (still in the upstream window, worth backfilling) from
+	// tell a genuine hole (still in the origin's window, worth backfilling) from
 	// a segment we already hold, mirroring the DASH watcher's knownSegs.
 	known := w.knownSpans(v, periodID)
 
@@ -726,7 +726,7 @@ func (w *Watcher) enqueueNew(ctx context.Context, v variant, st *variantState, m
 		default:
 			// seg.SeqNo <= lastSeq: we advanced past this position on an earlier
 			// poll. Either we already hold it, or it is a hole that a transient
-			// failure left behind and is still inside the upstream window.
+			// failure left behind and is still inside the origin's window.
 			if _, have := known[seg.SeqNo]; have {
 				continue // already on disk
 			}
@@ -840,24 +840,24 @@ func (w *Watcher) buildTask(v variant, seg hlssrc.Segment, periodID string, star
 	return task
 }
 
-// resetPeriodEpoch moves a rendition onto a fresh period after an upstream
-// media-sequence rewind, given the epoch it is currently on, and returns the
-// epoch it should use.
+// resetPeriod moves a rendition onto a fresh period after an origin
+// media-sequence rewind, given the period number it is currently on, and
+// returns the period number it should use.
 //
-// One upstream restart rewinds every rendition, but each has its own poll loop
+// One origin restart rewinds every rendition, but each has its own poll loop
 // and notices at a different moment. Only the rendition that notices first
 // starts a new period; the ones that follow join it. The test for "am I first?"
-// is whether the caller is still on the channel's latest epoch — no timing
+// is whether the caller is still on the channel's latest period — no timing
 // window is involved. Bumping unconditionally would give video and audio
 // separate periods, and the synthesized MPD would then describe two periods
 // carrying one track each.
-func (w *Watcher) resetPeriodEpoch(current int) int {
+func (w *Watcher) resetPeriod(current int) int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if current == w.periodEpoch {
-		w.periodEpoch++
+	if current == w.period {
+		w.period++
 	}
-	return w.periodEpoch
+	return w.period
 }
 
 // markFMP4 records that the source turned out to carry fMP4 segments.
@@ -884,7 +884,7 @@ func (w *Watcher) fetchMedia(ctx context.Context, playlistURL string) (*hlssrc.M
 	return hlssrc.ParseMedia(data, base)
 }
 
-// fetch performs a GET with the channel's configured upstream headers.
+// fetch performs a GET with the channel's configured origin headers.
 func (w *Watcher) fetch(ctx context.Context, rawURL string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -913,7 +913,7 @@ func halve(d time.Duration) time.Duration {
 
 // segmentPriority maps a media sequence number to a queue priority. Lower is
 // more urgent, so older segments are fetched first — they are the ones about to
-// fall out of the upstream window.
+// fall out of the origin's window.
 func segmentPriority(seqNo uint64) int {
 	const maxPriority = math.MaxInt32
 	if seqNo > maxPriority {
@@ -923,7 +923,7 @@ func segmentPriority(seqNo uint64) int {
 }
 
 // playlistDeadline estimates when the advertised segments will have fallen out
-// of the upstream window, after which fetching them is pointless.
+// of the origin's window, after which fetching them is pointless.
 func playlistDeadline(m *hlssrc.Media) time.Time {
 	if m.EndList {
 		// VOD: segments stay available indefinitely.

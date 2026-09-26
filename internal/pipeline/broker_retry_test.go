@@ -48,7 +48,7 @@ func TestFiniteRetryThroughProcessorWithFullBroker(t *testing.T) {
 			done := make(chan struct{})
 			retryStarted := time.Now()
 			go func() {
-				processor.handle(fetch.Result{Task: failed, StatusCode: tc.status, Err: errors.New("upstream failure")})
+				processor.handle(fetch.Result{Task: failed, StatusCode: tc.status, Err: errors.New("origin failure")})
 				broker.Release() // Same order as Processor.Run.
 				close(done)
 			}()

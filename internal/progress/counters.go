@@ -32,13 +32,13 @@ const (
 	minSampleInterval = 200 * time.Millisecond
 
 	// maxMessageRunes bounds a stored error message. Messages originate from
-	// upstream URLs and HTTP response bodies and are rendered into the admin UI,
+	// origin URLs and HTTP response bodies and are rendered into the admin UI,
 	// so they are truncated here rather than at the display layer.
 	maxMessageRunes = 200
 )
 
 // ErrorRecord is a single recorded failure. RepID and SegNo are zero for errors
-// that are not attributable to one segment (an upstream manifest poll, say).
+// that are not attributable to one segment (an origin manifest poll, say).
 type ErrorRecord struct {
 	At      time.Time `json:"at"`
 	Stage   string    `json:"stage"`
@@ -147,7 +147,7 @@ func (c *Counters) RecordSegmentError(stage, message, repID string, segNo uint64
 	})
 }
 
-// SetSourceError records that the upstream itself is failing (a manifest or
+// SetSourceError records that the origin itself is failing (a manifest or
 // playlist poll). Unlike a segment error this is a live condition, so
 // ClearSourceError removes it as soon as a poll succeeds.
 func (c *Counters) SetSourceError(stage, message string) {
@@ -161,7 +161,7 @@ func (c *Counters) SetSourceError(stage, message string) {
 	})
 }
 
-// ClearSourceError marks the upstream healthy again.
+// ClearSourceError marks the origin healthy again.
 func (c *Counters) ClearSourceError() {
 	if c == nil {
 		return

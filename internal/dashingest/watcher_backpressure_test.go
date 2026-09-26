@@ -29,7 +29,7 @@ func staticAssetMPD(segCount int) string {
 </MPD>`, dur, dur)
 }
 
-// A static upstream names every segment of a finished asset in a single
+// A static origin names every segment of a finished asset in a single
 // discovery pass, and every one of them is required: unlike a live window,
 // there is no later pass to pick up what was shed. When the asset is larger
 // than the broker, the enumeration must wait for the pipeline rather than
@@ -89,7 +89,7 @@ func TestStaticIngestOutlastsBrokerCapacity(t *testing.T) {
 	}()
 
 	if err := w.Run(ctx); err != nil {
-		t.Fatalf("Run() = %v, want nil for a static upstream", err)
+		t.Fatalf("Run() = %v, want nil for a static origin", err)
 	}
 	// Run returned, so discovery is done; let the drainer finish the tail.
 	for !broker.Idle() {

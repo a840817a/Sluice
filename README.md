@@ -1,11 +1,11 @@
 # Sluice
 
-A DASH and HLS live stream gateway that ingests from an upstream origin, caches segments locally, rewrites manifests and playlists with gateway URLs, and serves playback-ready streams to clients. Supports live-to-VOD transitions, multi-CDN fallback, DRM license proxying, AES-128 key brokering, and multi-channel management.
+A DASH and HLS live stream gateway that ingests from an origin, caches segments locally, rewrites manifests and playlists with gateway URLs, and serves playback-ready streams to clients. Supports live-to-VOD transitions, multi-CDN fallback, DRM license proxying, AES-128 key brokering, and multi-channel management.
 
 ## Features
 
-- **DASH and HLS sources** — A channel ingests either an upstream MPD or an HLS playlist, selected per channel with `source_type`
-- **Live & VOD** — Serves dynamic (live) or static (VOD) output; auto-transitions when upstream ends
+- **DASH and HLS sources** — A channel ingests either an origin MPD or an HLS playlist, selected per channel with `source_type`
+- **Live & VOD** — Serves dynamic (live) or static (VOD) output; auto-transitions when the origin ends
 - **Multi-format ingestion** — DASH `SegmentTemplate`, `SegmentList`, and `SegmentBase`; HLS MPEG-TS, fMP4/CMAF, and WebVTT
 - **No remuxing** — HLS segments are passed through byte-for-byte; `.ts` in, `.ts` out
 - **Cross-protocol output** — Any clear fMP4 channel serves both `manifest.mpd` and `master.m3u8` from the same files on disk (see [Output formats](#output-formats))
@@ -22,7 +22,7 @@ A DASH and HLS live stream gateway that ingests from an upstream origin, caches 
 ## Architecture
 
 ```
-Upstream Origin (DASH MPD  |  HLS playlist)
+Origin (DASH MPD  |  HLS playlist)
         │
    [Watcher]  ← polls the manifest/playlist; DASH and HLS have
         │        separate watchers behind one ingest.Source seam
@@ -164,7 +164,7 @@ differ between hosts running the same image — tuning knobs stay in the file.
 suffix naming a path to read the value from, so Docker and Kubernetes secrets —
 which arrive as mounted files — need no wrapper.
 
-To trust a private or corporate CA for upstream fetches, mount the bundle and
+To trust a private or corporate CA for origin fetches, mount the bundle and
 point Go at it. This **replaces** the system roots rather than adding to them, so
 concatenate the public roots into the same file:
 
@@ -235,13 +235,13 @@ admin:
 
 upstream:
   poll_interval: "2s"              # Manifest/playlist refresh interval
-  auth_header: "Authorization"     # Optional auth header sent upstream
+  auth_header: "Authorization"     # Optional auth header sent to the origin
   auth_value: "Bearer <token>"
 
 worker:
   fetch_workers: 4                 # Parallel download workers per channel
   max_retries_static: 5            # Max fetch retries (live and static alike)
-  live_usefulness_ttl: "30s"       # Reserved; live fetches follow upstream DVR window
+  live_usefulness_ttl: "30s"       # Reserved; live fetches follow the origin's DVR window
   max_segment_bytes: 134217728     # Per-segment memory ceiling; 0 = 128 MiB default
 
 store:
@@ -283,7 +283,7 @@ The source URL is **not** a gateway-level setting — it is per channel (`mpd_ur
 
 Endpoints that do not apply to a channel return 404 — see [Output formats](#output-formats). CORS is enabled on all public endpoints.
 
-`keyID` is the gateway's own identifier for an upstream key URI (a SHA-256 of it), resolved through a registry of URIs seen in that channel's own playlists. The upstream URL is never accepted as a request parameter, which would turn the gateway into an open proxy.
+`keyID` is the gateway's own identifier for a key server URI (a SHA-256 of it), resolved through a registry of URIs seen in that channel's own playlists. The key server URL is never accepted as a request parameter, which would turn the gateway into an open proxy.
 
 ### Admin Endpoints (HTTP Basic Auth required)
 
@@ -306,7 +306,7 @@ per running channel. Four of its fields have semantics that are easy to misread:
 | Field | Meaning |
 |-------|---------|
 | `segments_stored` | Cumulative segments written **since the gateway last started this channel**. Not since creation: counters are not persisted, and a restart re-seeds this from what the disk rebuild restored. |
-| `total_segments` / `total_known` | Only set for a bounded source (static MPD, HLS VOD). A live channel reports `total_known: false` and no total — it does not have one, so no percentage should be derived. `total_capped: true` means the value is a *floor* (upstream enumeration hit an internal cap), and `eta_seconds` is withheld. |
+| `total_segments` / `total_known` | Only set for a bounded source (static MPD, HLS VOD). A live channel reports `total_known: false` and no total — it does not have one, so no percentage should be derived. `total_capped: true` means the value is a *floor* (origin enumeration hit an internal cap), and `eta_seconds` is withheld. |
 | `segments_failed` | Failed **attempts**. Most are retried and succeed, so a segment that needed three tries adds three here and still arrives. |
 | `segments_dropped` | Work genuinely abandoned — expired, evicted under queue pressure, or out of retries. This, not `segments_failed`, is what explains a gap between `segments_stored` and `total_segments`. |
 
@@ -315,7 +315,7 @@ per running channel. Four of its fields have semantics that are easy to misread:
 
 `tracks` gives the per-representation breakdown (codec, bitrate, resolution,
 language, and segment counts). It is driven by the index rather than the manifest,
-so a representation dropped upstream still appears while its segments are on disk.
+so a representation dropped by the origin still appears while its segments are on disk.
 
 #### Create Channel
 
@@ -338,9 +338,9 @@ Optional fields:
 | `title` | Display name in the admin UI |
 | `source_type` | `dash` (default) or `hls` |
 | `hls_key_mode` | `passthrough` (default) or `decrypt`; AES-128 HLS only |
-| `playready_license_url`, `widevine_license_url` | Upstream license servers |
+| `playready_license_url`, `widevine_license_url` | License servers |
 | `enable_playready`, `enable_widevine` | Both default to true |
-| `fetch_headers` | `[{"name":…,"value":…}]` injected into upstream manifest/segment requests |
+| `fetch_headers` | `[{"name":…,"value":…}]` injected into origin manifest/segment requests |
 | `license_headers` | Same shape, injected into DRM license proxy requests |
 | `forward_client_ip` | Pass `X-Forwarded-For` to the license server |
 | `keep_all_segments` | Unbounded DVR window; defaults to true, set `false` for the sliding window |
@@ -365,7 +365,7 @@ Optional fields:
 
 `{periodID}` and `{repID}` are written as is when they consist only of letters, digits,
 `.`, `_` and `-`. Any other ID — including the empty ID of a DASH period with no `id`
-attribute — is written `~` followed by the ID in unpadded base64url, so an upstream ID can
+attribute — is written `~` followed by the ID in unpadded base64url, so an origin ID can
 neither vanish from the path nor lead outside the data directory (ADR-0006).
 
 The sidecar exists because MPEG-TS carries no container timing: an HLS index cannot be
@@ -389,14 +389,14 @@ Metrics are available at `GET /metrics` (no auth required; restrict via firewall
 
 All logs are JSON via `log/slog` to stdout. Key log events:
 
-- `watcher stopped, restarting` — upstream unreachable, will retry with backoff
+- `watcher stopped, restarting` — origin unreachable, will retry with backoff
 - `fetch error` — segment download failed, requeuing
 - `segment validation failed` — invalid MP4 box structure, segment dropped
 - `segment write failed, requeueing` — disk error, segment will retry
 
 ## Live → VOD Transition
 
-When the upstream ends, the gateway transitions the channel to VOD. This is not optional and is the same for both protocols: a DASH upstream signals the end by changing from `type=dynamic` to `type=static`, an HLS one by every polled playlist reaching `#EXT-X-ENDLIST`. The gateway then:
+When the origin ends, the gateway transitions the channel to VOD. This is not optional and is the same for both protocols: a DASH origin signals the end by changing from `type=dynamic` to `type=static`, an HLS one by every polled playlist reaching `#EXT-X-ENDLIST`. The gateway then:
 
 1. Ingests whatever the final manifest still names
 2. Rebuilds the channel index as an unbounded full history, from the segments on disk
@@ -407,9 +407,9 @@ On restart, channels with `is_vod: true` are restored as VOD directly — no re-
 
 How much history the VOD covers is decided long before the transition, by `keep_all_segments` (default true) and `store.cleanup`: the rebuild can only find what is still on disk.
 
-To undo a transition that fired on an upstream hiccup, `POST .../restore-to-live` (「還原直播」 in the admin UI). Segments are kept, the channel goes back to live ingest, and the automatic transition is suppressed until the upstream delivers a new segment — otherwise the still-finished upstream would send it straight back to VOD.
+To undo a transition that fired on an origin hiccup, `POST .../restore-to-live` (「還原直播」 in the admin UI). Segments are kept, the channel goes back to live ingest, and the automatic transition is suppressed until the origin delivers a new segment — otherwise the still-finished origin would send it straight back to VOD.
 
-To manually trigger (e.g., when upstream doesn't signal end-of-stream):
+To manually trigger (e.g., when the origin doesn't signal end-of-stream):
 
 ```bash
 curl -u admin:changeme -X POST \
@@ -426,7 +426,7 @@ curl -u admin:changeme -X POST \
 - `mpd_url` is validated to allow only `http://` and `https://` schemes
 - DRM license requests are forwarded with configurable auth headers; client IP forwarding is opt-in
 - The AES-128 key proxy resolves only key URIs seen in the channel's own playlists, never a URL supplied by the caller
-- In passthrough mode the content key is cached on the gateway disk (`keys.json`, mode 0600) so playback survives the upstream key server going away. Content stays encrypted over the wire and to the CDN, but is no longer protected at rest on the gateway — use `decrypt` mode only where storing cleartext is acceptable
+- In passthrough mode the content key is cached on the gateway disk (`keys.json`, mode 0600) so playback survives the key server going away. Content stays encrypted over the wire and to the CDN, but is no longer protected at rest on the gateway — use `decrypt` mode only where storing cleartext is acceptable
 
 ## Development
 

@@ -1,4 +1,4 @@
-// Package hlssrc parses upstream HLS master and media playlists into an
+// Package hlssrc parses an origin's HLS master and media playlists into an
 // internal model. It is deliberately dependency-free: the playlist grammar
 // (RFC 8216) is small enough that a hand-rolled parser is easier to audit than
 // a third-party one, and we need exact control over URI resolution and over

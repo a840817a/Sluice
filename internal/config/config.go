@@ -45,12 +45,12 @@ type UpstreamConfig struct {
 	// channel config 覆寫它們（見 channel.Manager.Start），所以放在 config.yaml
 	// 沒有作用，標成 yaml:"-" 以免誤導。
 	//
-	// MPDURL 是上游來源 URL；HLS channel 放的是 playlist URL，欄位名沿用
+	// MPDURL 是 origin 的 URL；HLS channel 放的是 playlist URL，欄位名沿用
 	// 歷史名稱以維持既有 channels.json 相容。
 	MPDURL string `yaml:"-"`
 	// 是否透傳 X-Forwarded-For 到 license server。
 	ForwardClientIP bool `yaml:"-"`
-	// 上游認證 header，例如 "Authorization: Bearer <token>"
+	// origin 認證 header，例如 "Authorization: Bearer <token>"
 	AuthHeader string `yaml:"auth_header"`
 	AuthValue  string `yaml:"auth_value"`
 	// dynamic MPD 的 refresh 間隔（static MPD 忽略）
@@ -63,7 +63,7 @@ type WorkerConfig struct {
 	// 分段下載失敗後的最多重試次數。名稱沿用歷史，實際上 live 與 static
 	// 兩種來源的 requeue 都套用這個上限。
 	MaxRetriesStatic int `yaml:"max_retries_static"`
-	// Reserved/deprecated: live fetches currently follow the upstream DVR
+	// Reserved/deprecated: live fetches currently follow the origin's DVR
 	// window so segments are retried while they are still advertised.
 	LiveUsefulnessTTL time.Duration `yaml:"live_usefulness_ttl"`
 	// 單一分段允許的最大位元組數。每個 worker 會把整個分段讀進記憶體，所以這是

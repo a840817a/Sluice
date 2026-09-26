@@ -176,7 +176,7 @@ func TestCacheSendsConfiguredHeaders(t *testing.T) {
 	}
 }
 
-// A channel's upstream credentials can be rotated while it is running, so the
+// A channel's origin credentials can be rotated while it is running, so the
 // key cache must read the provider per request rather than copying it at
 // construction. Only key URIs not yet fetched are affected: an already-cached
 // key is never re-requested.
@@ -235,7 +235,7 @@ func TestCachePropagatesHTTPError(t *testing.T) {
 }
 
 func TestKeyID(t *testing.T) {
-	// Stable, collision-resistant, and never reveals the upstream URI.
+	// Stable, collision-resistant, and never reveals the key server URI.
 	a := KeyID("https://drm.example.com/keys/k1.bin")
 	b := KeyID("https://drm.example.com/keys/k1.bin")
 	c := KeyID("https://drm.example.com/keys/k2.bin")
@@ -250,6 +250,6 @@ func TestKeyID(t *testing.T) {
 		t.Errorf("KeyID length = %d, want 64 hex chars", len(a))
 	}
 	if bytes.Contains([]byte(a), []byte("example.com")) {
-		t.Error("KeyID leaks the upstream URI")
+		t.Error("KeyID leaks the key server URI")
 	}
 }

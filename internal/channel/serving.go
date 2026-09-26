@@ -43,26 +43,26 @@ type Serving struct {
 	// Presentation is what the channel offers to players: its tracks, and
 	// whether it can be served as HLS and as DASH.
 	Presentation Presentation
-	// FinalDuration is the mediaPresentationDuration the upstream announced in
+	// FinalDuration is the mediaPresentationDuration the origin announced in
 	// its final MPD, or 0 if it announced none.
 	FinalDuration time.Duration
-	// StaticIngestStart is when a static upstream was first detected, or the
+	// StaticIngestStart is when a static origin was first detected, or the
 	// zero time if that has not happened.
 	StaticIngestStart time.Time
-	// ParsedMPD is the most recently fetched upstream MPD, nil for HLS channels.
+	// ParsedMPD is the most recently fetched origin MPD, nil for HLS channels.
 	ParsedMPD *imdp.ParsedMPD
 }
 
 // IsVOD reports whether the channel has completed its transition to VOD.
 func (s Serving) IsVOD() bool { return s.Mode == ModeVOD }
 
-// IsStaticIngesting reports whether a static upstream has been discovered and
+// IsStaticIngesting reports whether a static origin has been discovered and
 // its segments are still downloading. Such a channel is not yet VOD and is
 // deliberately still served from the live index.
 func (s Serving) IsStaticIngesting() bool { return s.Mode == ModeStaticIngesting }
 
 // OrderPeriods returns period IDs in timeline order: a DASH source's periods in
-// the order its MPD lists them, an HLS source's epochs numerically
+// the order its MPD lists them, an HLS source's periods numerically
 // (index.OrderPeriodIDs).
 func (s Serving) OrderPeriods(ids []string) []string {
 	var docOrder []string

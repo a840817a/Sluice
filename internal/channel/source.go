@@ -11,10 +11,10 @@ import (
 	imdp "github.com/a840817a/sluice/internal/mpd"
 )
 
-// Source drives ingestion for one channel: it discovers what the upstream is
+// Source drives ingestion for one channel: it discovers what the origin is
 // offering and pushes SegmentTasks onto the broker until it is done or the
 // context is cancelled. It also answers the questions the channel's lifecycle
-// asks about the upstream, so the Manager never needs to know which protocol
+// asks about the origin, so the Manager never needs to know which protocol
 // it is ingesting.
 //
 // It is declared here rather than in an ingest package because the consumer
@@ -25,15 +25,15 @@ import (
 // served as DASH — is not the Source's business: that is a description of the
 // presentation, and callers still reach the concrete watcher for it.
 type Source interface {
-	// Run ingests until the upstream is done or ctx ends. Returning nil means
+	// Run ingests until the origin is done or ctx ends. Returning nil means
 	// ingestion completed (a static MPD, or HLS playlists that reached
 	// EXT-X-ENDLIST); the Manager then settles the channel into VOD. A non-nil
 	// error triggers a backoff and restart.
 	Run(ctx context.Context) error
-	// FinishedAsset reports whether the upstream has said it is a completed
+	// FinishedAsset reports whether the origin has said it is a completed
 	// asset rather than a live stream. It can be true well before Run returns.
 	FinishedAsset() bool
-	// Status reports what the source knows about the upstream ending, or nil
+	// Status reports what the source knows about the origin ending, or nil
 	// when it knows nothing yet.
 	Status() *SourceStatus
 	// PersistsSegmentMeta reports whether each stored segment has a sidecar
@@ -82,7 +82,7 @@ func (s hlsSource) Run(ctx context.Context) error { return s.w.Run(ctx) }
 
 // FinishedAsset is every polled playlist carrying EXT-X-ENDLIST on its first
 // poll.
-func (s hlsSource) FinishedAsset() bool { return s.w.UpstreamIsVOD() }
+func (s hlsSource) FinishedAsset() bool { return s.w.OriginIsVOD() }
 
 // Status is nil before discovery has named the playlists to poll.
 func (s hlsSource) Status() *SourceStatus {

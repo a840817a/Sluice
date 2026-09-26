@@ -8,7 +8,7 @@ import (
 // Validate runs the checks every write path applies to a channel config.
 //
 // These are domain invariants, not HTTP concerns: what counts as a usable
-// source type, key mode, or upstream URL is a property of a channel, and the
+// source type, key mode, or source URL is a property of a channel, and the
 // admin API is only one caller. The error strings are nevertheless part of that
 // API's response contract — clients key on the "mpd_url: " prefix — so they are
 // reproduced verbatim rather than reworded.
@@ -22,7 +22,7 @@ func (c Config) Validate() error {
 	return validateKeyMode(c.HLSKeyMode)
 }
 
-// validateSourceType ensures the channel's upstream protocol is one we support.
+// validateSourceType ensures the channel's source protocol is one we support.
 // An empty value keeps the historical DASH default so configs written before
 // HLS support remain valid.
 func validateSourceType(s string) error {
@@ -34,7 +34,7 @@ func validateSourceType(s string) error {
 }
 
 // validateKeyMode ensures the AES-128 handling mode is one we support. Empty
-// means passthrough, which is the safe default: it keeps upstream protection.
+// means passthrough, which is the safe default: it keeps origin protection.
 func validateKeyMode(s string) error {
 	switch s {
 	case "", KeyModePassthrough, KeyModeDecrypt:

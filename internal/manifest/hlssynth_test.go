@@ -135,7 +135,7 @@ func TestSynthesizeHLSMPDNilWhenNothingPublished(t *testing.T) {
 }
 
 func TestSynthesizeHLSMPDPeriodsAreStablyOrdered(t *testing.T) {
-	// Upstream resets create extra periods. Map iteration order must not leak
+	// Origin resets create extra periods. Map iteration order must not leak
 	// into the presentation, or the period order would change per request.
 	ci := cmafIndex("0", []string{"v0"}, 2)
 	for _, pid := range []string{"2", "1"} {

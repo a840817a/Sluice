@@ -67,7 +67,7 @@ func TestDASHSourceAnswersFromTheMPD(t *testing.T) {
 	}
 }
 
-// Before discovery an HLS source knows nothing about the upstream, but its
+// Before discovery an HLS source knows nothing about the origin, but its
 // segments always carry sidecar records.
 func TestHLSSourceBeforeDiscovery(t *testing.T) {
 	s := hlsSource{w: &hlsingest.Watcher{}}
@@ -80,8 +80,8 @@ func TestHLSSourceBeforeDiscovery(t *testing.T) {
 }
 
 // A live channel is promoted to static ingesting as soon as its source says
-// the upstream is a finished asset — unless a restore suppressed auto-VOD.
-func TestAwaitStaticUpstreamAsksTheSource(t *testing.T) {
+// the origin is a finished asset — unless a restore suppressed auto-VOD.
+func TestAwaitStaticOriginAsksTheSource(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		suppressed bool
@@ -95,10 +95,10 @@ func TestAwaitStaticUpstreamAsksTheSource(t *testing.T) {
 			src.finished.Store(true)
 			rt := &Runtime{ID: "c", Source: src, Progress: progress.New()}
 			rt.modes.begin(ModeLive, tc.suppressed, 0)
-			ctx, cancel := context.WithTimeout(context.Background(), 3*staticUpstreamPollInterval)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*staticOriginPollInterval)
 			defer cancel()
 
-			(&Manager{}).awaitStaticUpstream(ctx, rt)
+			(&Manager{}).awaitStaticOrigin(ctx, rt)
 
 			if got := rt.Mode(); got != tc.want {
 				t.Errorf("mode = %s, want %s", got, tc.want)

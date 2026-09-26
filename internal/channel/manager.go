@@ -41,7 +41,7 @@ type Runtime struct {
 	// downloading" and "stalled because work was thrown away".
 	Broker *queue.Broker
 	// headers is the provider shared by Keys, Source and the fetch pool. Holding
-	// it here is what lets UpdateConfig rotate upstream credentials in place.
+	// it here is what lets UpdateConfig rotate origin credentials in place.
 	headers *fetch.AtomicHeaders
 	// cancel ends the whole runtime. Source and pipeline have child contexts,
 	// reached through ingest, so the VOD transition can stop admitting work
@@ -77,7 +77,7 @@ type Runtime struct {
 	// plain fields.
 	vodIndex          atomic.Pointer[index.ChannelIndex] // non-nil after a successful VOD transition
 	finalDuration     atomic.Int64                       // time.Duration: mediaPresentationDuration from finalMPD
-	staticIngestStart atomic.Pointer[time.Time]          // set when a static upstream is first detected
+	staticIngestStart atomic.Pointer[time.Time]          // set when a static origin is first detected
 }
 
 // Config returns the channel's current configuration.
@@ -124,13 +124,13 @@ func (rt *Runtime) ActiveIndex() *index.ChannelIndex {
 	return rt.Index
 }
 
-// FinalDuration returns the mediaPresentationDuration announced by the upstream
-// final MPD, or 0 when the upstream did not announce one.
+// FinalDuration returns the mediaPresentationDuration announced by the origin
+// final MPD, or 0 when the origin did not announce one.
 func (rt *Runtime) FinalDuration() time.Duration {
 	return time.Duration(rt.finalDuration.Load())
 }
 
-// StaticIngestStartTime returns when a static upstream was first detected, or
+// StaticIngestStartTime returns when a static origin was first detected, or
 // the zero time if that has not happened.
 func (rt *Runtime) StaticIngestStartTime() time.Time {
 	if t := rt.staticIngestStart.Load(); t != nil {
@@ -142,7 +142,7 @@ func (rt *Runtime) StaticIngestStartTime() time.Time {
 func (rt *Runtime) setStaticIngestStart(t time.Time) { rt.staticIngestStart.Store(&t) }
 
 // autoVODAllowed reports whether a clean source completion may transition this
-// channel to VOD, lifting the suppression a restore installed once the upstream
+// channel to VOD, lifting the suppression a restore installed once the origin
 // has produced a segment this run. Progress.AddStored only counts segments the
 // index accepted as new, so its total growing is exactly "something new".
 func (rt *Runtime) autoVODAllowed() bool {
@@ -155,7 +155,7 @@ func (rt *Runtime) autoVODAllowed() bool {
 // that asked for it.
 func (rt *Runtime) IsHLSSource() bool { return rt.hls != nil }
 
-// ParsedMPD returns the most recently fetched upstream MPD, or nil for HLS
+// ParsedMPD returns the most recently fetched origin MPD, or nil for HLS
 // channels, which have no MPD at all.
 func (rt *Runtime) ParsedMPD() *imdp.ParsedMPD {
 	if rt.watcher == nil {
@@ -164,7 +164,7 @@ func (rt *Runtime) ParsedMPD() *imdp.ParsedMPD {
 	return rt.watcher.ParsedMPD()
 }
 
-// ParsedMPDBytes returns the raw upstream MPD XML, or nil for HLS channels.
+// ParsedMPDBytes returns the raw origin MPD XML, or nil for HLS channels.
 func (rt *Runtime) ParsedMPDBytes() []byte {
 	if rt.watcher == nil {
 		return nil
@@ -258,7 +258,7 @@ func (m *Manager) start(parentCtx context.Context, id string, cfg Config) (*Runt
 	m.mu.RUnlock()
 
 	// Consume the mark left by RestoreToLive. Without it the restore is futile:
-	// the upstream is normally still finished, so the source would complete
+	// the origin is normally still finished, so the source would complete
 	// cleanly again within seconds and put the channel straight back into VOD.
 	m.mu.Lock()
 	suppress := m.suppressVOD[id]
@@ -334,7 +334,7 @@ func (m *Manager) restoreVODState(rt *Runtime, id string) {
 	// render "finished" rather than an empty progress bar.
 	rt.enterVOD(rt.Index, false)
 
-	m.restoreVODUpstreamMPD(rt)
+	m.restoreVODOriginMPD(rt)
 
 	slog.Info("channel restored in VOD mode", "id", id)
 }
