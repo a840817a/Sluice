@@ -722,29 +722,22 @@ func buildStatus(rt *Runtime) ChannelStatus {
 		Source:  sourceStatus(rt),
 	}
 	ci := sv.Index
+	// Layout includes a period with no AdaptationSets yet — serving a manifest
+	// creates period state before any segment commits — which is reported
+	// with zero counts.
 	stats := make(map[string]*PeriodStats)
-	ci.ForEachRep(func(ref index.RepRef, rep *index.RepresentationState) {
-		ps, ok := stats[ref.PeriodID]
-		if !ok {
-			ps = &PeriodStats{PeriodID: ref.PeriodID}
-			stats[ref.PeriodID] = ps
+	for _, pl := range ci.Layout() {
+		ps := &PeriodStats{PeriodID: pl.ID}
+		for _, as := range pl.AdaptationSets {
+			for _, rep := range as.Reps {
+				ps.Published += rep.Published
+				ps.Committed += rep.Committed
+				ps.Expired += rep.Expired
+			}
 		}
-		p, c, e := rep.StatusCounts()
-		ps.Published += p
-		ps.Committed += c
-		ps.Expired += e
-		ps.Total += rep.Total()
-	})
-	// A period can exist with no AdaptationSets yet — serving a manifest creates
-	// period state before any segment commits — and the hand-rolled walk this
-	// replaced reported those with zero counts. Keep doing that.
-	ci.Mu().RLock()
-	for _, pid := range ci.PeriodIDs() {
-		if _, ok := stats[pid]; !ok {
-			stats[pid] = &PeriodStats{PeriodID: pid}
-		}
+		ps.Total = ps.Published + ps.Committed + ps.Expired
+		stats[pl.ID] = ps
 	}
-	ci.Mu().RUnlock()
 
 	ids := make([]string, 0, len(stats))
 	for pid := range stats {

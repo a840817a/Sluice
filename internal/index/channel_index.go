@@ -76,7 +76,7 @@ func (s *SegmentState) EndSec() float64 {
 // It is safe for concurrent use.
 type ChannelIndex struct {
 	mu      sync.RWMutex
-	Periods map[string]*PeriodState
+	periods map[string]*PeriodState
 	// policy decides when a committed segment is published; see Commit.
 	policy PublishPolicy
 }
@@ -87,7 +87,7 @@ type ChannelIndex struct {
 // restart, rebuilt for VOD — must use the same one, or segments a player has
 // already seen can vanish when the index is rebuilt.
 func NewChannelIndex(policy ...PublishPolicy) *ChannelIndex {
-	ci := &ChannelIndex{Periods: make(map[string]*PeriodState)}
+	ci := &ChannelIndex{periods: make(map[string]*PeriodState)}
 	if len(policy) > 0 {
 		ci.policy = policy[0]
 	}
@@ -145,13 +145,13 @@ func (ci *ChannelIndex) publishCommitted(ps *PeriodState) {
 	}
 }
 
-// Mu exposes the read-write mutex for callers that need to snapshot the Periods map.
-func (ci *ChannelIndex) Mu() *sync.RWMutex { return &ci.mu }
-
-// PeriodIDs returns the IDs of all known periods. Caller must hold at least ci.Mu().RLock().
+// PeriodIDs returns the IDs of all known periods, including ones that hold no
+// segment yet, in no particular order.
 func (ci *ChannelIndex) PeriodIDs() []string {
-	ids := make([]string, 0, len(ci.Periods))
-	for id := range ci.Periods {
+	ci.mu.RLock()
+	defer ci.mu.RUnlock()
+	ids := make([]string, 0, len(ci.periods))
+	for id := range ci.periods {
 		ids = append(ids, id)
 	}
 	return ids
@@ -159,18 +159,18 @@ func (ci *ChannelIndex) PeriodIDs() []string {
 
 func (ci *ChannelIndex) Period(id string) *PeriodState {
 	ci.mu.RLock()
-	p, ok := ci.Periods[id]
+	p, ok := ci.periods[id]
 	ci.mu.RUnlock()
 	if ok {
 		return p
 	}
 	ci.mu.Lock()
 	defer ci.mu.Unlock()
-	if p, ok = ci.Periods[id]; ok {
+	if p, ok = ci.periods[id]; ok {
 		return p
 	}
 	p = newPeriodState(id)
-	ci.Periods[id] = p
+	ci.periods[id] = p
 	return p
 }
 
@@ -212,12 +212,12 @@ type RepRef struct {
 func (ci *ChannelIndex) ForEachRep(fn func(ref RepRef, rep *RepresentationState)) {
 	ci.mu.RLock()
 	defer ci.mu.RUnlock()
-	for periodID, ps := range ci.Periods {
+	for periodID, ps := range ci.periods {
 		ps.mu.RLock()
-		for asID, as := range ps.AdaptationSets {
+		for asID, as := range ps.adaptationSets {
 			as.mu.RLock()
 			mediaType := as.mediaType
-			for repID, rep := range as.Reps {
+			for repID, rep := range as.reps {
 				fn(RepRef{PeriodID: periodID, ASID: asID, RepID: repID, MediaType: mediaType}, rep)
 			}
 			as.mu.RUnlock()
@@ -236,12 +236,12 @@ func (ci *ChannelIndex) ForEachRep(fn func(ref RepRef, rep *RepresentationState)
 func (ci *ChannelIndex) ForEachRepUntil(fn func(ref RepRef, rep *RepresentationState) bool) {
 	ci.mu.RLock()
 	defer ci.mu.RUnlock()
-	for periodID, ps := range ci.Periods {
+	for periodID, ps := range ci.periods {
 		ps.mu.RLock()
-		for asID, as := range ps.AdaptationSets {
+		for asID, as := range ps.adaptationSets {
 			as.mu.RLock()
 			mediaType := as.mediaType
-			for repID, rep := range as.Reps {
+			for repID, rep := range as.reps {
 				if !fn(RepRef{PeriodID: periodID, ASID: asID, RepID: repID, MediaType: mediaType}, rep) {
 					as.mu.RUnlock()
 					ps.mu.RUnlock()
@@ -261,10 +261,10 @@ func (ci *ChannelIndex) ForEachRepUntil(fn func(ref RepRef, rep *RepresentationS
 func (ps *PeriodState) ForEachRep(fn func(asID, mediaType string, rep *RepresentationState)) {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
-	for asID, as := range ps.AdaptationSets {
+	for asID, as := range ps.adaptationSets {
 		as.mu.RLock()
 		mediaType := as.mediaType
-		for _, rep := range as.Reps {
+		for _, rep := range as.reps {
 			fn(asID, mediaType, rep)
 		}
 		as.mu.RUnlock()
@@ -276,54 +276,51 @@ func (ps *PeriodState) ForEachRep(fn func(asID, mediaType string, rep *Represent
 // right call for a read-only lookup.
 func (ci *ChannelIndex) FindRep(periodID, asID, repID string) *RepresentationState {
 	ci.mu.RLock()
-	ps, ok := ci.Periods[periodID]
+	ps, ok := ci.periods[periodID]
 	ci.mu.RUnlock()
 	if !ok {
 		return nil
 	}
 	ps.mu.RLock()
-	as, ok := ps.AdaptationSets[asID]
+	as, ok := ps.adaptationSets[asID]
 	ps.mu.RUnlock()
 	if !ok {
 		return nil
 	}
 	as.mu.RLock()
 	defer as.mu.RUnlock()
-	return as.Reps[repID]
+	return as.reps[repID]
 }
 
 // PeriodState holds AdaptationSets for one period.
 type PeriodState struct {
 	mu             sync.RWMutex
 	ID             string
-	AdaptationSets map[string]*AdaptationState
+	adaptationSets map[string]*AdaptationState
 	// barrier publishes the period's segments under PublishAVBarrier.
 	barrier *barrier
 }
 
 func newPeriodState(id string) *PeriodState {
-	ps := &PeriodState{ID: id, AdaptationSets: make(map[string]*AdaptationState)}
+	ps := &PeriodState{ID: id, adaptationSets: make(map[string]*AdaptationState)}
 	ps.barrier = newBarrier(ps, 0.5)
 	return ps
 }
 
-// Mu exposes the read-write mutex for callers that need to iterate AdaptationSets.
-func (ps *PeriodState) Mu() *sync.RWMutex { return &ps.mu }
-
 func (ps *PeriodState) AS(id string) *AdaptationState {
 	ps.mu.RLock()
-	as, ok := ps.AdaptationSets[id]
+	as, ok := ps.adaptationSets[id]
 	ps.mu.RUnlock()
 	if ok {
 		return as
 	}
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
-	if as, ok = ps.AdaptationSets[id]; ok {
+	if as, ok = ps.adaptationSets[id]; ok {
 		return as
 	}
-	as = &AdaptationState{ID: id, Reps: make(map[string]*RepresentationState)}
-	ps.AdaptationSets[id] = as
+	as = &AdaptationState{ID: id, reps: make(map[string]*RepresentationState)}
+	ps.adaptationSets[id] = as
 	return as
 }
 
@@ -337,14 +334,11 @@ type AdaptationState struct {
 	// take the lock; code inside this package that already holds mu reads the
 	// field directly.
 	mediaType string
-	Reps      map[string]*RepresentationState
+	reps      map[string]*RepresentationState
 }
 
-// Mu exposes the read-write mutex for callers that need to iterate Reps.
-func (as *AdaptationState) Mu() *sync.RWMutex { return &as.mu }
-
 // MediaType returns the AdaptationSet's media type, or "" before the first
-// segment has been committed. Do not call it while already holding as.Mu().
+// segment has been committed. Do not call it while already holding as.mu.
 func (as *AdaptationState) MediaType() string {
 	as.mu.RLock()
 	defer as.mu.RUnlock()
@@ -360,18 +354,18 @@ func (as *AdaptationState) SetMediaType(mediaType string) {
 
 func (as *AdaptationState) Rep(id string, capacity int) *RepresentationState {
 	as.mu.RLock()
-	r, ok := as.Reps[id]
+	r, ok := as.reps[id]
 	as.mu.RUnlock()
 	if ok {
 		return r
 	}
 	as.mu.Lock()
 	defer as.mu.Unlock()
-	if r, ok = as.Reps[id]; ok {
+	if r, ok = as.reps[id]; ok {
 		return r
 	}
 	r = &RepresentationState{ID: id, buf: NewRingBuffer(capacity)}
-	as.Reps[id] = r
+	as.reps[id] = r
 	return r
 }
 
@@ -553,13 +547,6 @@ func (rs *RepresentationState) StatusCounts() (published, committed, expired int
 		}
 	}
 	return
-}
-
-// Total returns the total number of segments tracked in this representation.
-func (rs *RepresentationState) Total() int {
-	rs.mu.Lock()
-	defer rs.mu.Unlock()
-	return len(rs.buf.Snapshot())
 }
 
 // MaxSegNo returns the highest segment number tracked in this representation, or 0 if empty.

@@ -33,9 +33,9 @@ func countPublished(ps *PeriodState) int {
 	total := 0
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
-	for _, as := range ps.AdaptationSets {
+	for _, as := range ps.adaptationSets {
 		as.mu.RLock()
-		for _, rep := range as.Reps {
+		for _, rep := range as.reps {
 			total += len(rep.Published())
 		}
 		as.mu.RUnlock()

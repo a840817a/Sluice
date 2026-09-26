@@ -182,8 +182,8 @@ func TestCommitReportsWhetherSegmentWasNew(t *testing.T) {
 	}
 
 	// The count the progress counters would arrive at must match reality.
-	if got := rep.Total(); got != 2 {
-		t.Errorf("Total = %d, want 2", got)
+	if p, c, e := rep.StatusCounts(); p+c+e != 2 {
+		t.Errorf("segments held = %d, want 2", p+c+e)
 	}
 }
 

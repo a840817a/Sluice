@@ -199,11 +199,8 @@ func NewWatcher(
 // ingest resumes in the period it was in when the gateway went down; starting
 // again at 0 would append new segments to the channel's first period.
 func latestPeriodEpoch(ci *index.ChannelIndex) int {
-	ci.Mu().RLock()
-	ids := ci.PeriodIDs()
-	ci.Mu().RUnlock()
 	latest := 0
-	for _, id := range ids {
+	for _, id := range ci.PeriodIDs() {
 		if n, err := strconv.Atoi(id); err == nil && n > latest {
 			latest = n
 		}

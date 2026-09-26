@@ -44,10 +44,10 @@ func (b *barrier) checkAndPublish() int {
 	// segment. ASes with only published/expired segments (e.g. rebuilt history
 	// from a previous session) are excluded so they do not block new segments.
 	var videoASes, audioASes []*AdaptationState
-	for _, as := range b.period.AdaptationSets {
+	for _, as := range b.period.adaptationSets {
 		as.mu.RLock()
 		var hasCommitted, hasAny bool
-		for _, rep := range as.Reps {
+		for _, rep := range as.reps {
 			if len(rep.Committed()) > 0 {
 				hasCommitted = true
 			}
@@ -77,7 +77,7 @@ func (b *barrier) checkAndPublish() int {
 		toPublish := make(map[string]map[uint64]struct{})
 		for _, as := range allASes {
 			as.mu.RLock()
-			for _, rep := range as.Reps {
+			for _, rep := range as.reps {
 				for _, seg := range rep.Committed() {
 					if toPublish[as.ID] == nil {
 						toPublish[as.ID] = make(map[uint64]struct{})
@@ -93,7 +93,7 @@ func (b *barrier) checkAndPublish() int {
 				continue
 			}
 			as.mu.RLock()
-			for _, rep := range as.Reps {
+			for _, rep := range as.reps {
 				published += rep.markPublished(segNos)
 			}
 			as.mu.RUnlock()
@@ -110,7 +110,7 @@ func (b *barrier) checkAndPublish() int {
 	var videoRanges []timeRange
 	for _, as := range videoASes {
 		as.mu.RLock()
-		for _, rep := range as.Reps {
+		for _, rep := range as.reps {
 			for _, seg := range rep.Committed() {
 				videoRanges = append(videoRanges, timeRange{
 					start: seg.StartSec(),
@@ -136,7 +136,7 @@ func (b *barrier) checkAndPublish() int {
 		for _, as := range audioASes {
 			found := false
 			as.mu.RLock()
-			for _, rep := range as.Reps {
+			for _, rep := range as.reps {
 				for _, seg := range rep.Committed() {
 					if b.overlaps(vr.start, vr.end, seg.StartSec(), seg.EndSec()) {
 						audioMatches = append(audioMatches, struct {
@@ -184,7 +184,7 @@ func (b *barrier) checkAndPublish() int {
 			continue
 		}
 		as.mu.RLock()
-		for _, rep := range as.Reps {
+		for _, rep := range as.reps {
 			published += rep.markPublished(segNos)
 		}
 		as.mu.RUnlock()

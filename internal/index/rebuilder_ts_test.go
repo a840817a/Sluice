@@ -43,18 +43,18 @@ func writeTSRep(t *testing.T, dataDir, channelID string, n int, withKey bool) {
 func publishedSegs(t *testing.T, ci *ChannelIndex) []SegmentState {
 	t.Helper()
 	var out []SegmentState
-	ci.Mu().RLock()
-	defer ci.Mu().RUnlock()
-	for _, ps := range ci.Periods {
-		ps.Mu().RLock()
-		for _, as := range ps.AdaptationSets {
-			as.Mu().RLock()
-			for _, rep := range as.Reps {
+	ci.mu.RLock()
+	defer ci.mu.RUnlock()
+	for _, ps := range ci.periods {
+		ps.mu.RLock()
+		for _, as := range ps.adaptationSets {
+			as.mu.RLock()
+			for _, rep := range as.reps {
 				out = append(out, rep.Published()...)
 			}
-			as.Mu().RUnlock()
+			as.mu.RUnlock()
 		}
-		ps.Mu().RUnlock()
+		ps.mu.RUnlock()
 	}
 	return out
 }

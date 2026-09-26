@@ -92,36 +92,25 @@ func (s *Server) handleChannelHealth(w http.ResponseWriter, r *http.Request) {
 		// VOD transition that is the full-history index, not the live window the
 		// ring still holds.
 		//
-		// The walk is written out by hand rather than with ForEachRep because
-		// ForEachRep never yields an AdaptationSet that has no representations,
-		// and such a set is reachable (index/rebuilder.go creates it before
-		// reading its directory). Health must still report it, as an empty map.
-		ci := sv.Index
-		ci.Mu().RLock()
-		for periodID, ps := range ci.Periods {
+		// Layout rather than ForEachRep, which never yields an AdaptationSet
+		// that has no representations; such a set is reachable
+		// (index/rebuilder.go creates it before reading its directory), and
+		// health must still report it, as an empty map.
+		for _, pl := range sv.Index.Layout() {
 			ph := &periodHealth{AdaptationSets: make(map[string]asHealth)}
-			ps.Mu().RLock()
-			for asID, as := range ps.AdaptationSets {
-				ah := asHealth{
-					MediaType: as.MediaType(),
-					Reps:      make(map[string]repHealth),
-				}
-				as.Mu().RLock()
-				for repID, rep := range as.Reps {
-					pub, com, exp := rep.StatusCounts()
-					ah.Reps[repID] = repHealth{
-						Published: pub,
-						Committed: com,
-						Expired:   exp,
+			for _, as := range pl.AdaptationSets {
+				ah := asHealth{MediaType: as.MediaType, Reps: make(map[string]repHealth)}
+				for _, rep := range as.Reps {
+					ah.Reps[rep.ID] = repHealth{
+						Published: rep.Published,
+						Committed: rep.Committed,
+						Expired:   rep.Expired,
 					}
 				}
-				as.Mu().RUnlock()
-				ph.AdaptationSets[asID] = ah
+				ph.AdaptationSets[as.ID] = ah
 			}
-			ps.Mu().RUnlock()
-			resp.Periods[periodID] = ph
+			resp.Periods[pl.ID] = ph
 		}
-		ci.Mu().RUnlock()
 	}
 
 	w.Header().Set("Content-Type", "application/json")

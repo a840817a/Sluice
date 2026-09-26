@@ -66,7 +66,6 @@ func TestForEachRepAllowsRepMethodsInsideTheCallback(t *testing.T) {
 		_, committed, _ := rep.StatusCounts()
 		total += committed
 		_ = rep.Published()
-		_ = rep.Total()
 	})
 	if total != 1 {
 		t.Errorf("committed across the index = %d, want 1", total)
@@ -178,7 +177,7 @@ func TestFindRep(t *testing.T) {
 	// A lookup must not create anything, unlike Period/AS/Rep.
 	ci.FindRep("ghost", "0", "v0")
 	ci.mu.RLock()
-	_, created := ci.Periods["ghost"]
+	_, created := ci.periods["ghost"]
 	ci.mu.RUnlock()
 	if created {
 		t.Error("FindRep created a period; it must be read-only")
