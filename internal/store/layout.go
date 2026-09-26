@@ -3,7 +3,9 @@ package store
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -20,6 +22,22 @@ const (
 	ExtVTT = ".vtt"
 )
 
+// segmentExts is every extension a stored segment can have. ParseSegmentFile
+// and SegmentOnDisk both read it, so a new format cannot be recognised by one
+// and missed by the other.
+var segmentExts = []string{ExtFMP4, ExtTS, ExtVTT}
+
+// SegmentOnDisk reports whether the representation directory dir holds
+// segment segNo, in any stored format.
+func SegmentOnDisk(dir string, segNo uint64) bool {
+	for _, ext := range segmentExts {
+		if _, err := os.Stat(filepath.Join(dir, fmt.Sprintf("%d%s", segNo, ext))); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // InitFileName is the on-disk name of a representation's initialization segment.
 const InitFileName = "init.mp4"
 
@@ -34,7 +52,7 @@ func ParseSegmentFile(name string) (segNo uint64, ext string, ok bool) {
 		return 0, "", false
 	}
 	ext = name[i:]
-	if ext != ExtFMP4 && ext != ExtTS && ext != ExtVTT {
+	if !slices.Contains(segmentExts, ext) {
 		return 0, "", false
 	}
 	segNo, err := strconv.ParseUint(name[:i], 10, 64)

@@ -485,16 +485,10 @@ func (p *Processor) persistSegmentMeta(task *queue.SegmentTask, seg index.Segmen
 	p.sidecarAppends[key] = 0
 
 	dir := filepath.Dir(path)
+	// Keep a record only while its segment is still on disk, in whatever
+	// format this representation stores.
 	if err := store.CompactSegmentMeta(path, func(segNo uint64) bool {
-		// Keep a record only while its segment is still on disk. Both
-		// extensions are checked because a representation's format is not
-		// known here.
-		for _, ext := range []string{store.ExtTS, store.ExtFMP4} {
-			if _, err := os.Stat(filepath.Join(dir, fmt.Sprintf("%d%s", segNo, ext))); err == nil {
-				return true
-			}
-		}
-		return false
+		return store.SegmentOnDisk(dir, segNo)
 	}); err != nil {
 		slog.Warn("segment metadata compaction failed", "path", path, "err", err)
 	}
