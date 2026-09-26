@@ -654,12 +654,17 @@ async function resolveManifestURL() {
   return resolvedManifestURL;
 }
 
-async function loadWithRetry(max = 5) {
+// startTime must go to load() itself: Shaka applies its own start time once
+// metadata arrives, and would overwrite a seek made after load() resolves —
+// a VOD recovery then restarts from 0. updateStartTime() called before load()
+// is discarded the same way.
+async function loadWithRetry(max = 5, startTime = null) {
   const manifestURL = await resolveManifestURL();
+  const start = startTime !== null && isFinite(startTime) ? Math.max(0, startTime) : undefined;
   let delay = 1000;
   for (let i = 0; i < max; i++) {
     try {
-      await player.load(manifestURL);
+      await player.load(manifestURL, start);
       return;
     } catch (e) {
       if (i === max - 1) throw e;
@@ -667,13 +672,6 @@ async function loadWithRetry(max = 5) {
       await new Promise(r => setTimeout(r, delay));
       delay = Math.min(delay * 2, 15000);
     }
-  }
-}
-
-function primeStartTime(startTime) {
-  if (!player || startTime === null || !isFinite(startTime)) return;
-  if (typeof player.updateStartTime === 'function') {
-    player.updateStartTime(Math.max(0, startTime));
   }
 }
 
@@ -823,8 +821,7 @@ async function reconnect(opts = {}) {
     setQualityMenuOpen(false);
     volWrap.classList.remove('popup');
     try { await player.unload(); } catch (_) {}
-    primeStartTime(preserveTime);
-    await loadWithRetry();
+    await loadWithRetry(5, preserveTime);
     isLive = player.isLive();
     applyModeConfig();
     restoreQualityPreference();
