@@ -363,6 +363,11 @@ Optional fields:
                     └── {segNo}.m4s            # Media segments (.m4s | .ts | .vtt)
 ```
 
+`{periodID}` and `{repID}` are written as is when they consist only of letters, digits,
+`.`, `_` and `-`. Any other ID — including the empty ID of a DASH period with no `id`
+attribute — is written `~` followed by the ID in unpadded base64url, so an upstream ID can
+neither vanish from the path nor lead outside the data directory (ADR-0006).
+
 The sidecar exists because MPEG-TS carries no container timing: an HLS index cannot be
 rebuilt from the segment files alone, so segment durations, discontinuities, and key
 material are recorded alongside them.

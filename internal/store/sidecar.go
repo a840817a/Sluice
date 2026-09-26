@@ -37,17 +37,9 @@ type SegmentMeta struct {
 // SidecarPath returns the metadata file for one representation. It lives beside
 // that representation's segments.
 //
-//	{dataDir}/{channelID}/periods/{periodID}/{mediaType}_{asID}/{repID}/segments.jsonl
+//	{repDir}/segments.jsonl
 func SidecarPath(dataDir, channelID, periodID, mediaType, asID, repID string) string {
-	return filepath.Join(
-		dataDir,
-		channelID,
-		"periods",
-		periodID,
-		asDirName(mediaType, asID),
-		repID,
-		SidecarFileName,
-	)
+	return filepath.Join(repDir(dataDir, channelID, periodID, mediaType, asID, repID), SidecarFileName)
 }
 
 // AppendSegmentMeta appends one record.

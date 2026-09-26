@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/a840817a/sluice/internal/pathseg"
 )
 
 // Segment file extensions. DASH and fMP4 HLS segments are stored as .m4s;
@@ -49,9 +51,35 @@ func asDirName(mediaType, asID string) string {
 	return mediaType + "_" + asID
 }
 
+// repDir returns the directory that holds one representation's init segment,
+// media segments and sidecar.
+//
+//	{dataDir}/{channelID}/periods/{periodID}/{mediaType}_{asID}/{repID}
+//
+// The period and representation IDs come from the upstream, so each is written
+// as a pathseg-encoded directory name (ADR-0006): an ID with no id attribute
+// behind it is empty and would otherwise vanish from the path, and one
+// containing "/" or ".." would otherwise place files outside the data
+// directory. IDs made of letters, digits, ".", "_" and "-" are unchanged.
+// ParseIDDir reads a name back.
+func repDir(dataDir, channelID, periodID, mediaType, asID, repID string) string {
+	return filepath.Join(
+		dataDir,
+		channelID,
+		"periods",
+		pathseg.Encode(periodID),
+		asDirName(mediaType, asID),
+		pathseg.Encode(repID),
+	)
+}
+
+// ParseIDDir returns the period or representation ID a directory name under
+// "periods" stands for, or false for a name the layout never writes.
+func ParseIDDir(name string) (string, bool) { return pathseg.Decode(name) }
+
 // SegmentPath returns the canonical path for an fMP4 media segment.
 //
-//	{dataDir}/{channelID}/periods/{periodID}/{mediaType}_{asID}/{repID}/{segNo}.m4s
+//	{repDir}/{segNo}.m4s
 func SegmentPath(dataDir, channelID, periodID, mediaType, asID, repID string, segNo uint64) string {
 	return SegmentPathExt(dataDir, channelID, periodID, mediaType, asID, repID, segNo, ExtFMP4)
 }
@@ -60,27 +88,14 @@ func SegmentPath(dataDir, channelID, periodID, mediaType, asID, repID string, se
 // explicit extension (ExtFMP4 or ExtTS).
 func SegmentPathExt(dataDir, channelID, periodID, mediaType, asID, repID string, segNo uint64, ext string) string {
 	return filepath.Join(
-		dataDir,
-		channelID,
-		"periods",
-		periodID,
-		asDirName(mediaType, asID),
-		repID,
+		repDir(dataDir, channelID, periodID, mediaType, asID, repID),
 		fmt.Sprintf("%d%s", segNo, ext),
 	)
 }
 
 // InitPath returns the canonical path for an init segment.
 //
-//	{dataDir}/{channelID}/periods/{periodID}/{mediaType}_{asID}/{repID}/init.mp4
+//	{repDir}/init.mp4
 func InitPath(dataDir, channelID, periodID, mediaType, asID, repID string) string {
-	return filepath.Join(
-		dataDir,
-		channelID,
-		"periods",
-		periodID,
-		asDirName(mediaType, asID),
-		repID,
-		InitFileName,
-	)
+	return filepath.Join(repDir(dataDir, channelID, periodID, mediaType, asID, repID), InitFileName)
 }

@@ -25,14 +25,15 @@ const rebuildRingCapacity = 120
 //
 // Expected layout (matching store/layout.go):
 //
-//	{dataDir}/{channelID}/periods/{periodID}/{mediaType}_{asID}/{repID}/{segNo}.m4s
-//	{dataDir}/{channelID}/periods/{periodID}/{mediaType}_{asID}/{repID}/init.mp4
+//	{dataDir}/{channelID}/periods/{periodDir}/{mediaType}_{asID}/{repDir}/{segNo}.m4s
+//	{dataDir}/{channelID}/periods/{periodDir}/{mediaType}_{asID}/{repDir}/init.mp4
 //
 // The {mediaType}_{asID} directory name encodes both the media type and the
 // AdaptationSet positional ID with a single underscore separator, e.g. "video_0",
 // "audio_1", "audio_2".  strings.LastIndex is used to split on the separator so
 // that media type names that cannot contain underscores ("video", "audio", "text")
-// are always handled correctly.
+// are always handled correctly. {periodDir} and {repDir} are the period and
+// representation IDs as the store encodes them (ADR-0006).
 //
 // Each .m4s file is opened (seek-based, not fully loaded) to read
 // BaseMediaDecodeTime from the tfdt box.  EndPTS is derived from the next
@@ -76,11 +77,12 @@ func rebuildFromDisk(ci *ChannelIndex, dataDir, channelID string, capacity int) 
 		if !periodEntry.IsDir() {
 			continue
 		}
-		periodID := periodEntry.Name()
+		periodID := idFromDir(periodEntry.Name())
 		ps := ci.Period(periodID)
 
 		// Scan {mediaType}_{asID} directories.
-		asEntries, err := os.ReadDir(filepath.Join(base, periodID))
+		periodPath := filepath.Join(base, periodEntry.Name())
+		asEntries, err := os.ReadDir(periodPath)
 		if err != nil {
 			continue
 		}
@@ -100,7 +102,7 @@ func rebuildFromDisk(ci *ChannelIndex, dataDir, channelID string, capacity int) 
 			as := ps.AS(asID)
 			as.SetMediaType(mediaType)
 
-			asPath := filepath.Join(base, periodID, asDirName)
+			asPath := filepath.Join(periodPath, asDirName)
 			repEntries, err := os.ReadDir(asPath)
 			if err != nil {
 				continue
@@ -109,9 +111,9 @@ func rebuildFromDisk(ci *ChannelIndex, dataDir, channelID string, capacity int) 
 				if !repEntry.IsDir() {
 					continue
 				}
-				repID := repEntry.Name()
+				repID := idFromDir(repEntry.Name())
 				rep := as.Rep(repID, capacity)
-				repPath := filepath.Join(asPath, repID)
+				repPath := filepath.Join(asPath, repEntry.Name())
 				initPath := filepath.Join(repPath, store.InitFileName)
 
 				// Read timescale from the init segment (best-effort).
@@ -260,4 +262,15 @@ func rebuildFromDisk(ci *ChannelIndex, dataDir, channelID string, capacity int) 
 		NewBarrier(ps, 0.5).CheckAndPublish()
 	}
 	return nil
+}
+
+// idFromDir returns the period or representation ID a directory stands for.
+// A name the store's encoding never produces is one written before the
+// encoding existed (ADR-0006), when the raw ID was the directory name; it is
+// read back as that ID so a channel stored then still rebuilds.
+func idFromDir(name string) string {
+	if id, ok := store.ParseIDDir(name); ok {
+		return id
+	}
+	return name
 }

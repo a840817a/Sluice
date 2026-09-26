@@ -46,10 +46,17 @@ func clearDASHMPD() string {
 // startClearDASHOrigin serves the MPD plus fMP4 init/segments for every rep.
 func startClearDASHOrigin(t *testing.T) *httptest.Server {
 	t.Helper()
+	return startDASHOrigin(t, clearDASHMPD())
+}
+
+// startDASHOrigin serves mpd plus the fMP4 init/segments its templates name,
+// which must be those of clearDASHMPD.
+func startDASHOrigin(t *testing.T, mpd string) *httptest.Server {
+	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/manifest.mpd", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/dash+xml")
-		fmt.Fprint(w, clearDASHMPD())
+		fmt.Fprint(w, mpd)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/")

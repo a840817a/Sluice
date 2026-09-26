@@ -9,16 +9,18 @@
 // a router should be greppable, and httpapi's route table test is what pins the
 // patterns and these builders to each other.
 //
-// This package must not import anything from internal/. It is depended on by
-// internal/manifest and internal/hlsout, neither of which may import
-// internal/httpapi — that edge is what a shared builder exists to avoid.
+// This package must not import anything from internal/ except pathseg, which
+// imports nothing. It is depended on by internal/manifest and internal/hlsout,
+// neither of which may import internal/httpapi — that edge is what a shared
+// builder exists to avoid.
 package gwurl
 
 import (
-	"encoding/base64"
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/a840817a/sluice/internal/pathseg"
 )
 
 // Base normalizes a configured gateway base URL for joining.
@@ -35,51 +37,12 @@ func Base(baseURL string) string { return strings.TrimRight(baseURL, "/") }
 // upstream reset two periods can hold the same representation and segment
 // number, and a URL without the period cannot say which file it means.
 
-// encodedPeriodPrefix marks a period segment that carries its ID in base64url.
-const encodedPeriodPrefix = "~"
-
-// PeriodSegment encodes a period ID as one URL path segment.
-//
-// An ID made only of letters, digits, ".", "_" and "-" is used as is, which
-// covers HLS epochs and the IDs DASH packagers normally write. Anything else —
-// DASH period IDs are arbitrary upstream strings, and the empty ID is what a
-// period with no id attribute has — becomes "~" and the ID in unpadded
-// base64url, and so do "." and "..", which a client or CDN normalising the
-// path would remove.
-//
-// Percent-encoding would be the obvious alternative and is deliberately not
-// used: whether a router hands a handler the escaped or the decoded form of a
-// segment depends on how the whole request path happened to be escaped, so a
-// percent-encoded ID cannot be decoded reliably. This encoding has no escaped
-// form, and it can never contain "$", which opens a DASH SegmentTemplate
-// identifier.
-func PeriodSegment(periodID string) string {
-	if plainPeriodID(periodID) {
-		return periodID
-	}
-	return encodedPeriodPrefix + base64.RawURLEncoding.EncodeToString([]byte(periodID))
-}
+// PeriodSegment encodes a period ID as one URL path segment. The encoding is
+// pathseg's, which the segment store also uses for its directory names.
+func PeriodSegment(periodID string) string { return pathseg.Encode(periodID) }
 
 // ParsePeriodSegment reverses PeriodSegment.
-func ParsePeriodSegment(seg string) (string, bool) {
-	if enc, ok := strings.CutPrefix(seg, encodedPeriodPrefix); ok {
-		id, err := base64.RawURLEncoding.DecodeString(enc)
-		return string(id), err == nil
-	}
-	return seg, plainPeriodID(seg)
-}
-
-func plainPeriodID(id string) bool {
-	if id == "" || id == "." || id == ".." {
-		return false
-	}
-	for _, c := range id {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-') {
-			return false
-		}
-	}
-	return true
-}
+func ParsePeriodSegment(seg string) (string, bool) { return pathseg.Decode(seg) }
 
 // --- Relative paths, no leading slash -------------------------------------
 //
