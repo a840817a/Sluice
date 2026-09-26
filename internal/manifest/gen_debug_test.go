@@ -30,7 +30,7 @@ func TestStubFormat(t *testing.T) {
 	_ = time.Now()
 
 	for _, origPeriod := range p.Periods {
-		_ = index.NewChannelIndex()
+		_ = index.NewChannelIndex(index.PublishAVBarrier)
 		period := &gompeg.Period{}
 		if origPeriod.ID != "" {
 			period.ID = &origPeriod.ID

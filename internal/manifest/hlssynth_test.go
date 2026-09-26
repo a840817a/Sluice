@@ -14,7 +14,7 @@ const cmafTimescale = 48000
 
 // cmafIndex builds an index holding n published fMP4 segments per representation.
 func cmafIndex(periodID string, repIDs []string, n int) *index.ChannelIndex {
-	ci := index.NewChannelIndex()
+	ci := index.NewChannelIndex(index.PublishAVBarrier)
 	ps := ci.Period(periodID)
 	as := ps.AS("0")
 	as.SetMediaType("video")
@@ -126,7 +126,7 @@ func TestSynthesizeHLSMPDSkipsRepsWithNoSegments(t *testing.T) {
 }
 
 func TestSynthesizeHLSMPDNilWhenNothingPublished(t *testing.T) {
-	if p := SynthesizeHLSMPD(testVariants(), index.NewChannelIndex().Snapshot(), synthOpts()); p != nil {
+	if p := SynthesizeHLSMPD(testVariants(), index.NewChannelIndex(index.PublishAVBarrier).Snapshot(), synthOpts()); p != nil {
 		t.Errorf("expected nil for an empty index, got %+v", p)
 	}
 	if p := SynthesizeHLSMPD(nil, cmafIndex("0", []string{"v0"}, 2).Snapshot(), synthOpts()); p != nil {

@@ -27,12 +27,12 @@ func TestRebuildReadsIDsBackFromDirectoryNames(t *testing.T) {
 		}
 	}
 	// Written through the store: IDs a raw path join would drop or resolve.
-	put(filepath.Dir(store.InitPath(dataDir, "ch", "", "video", "0", "v0")))
-	put(filepath.Dir(store.InitPath(dataDir, "ch", "..", "video", "0", "a/b")))
+	put(filepath.Dir(store.RepLocation{DataDir: dataDir, ChannelID: "ch", PeriodID: "", MediaType: "video", ASID: "0", RepID: "v0"}.InitPath()))
+	put(filepath.Dir(store.RepLocation{DataDir: dataDir, ChannelID: "ch", PeriodID: "..", MediaType: "video", ASID: "0", RepID: "a/b"}.InitPath()))
 	// Written before the encoding: the raw ID as the directory name.
 	put(filepath.Join(dataDir, "ch", "periods", "p 1", "video_0", "r:1"))
 
-	ci := NewChannelIndex()
+	ci := NewChannelIndex(PublishAVBarrier)
 	if err := RebuildFromDisk(ci, dataDir, "ch"); err != nil {
 		t.Fatalf("RebuildFromDisk: %v", err)
 	}

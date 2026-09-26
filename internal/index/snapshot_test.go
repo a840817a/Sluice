@@ -21,7 +21,7 @@ func commitPublished(t *testing.T, ci *ChannelIndex, periodID, asID, repID strin
 }
 
 func TestSnapshotSortsSegmentsBySegNo(t *testing.T) {
-	ci := NewChannelIndex()
+	ci := NewChannelIndex(PublishAVBarrier)
 	// Reverse order in, ascending order expected out.
 	commitPublished(t, ci, "p0", "0", "v0", 5, 4, 3)
 
@@ -39,7 +39,7 @@ func TestSnapshotSortsSegmentsBySegNo(t *testing.T) {
 // The snapshot must be a copy. Committing after it was taken must not change
 // what it reports — that is the entire reason it exists.
 func TestSnapshotIsDetachedFromLaterWrites(t *testing.T) {
-	ci := NewChannelIndex()
+	ci := NewChannelIndex(PublishAVBarrier)
 	commitPublished(t, ci, "p0", "0", "v0", 1, 2)
 
 	snap := ci.Snapshot()
@@ -59,7 +59,7 @@ func TestSnapshotIsDetachedFromLaterWrites(t *testing.T) {
 // the next reader, since generation passes the same snapshot to several
 // builders.
 func TestSnapshotPublishedIsStableAcrossReaders(t *testing.T) {
-	ci := NewChannelIndex()
+	ci := NewChannelIndex(PublishAVBarrier)
 	commitPublished(t, ci, "p0", "0", "v0", 1, 2, 3)
 	snap := ci.Snapshot()
 
@@ -73,7 +73,7 @@ func TestSnapshotPublishedIsStableAcrossReaders(t *testing.T) {
 }
 
 func TestSnapshotMissingRepIsEmptyNotPanic(t *testing.T) {
-	snap := NewChannelIndex().Snapshot()
+	snap := NewChannelIndex(PublishAVBarrier).Snapshot()
 	if got := snap.Published("nope", "0", "v0"); got != nil {
 		t.Errorf("Published for an unknown rep = %v, want nil", got)
 	}
@@ -88,7 +88,7 @@ func TestSnapshotMissingRepIsEmptyNotPanic(t *testing.T) {
 // PeriodIDs must be sorted, so a synthesized presentation does not reshuffle
 // between requests.
 func TestSnapshotPeriodIDsSorted(t *testing.T) {
-	ci := NewChannelIndex()
+	ci := NewChannelIndex(PublishAVBarrier)
 	for _, p := range []string{"2", "0", "1"} {
 		commitPublished(t, ci, p, "0", "v0", 1)
 	}
@@ -108,7 +108,7 @@ func TestSnapshotPeriodIDsSorted(t *testing.T) {
 // period with content — SynthesizeHLSMPD keys off PeriodIDs to decide which
 // periods to emit at all.
 func TestSnapshotIncludesRepsWithNoPublishedSegments(t *testing.T) {
-	ci := NewChannelIndex()
+	ci := NewChannelIndex(PublishAVBarrier)
 	ci.Period("p0").AS("0").Rep("v0", 0) // created, nothing committed
 
 	snap := ci.Snapshot()

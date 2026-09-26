@@ -29,7 +29,7 @@ func seg(segNo uint64) index.SegmentState {
 //	p1/AS 0/v0: 1 committed
 func statusIndex(t *testing.T) *index.ChannelIndex {
 	t.Helper()
-	ci := index.NewChannelIndex()
+	ci := index.NewChannelIndex(index.PublishAVBarrier)
 
 	v0 := ci.Period("p0").AS("0").Rep("v0", 8)
 	ci.Period("p0").AS("0").SetMediaType("video")
@@ -112,7 +112,7 @@ func TestBuildStatusModeStrings(t *testing.T) {
 		{ModeVOD, "vod"},
 		{ModeStaticIngesting, "static_ingesting"},
 	} {
-		rt := &Runtime{ID: "ch1", Index: index.NewChannelIndex()}
+		rt := &Runtime{ID: "ch1", Index: index.NewChannelIndex(index.PublishAVBarrier)}
 		driveMode(t, rt, tc.mode)
 		if got := buildStatus(rt).Mode; got != tc.want {
 			t.Errorf("mode %d: got %q, want %q", tc.mode, got, tc.want)
@@ -123,10 +123,10 @@ func TestBuildStatusModeStrings(t *testing.T) {
 // A channel that completed a VOD transition must report counts from the
 // full-history VOD index, not from the live index it was built alongside.
 func TestBuildStatusUsesVODIndexOnlyInVODMode(t *testing.T) {
-	live := index.NewChannelIndex()
+	live := index.NewChannelIndex(index.PublishAVBarrier)
 	live.Period("p0").AS("0").Rep("v0", 8).RestorePublished(seg(1))
 
-	vod := index.NewChannelIndex()
+	vod := index.NewChannelIndex(index.PublishAVBarrier)
 	vodRep := vod.Period("p0").AS("0").Rep("v0", 8)
 	for i := uint64(1); i <= 5; i++ {
 		vodRep.RestorePublished(seg(i))
@@ -155,7 +155,7 @@ func TestBuildStatusUsesVODIndexOnlyInVODMode(t *testing.T) {
 // VOD mode with no completed transition must fall back to the live index
 // rather than panicking on a nil index.
 func TestBuildStatusVODModeWithoutVODIndex(t *testing.T) {
-	live := index.NewChannelIndex()
+	live := index.NewChannelIndex(index.PublishAVBarrier)
 	live.Period("p0").AS("0").Rep("v0", 8).RestorePublished(seg(1))
 
 	rt := &Runtime{ID: "ch1", Index: live}
@@ -170,7 +170,7 @@ func TestBuildStatusVODModeWithoutVODIndex(t *testing.T) {
 // period with no AdaptationSets is reachable and must still be reported — with
 // zero counts rather than being dropped from the response.
 func TestBuildStatusIncludesPeriodsWithNoAdaptationSets(t *testing.T) {
-	ci := index.NewChannelIndex()
+	ci := index.NewChannelIndex(index.PublishAVBarrier)
 	ci.Period("p0").AS("0").Rep("v0", 8).RestorePublished(seg(1))
 	ci.Period("p-empty") // created, never populated
 
@@ -186,7 +186,7 @@ func TestBuildStatusIncludesPeriodsWithNoAdaptationSets(t *testing.T) {
 }
 
 func TestBuildStatusEmptyIndex(t *testing.T) {
-	s := buildStatus(&Runtime{ID: "ch1", Index: index.NewChannelIndex()})
+	s := buildStatus(&Runtime{ID: "ch1", Index: index.NewChannelIndex(index.PublishAVBarrier)})
 	if len(s.Periods) != 0 {
 		t.Errorf("got %d periods for an empty index, want 0", len(s.Periods))
 	}
@@ -211,7 +211,7 @@ func TestManagerChannelsListsEveryConfiguredChannel(t *testing.T) {
 	}
 	rt1 := &Runtime{ID: "ch1", Index: statusIndex(t)}
 	rt1.setConfig(Config{MPDURL: "u1"})
-	rt2 := &Runtime{ID: "ch2", Index: index.NewChannelIndex()}
+	rt2 := &Runtime{ID: "ch2", Index: index.NewChannelIndex(index.PublishAVBarrier)}
 	rt2.setConfig(Config{MPDURL: "u2"})
 
 	m.mu.Lock()

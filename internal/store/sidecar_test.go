@@ -222,8 +222,9 @@ func TestCompactSegmentMetaOnMissingFile(t *testing.T) {
 }
 
 func TestSidecarPathSitsBesideSegments(t *testing.T) {
-	segDir := filepath.Dir(SegmentPathExt("/data", "ch1", "p0", "video", "0", "v0", 1, ExtTS))
-	side := SidecarPath("/data", "ch1", "p0", "video", "0", "v0")
+	l := RepLocation{DataDir: "/data", ChannelID: "ch1", PeriodID: "p0", MediaType: "video", ASID: "0", RepID: "v0"}
+	segDir := filepath.Dir(l.SegmentPath(1, ExtTS))
+	side := l.SidecarPath()
 	if filepath.Dir(side) != segDir {
 		t.Errorf("sidecar dir = %q, want it beside the segments at %q", filepath.Dir(side), segDir)
 	}

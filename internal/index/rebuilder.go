@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/a840817a/sluice/internal/pathseg"
 	"github.com/a840817a/sluice/internal/store"
 	"github.com/a840817a/sluice/internal/validate"
 )
@@ -140,7 +141,7 @@ func rebuildFromDisk(ci *ChannelIndex, dataDir, channelID string, capacity int) 
 				var segs []segEntry
 				// TS and WebVTT segments are fully described by their sidecar
 				// record and need no neighbour arithmetic.
-				var tsStates []SegmentState
+				var sidecarStates []SegmentState
 
 				segFiles, err := os.ReadDir(repPath)
 				if err != nil {
@@ -179,7 +180,7 @@ func rebuildFromDisk(ci *ChannelIndex, dataDir, channelID string, capacity int) 
 								st.IV = iv
 							}
 						}
-						tsStates = append(tsStates, st)
+						sidecarStates = append(sidecarStates, st)
 						continue
 					}
 
@@ -198,10 +199,10 @@ func rebuildFromDisk(ci *ChannelIndex, dataDir, channelID string, capacity int) 
 				// ("10.ts" before "2.ts"), and a bounded ring buffer keeps the
 				// last N pushed — so committing out of order would retain an
 				// arbitrary subset instead of the newest segments.
-				sort.Slice(tsStates, func(i, j int) bool {
-					return tsStates[i].SegNo < tsStates[j].SegNo
+				sort.Slice(sidecarStates, func(i, j int) bool {
+					return sidecarStates[i].SegNo < sidecarStates[j].SegNo
 				})
-				for _, st := range tsStates {
+				for _, st := range sidecarStates {
 					rep.commit(st)
 				}
 
@@ -273,7 +274,7 @@ func rebuildFromDisk(ci *ChannelIndex, dataDir, channelID string, capacity int) 
 // encoding existed (ADR-0006), when the raw ID was the directory name; it is
 // read back as that ID so a channel stored then still rebuilds.
 func idFromDir(name string) string {
-	if id, ok := store.ParseIDDir(name); ok {
+	if id, ok := pathseg.Decode(name); ok {
 		return id
 	}
 	return name

@@ -12,7 +12,7 @@ func TestCommitPublishesUnderTheIndexPolicy(t *testing.T) {
 	seg := SegmentState{SegNo: 1, StartPTS: 0, EndPTS: 90000, Timescale: 90000}
 
 	t.Run("A/V barrier", func(t *testing.T) {
-		ci := NewChannelIndex()
+		ci := NewChannelIndex(PublishAVBarrier)
 		ci.Period("p").AS("1").SetMediaType(MediaAudio)
 		if got := ci.Commit(video, 8, seg); !got.New || got.Published != 0 {
 			t.Errorf("video before its audio = %+v, want new and nothing published", got)

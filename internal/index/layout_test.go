@@ -10,7 +10,7 @@ import (
 // with no AdaptationSet and an AdaptationSet with no representation, which
 // ForEachRep never yields.
 func TestLayoutReportsEveryLevelInOrder(t *testing.T) {
-	ci := NewChannelIndex()
+	ci := NewChannelIndex(PublishAVBarrier)
 	ci.Period("empty")
 	ci.Period("p").AS("1").SetMediaType(MediaAudio) // no representation yet
 	v := ci.Period("p").AS("0")
@@ -41,7 +41,7 @@ func TestLayoutReportsEveryLevelInOrder(t *testing.T) {
 // or Layout that read the period map unlocked while a commit added a period
 // would be reported.
 func TestIndexReadsLockThemselves(t *testing.T) {
-	ci := NewChannelIndex()
+	ci := NewChannelIndex(PublishAVBarrier)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {

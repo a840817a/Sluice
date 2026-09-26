@@ -18,7 +18,7 @@ func TestGenerateStaticMPD(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ci := index.NewChannelIndex()
+	ci := index.NewChannelIndex(index.PublishAVBarrier)
 	cfg := GeneratorConfig{
 		GatewayBaseURL: "https://gw.example.com",
 		ChannelID:      "ch1",
@@ -84,7 +84,7 @@ func TestGenerateStaticMPD_DisablesSelectedDRM(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ci := index.NewChannelIndex()
+	ci := index.NewChannelIndex(index.PublishAVBarrier)
 	cfg := GeneratorConfig{
 		GatewayBaseURL:  "https://gw.example.com",
 		ChannelID:       "ch1",

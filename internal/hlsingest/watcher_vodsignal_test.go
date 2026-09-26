@@ -50,7 +50,7 @@ func TestVODUpstreamIsKnownBeforeEnqueueFinishes(t *testing.T) {
 	prog := progress.New()
 	w := NewWatcher(config.Config{Store: config.StoreConfig{DataDir: t.TempDir()}},
 		"vodsig", origin.URL+"/master.m3u8", nil, false, "",
-		index.NewChannelIndex(), broker)
+		index.NewChannelIndex(index.PublishAVBarrier), broker)
 	w.SetProgress(prog)
 
 	ctx, cancel := context.WithCancel(context.Background())

@@ -58,9 +58,9 @@ func TestSegmentAndInitURLsNameOnePeriod(t *testing.T) {
 	segs, inits := map[string][]byte{}, map[string][]byte{}
 	for i, period := range []string{"0", "1"} {
 		inits[period] = fmp4Init(uint32(cmafTimescale + i))
-		write(store.InitPath(dataDir, id, period, "video", "0", "v0"), inits[period])
+		write(store.RepLocation{DataDir: dataDir, ChannelID: id, PeriodID: period, MediaType: "video", ASID: "0", RepID: "v0"}.InitPath(), inits[period])
 		segs[period] = fmp4Segment(uint64(i+1) * 1000 * cmafTimescale)
-		write(store.SegmentPath(dataDir, id, period, "video", "0", "v0", 5), segs[period])
+		write(store.RepLocation{DataDir: dataDir, ChannelID: id, PeriodID: period, MediaType: "video", ASID: "0", RepID: "v0"}.SegmentPath(5, store.ExtFMP4), segs[period])
 	}
 
 	cfg := config.Config{Store: config.StoreConfig{DataDir: dataDir}, Server: config.ServerConfig{BaseURL: "http://gw.test"}}
@@ -233,7 +233,7 @@ func TestUnusualPeriodIDReachesItsSegment(t *testing.T) {
 	want := map[string][]byte{}
 	for i, period := range periods {
 		want[period] = fmp4Segment(uint64(i+1) * 1000 * cmafTimescale)
-		path := store.SegmentPath(dataDir, id, period, "video", "0", "v0", 5)
+		path := store.RepLocation{DataDir: dataDir, ChannelID: id, PeriodID: period, MediaType: "video", ASID: "0", RepID: "v0"}.SegmentPath(5, store.ExtFMP4)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -262,7 +262,7 @@ func TestUnusualPeriodIDReachesItsSegment(t *testing.T) {
 // same holds for the lifetime record of upstream discontinuities, which
 // EXT-X-DISCONTINUITY-SEQUENCE counts.
 func TestPeriodSegmentsCarryLifetimeRangeInOrder(t *testing.T) {
-	ci := index.NewChannelIndex()
+	ci := index.NewChannelIndex(index.PublishAVBarrier)
 	for _, period := range []string{"10", "2"} {
 		rep := ci.Period(period).AS("0").Rep("v0", 2) // holds 2; 5 published
 		for n := uint64(100); n <= 104; n++ {
@@ -294,7 +294,7 @@ func TestPeriodSegmentsCarryLifetimeRangeInOrder(t *testing.T) {
 // an audio AdaptationSet is known but has no segment, the barrier holds every
 // later video segment back.
 func TestUnpublishedSegmentAtAPeriodEdgeKeepsBothPeriods(t *testing.T) {
-	ci := index.NewChannelIndex()
+	ci := index.NewChannelIndex(index.PublishAVBarrier)
 	commit := func(period string, first, last, publishedTo uint64) {
 		for n := first; n <= last; n++ {
 			if n == publishedTo+1 {

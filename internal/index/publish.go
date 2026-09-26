@@ -14,9 +14,8 @@ const (
 	// presentation with time-aligned tracks, so letting one track run ahead of
 	// the other in the manifest produces a stream it cannot play cleanly.
 	//
-	// It is the zero value, and therefore what an index does if nothing sets
-	// a policy at all: an omission degrades to the stricter rule rather than to
-	// no gating.
+	// It is the zero value, so a policy left unset degrades to the stricter
+	// rule rather than to no gating.
 	PublishAVBarrier PublishPolicy = iota
 
 	// PublishImmediately publishes each committed segment as soon as it lands.

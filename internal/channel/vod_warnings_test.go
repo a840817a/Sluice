@@ -109,7 +109,7 @@ func TestVODCompletesWithStrayTSSegment(t *testing.T) {
 	}))
 	t.Cleanup(origin.Close)
 	m, st, gw := warningsManager(t)
-	stray := store.SegmentPathExt(gw.Store.DataDir, "stray", "p0", index.MediaVideo, "0", "v0", 7, store.ExtTS)
+	stray := store.RepLocation{DataDir: gw.Store.DataDir, ChannelID: "stray", PeriodID: "p0", MediaType: index.MediaVideo, ASID: "0", RepID: "v0"}.SegmentPath(7, store.ExtTS)
 	if err := os.MkdirAll(filepath.Dir(stray), 0o755); err != nil {
 		t.Fatal(err)
 	}

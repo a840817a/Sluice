@@ -17,7 +17,7 @@ func writeTSRep(t *testing.T, dataDir, channelID string, n int, withKey bool) {
 	t.Helper()
 	for i := 0; i < n; i++ {
 		segNo := uint64(i)
-		path := store.SegmentPathExt(dataDir, channelID, "0", "video", "0", "v0", segNo, store.ExtTS)
+		path := store.RepLocation{DataDir: dataDir, ChannelID: channelID, PeriodID: "0", MediaType: "video", ASID: "0", RepID: "v0"}.SegmentPath(segNo, store.ExtTS)
 		if err := store.Write(path, []byte{0x47, byte(i)}); err != nil {
 			t.Fatalf("write segment: %v", err)
 		}
@@ -32,7 +32,7 @@ func writeTSRep(t *testing.T, dataDir, channelID string, n int, withKey bool) {
 			m.KeyURI = "https://drm.example.com/k1.bin"
 			m.IV = hex.EncodeToString([]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, byte(i)})
 		}
-		side := store.SidecarPath(dataDir, channelID, "0", "video", "0", "v0")
+		side := store.RepLocation{DataDir: dataDir, ChannelID: channelID, PeriodID: "0", MediaType: "video", ASID: "0", RepID: "v0"}.SidecarPath()
 		if err := store.AppendSegmentMeta(side, m); err != nil {
 			t.Fatalf("append meta: %v", err)
 		}
@@ -63,7 +63,7 @@ func TestRebuildRestoresTSSegmentsFromSidecar(t *testing.T) {
 	dir := t.TempDir()
 	writeTSRep(t, dir, "ch1", 5, false)
 
-	ci := NewChannelIndex()
+	ci := NewChannelIndex(PublishAVBarrier)
 	if err := RebuildFromDisk(ci, dir, "ch1"); err != nil {
 		t.Fatalf("RebuildFromDisk: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestRebuildRestoresKeyMaterial(t *testing.T) {
 	dir := t.TempDir()
 	writeTSRep(t, dir, "ch1", 3, true)
 
-	ci := NewChannelIndex()
+	ci := NewChannelIndex(PublishAVBarrier)
 	if err := RebuildFromDisk(ci, dir, "ch1"); err != nil {
 		t.Fatalf("RebuildFromDisk: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestRebuildKeepsNewestTSSegmentsWhenRingIsBounded(t *testing.T) {
 	dir := t.TempDir()
 	writeTSRep(t, dir, "ch1", 20, false)
 
-	ci := NewChannelIndex()
+	ci := NewChannelIndex(PublishAVBarrier)
 	if err := RebuildFromDiskWithCapacity(ci, dir, "ch1", 5); err != nil {
 		t.Fatalf("rebuild: %v", err)
 	}
@@ -156,12 +156,12 @@ func TestRebuildSkipsTSSegmentsWithNoMetadata(t *testing.T) {
 	// timeline; serving it would put a wrong-duration entry in the playlist.
 	dir := t.TempDir()
 	writeTSRep(t, dir, "ch1", 3, false)
-	orphan := store.SegmentPathExt(dir, "ch1", "0", "video", "0", "v0", 99, store.ExtTS)
+	orphan := store.RepLocation{DataDir: dir, ChannelID: "ch1", PeriodID: "0", MediaType: "video", ASID: "0", RepID: "v0"}.SegmentPath(99, store.ExtTS)
 	if err := store.Write(orphan, []byte{0x47}); err != nil {
 		t.Fatal(err)
 	}
 
-	ci := NewChannelIndex()
+	ci := NewChannelIndex(PublishAVBarrier)
 	if err := RebuildFromDisk(ci, dir, "ch1"); err != nil {
 		t.Fatalf("rebuild: %v", err)
 	}
@@ -178,16 +178,16 @@ func TestRebuildIgnoresSidecarFileAsSegment(t *testing.T) {
 
 	// The sidecar sits in the same directory as the segments; it must not be
 	// mistaken for one.
-	side := store.SidecarPath(dir, "ch1", "0", "video", "0", "v0")
+	side := store.RepLocation{DataDir: dir, ChannelID: "ch1", PeriodID: "0", MediaType: "video", ASID: "0", RepID: "v0"}.SidecarPath()
 	if _, err := os.Stat(side); err != nil {
 		t.Fatalf("sidecar missing: %v", err)
 	}
 	if filepath.Dir(side) != filepath.Dir(
-		store.SegmentPathExt(dir, "ch1", "0", "video", "0", "v0", 0, store.ExtTS)) {
+		store.RepLocation{DataDir: dir, ChannelID: "ch1", PeriodID: "0", MediaType: "video", ASID: "0", RepID: "v0"}.SegmentPath(0, store.ExtTS)) {
 		t.Fatal("test setup: sidecar is not beside the segments")
 	}
 
-	ci := NewChannelIndex()
+	ci := NewChannelIndex(PublishAVBarrier)
 	if err := RebuildFromDisk(ci, dir, "ch1"); err != nil {
 		t.Fatalf("rebuild: %v", err)
 	}
@@ -202,11 +202,11 @@ func TestRebuildRestoresWebVTTSegmentsFromSidecar(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < 3; i++ {
 		segNo := uint64(i)
-		path := store.SegmentPathExt(dir, "ch1", "0", MediaText, "2", "s0", segNo, store.ExtVTT)
+		path := store.RepLocation{DataDir: dir, ChannelID: "ch1", PeriodID: "0", MediaType: MediaText, ASID: "2", RepID: "s0"}.SegmentPath(segNo, store.ExtVTT)
 		if err := store.Write(path, []byte("WEBVTT\n")); err != nil {
 			t.Fatal(err)
 		}
-		side := store.SidecarPath(dir, "ch1", "0", MediaText, "2", "s0")
+		side := store.RepLocation{DataDir: dir, ChannelID: "ch1", PeriodID: "0", MediaType: MediaText, ASID: "2", RepID: "s0"}.SidecarPath()
 		if err := store.AppendSegmentMeta(side, store.SegmentMeta{
 			SegNo: segNo, StartPTS: int64(i) * 4 * tsTimescale, EndPTS: int64(i+1) * 4 * tsTimescale, Timescale: tsTimescale,
 		}); err != nil {

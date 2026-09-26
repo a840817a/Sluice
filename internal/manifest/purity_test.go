@@ -38,7 +38,7 @@ func testMPD(t *testing.T) *imdp.ParsedMPD {
 // still touch it — taking the snapshot must be read-only too.
 func TestSnapshotAndGenerateLeaveIndexUntouched(t *testing.T) {
 	p := testMPD(t)
-	ci := index.NewChannelIndex()
+	ci := index.NewChannelIndex(index.PublishAVBarrier)
 
 	if before := ci.PeriodIDs(); len(before) != 0 {
 		t.Fatalf("fresh index already has periods %v", before)
@@ -73,11 +73,11 @@ func TestGenerateIsReproducibleWithPinnedClock(t *testing.T) {
 		Now:            time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC),
 	}
 
-	first, err := Generate(p, index.NewChannelIndex().Snapshot(), cfg)
+	first, err := Generate(p, index.NewChannelIndex(index.PublishAVBarrier).Snapshot(), cfg)
 	if err != nil {
 		t.Fatalf("first generate: %v", err)
 	}
-	second, err := Generate(p, index.NewChannelIndex().Snapshot(), cfg)
+	second, err := Generate(p, index.NewChannelIndex(index.PublishAVBarrier).Snapshot(), cfg)
 	if err != nil {
 		t.Fatalf("second generate: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestGenerateZeroNowUsesWallClock(t *testing.T) {
 	p.Type = imdp.PresentationDynamic // publishTime is only emitted for dynamic
 
 	before := time.Now().UTC().Add(-time.Second)
-	out, err := Generate(p, index.NewChannelIndex().Snapshot(), GeneratorConfig{
+	out, err := Generate(p, index.NewChannelIndex(index.PublishAVBarrier).Snapshot(), GeneratorConfig{
 		GatewayBaseURL: "https://gw.example.com",
 		ChannelID:      "ch1",
 	})

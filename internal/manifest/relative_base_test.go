@@ -23,7 +23,7 @@ func TestGenerateEmptyBaseIsRootRelative(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ci := index.NewChannelIndex()
+	ci := index.NewChannelIndex(index.PublishAVBarrier)
 	out, err := Generate(p, ci.Snapshot(), GeneratorConfig{ChannelID: "ch1"})
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +72,7 @@ func TestTimelineSurvivesRelativeBase(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ci := index.NewChannelIndex()
+	ci := index.NewChannelIndex(index.PublishAVBarrier)
 	as := ci.Period("p0").AS("0")
 	as.SetMediaType(index.MediaVideo)
 	rep := as.Rep("v0", 0)

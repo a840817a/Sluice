@@ -81,17 +81,13 @@ type ChannelIndex struct {
 	policy PublishPolicy
 }
 
-// NewChannelIndex returns an empty index that publishes under policy, or
-// under PublishAVBarrier when none is given. The policy follows the channel's
-// source protocol, and every index built for a channel — live, rebuilt at a
-// restart, rebuilt for VOD — must use the same one, or segments a player has
-// already seen can vanish when the index is rebuilt.
-func NewChannelIndex(policy ...PublishPolicy) *ChannelIndex {
-	ci := &ChannelIndex{periods: make(map[string]*PeriodState)}
-	if len(policy) > 0 {
-		ci.policy = policy[0]
-	}
-	return ci
+// NewChannelIndex returns an empty index that publishes under policy. The
+// policy follows the channel's source protocol, and every index built for a
+// channel — live, rebuilt at a restart, rebuilt for VOD — must use the same
+// one, or segments a player has already seen can vanish when the index is
+// rebuilt.
+func NewChannelIndex(policy PublishPolicy) *ChannelIndex {
+	return &ChannelIndex{periods: make(map[string]*PeriodState), policy: policy}
 }
 
 // CommitResult is what one Commit did.
@@ -117,12 +113,7 @@ func (ci *ChannelIndex) Commit(ref RepRef, capacity int, seg SegmentState) Commi
 	}
 	rep := as.Rep(ref.RepID, capacity)
 	res := CommitResult{New: rep.commit(seg)}
-	switch ci.policy {
-	case PublishImmediately:
-		res.Published = rep.markPublished(map[uint64]struct{}{seg.SegNo: {}})
-	default:
-		res.Published = ps.barrier.checkAndPublish()
-	}
+	res.Published = ci.publish(ps, map[*RepresentationState]map[uint64]struct{}{rep: {seg.SegNo: {}}})
 	return res
 }
 
@@ -131,18 +122,31 @@ func (ci *ChannelIndex) Commit(ref RepRef, capacity int, seg SegmentState) Commi
 // than running the barrier per segment, which would be quadratic in the
 // period's length.
 func (ci *ChannelIndex) publishCommitted(ps *PeriodState) {
-	switch ci.policy {
-	case PublishImmediately:
-		ps.ForEachRep(func(_, _ string, rep *RepresentationState) {
-			segNos := make(map[uint64]struct{})
-			for _, s := range rep.Committed() {
-				segNos[s.SegNo] = struct{}{}
+	fresh := make(map[*RepresentationState]map[uint64]struct{})
+	ps.ForEachRep(func(_, _ string, rep *RepresentationState) {
+		for _, s := range rep.Committed() {
+			if fresh[rep] == nil {
+				fresh[rep] = make(map[uint64]struct{})
 			}
-			rep.markPublished(segNos)
-		})
-	default:
-		ps.barrier.checkAndPublish()
+			fresh[rep][s.SegNo] = struct{}{}
+		}
+	})
+	ci.publish(ps, fresh)
+}
+
+// publish applies the index's policy to ps after fresh, the segments just
+// committed there, and returns how many segments became visible.
+// PublishImmediately publishes fresh itself; the A/V barrier ignores it and
+// publishes whatever in the period it can now match.
+func (ci *ChannelIndex) publish(ps *PeriodState, fresh map[*RepresentationState]map[uint64]struct{}) int {
+	if ci.policy == PublishImmediately {
+		n := 0
+		for rep, segNos := range fresh {
+			n += rep.markPublished(segNos)
+		}
+		return n
 	}
+	return ps.barrier.checkAndPublish()
 }
 
 // PeriodIDs returns the IDs of all known periods, including ones that hold no

@@ -9,6 +9,12 @@
 // a router should be greppable, and httpapi's route table test is what pins the
 // patterns and these builders to each other.
 //
+// Segment and init URLs name the period they belong to (ADR-0005): after an
+// origin reset two periods can hold the same representation and segment
+// number, and a URL without the period cannot say which file it means. The
+// period is written as one path segment in pathseg's encoding, which the
+// segment handlers decode.
+//
 // This package must not import anything from internal/ except pathseg, which
 // imports nothing. It is depended on by internal/manifest and internal/hlsout,
 // neither of which may import internal/httpapi — that edge is what a shared
@@ -31,19 +37,6 @@ import (
 // need a normalized base without building a URL from it.
 func Base(baseURL string) string { return strings.TrimRight(baseURL, "/") }
 
-// --- Period path segment ---------------------------------------------------
-//
-// Segment and init URLs name the period they belong to (ADR-0005): after an
-// upstream reset two periods can hold the same representation and segment
-// number, and a URL without the period cannot say which file it means.
-
-// PeriodSegment encodes a period ID as one URL path segment. The encoding is
-// pathseg's, which the segment store also uses for its directory names.
-func PeriodSegment(periodID string) string { return pathseg.Encode(periodID) }
-
-// ParsePeriodSegment reverses PeriodSegment.
-func ParsePeriodSegment(seg string) (string, bool) { return pathseg.Decode(seg) }
-
 // --- Relative paths, no leading slash -------------------------------------
 //
 // These go inside a DASH MPD whose <BaseURL> is already the gateway root, so
@@ -58,12 +51,12 @@ func ParsePeriodSegment(seg string) (string, bool) { return pathseg.Decode(seg) 
 // ParseUint. Collapsing the two forms into one builder would still pass every
 // test while changing every HLS segment URI that players and CDNs have cached.
 func SegmentTemplatePath(channelID, periodID, repID string) string {
-	return fmt.Sprintf("v1/channels/%s/segments/%s/%s/$Number%%09d$.m4s", channelID, PeriodSegment(periodID), repID)
+	return fmt.Sprintf("v1/channels/%s/segments/%s/%s/$Number%%09d$.m4s", channelID, pathseg.Encode(periodID), repID)
 }
 
 // InitTemplatePath is the DASH SegmentTemplate initialization attribute.
 func InitTemplatePath(channelID, periodID, repID string) string {
-	return fmt.Sprintf("v1/channels/%s/init/%s/%s.mp4", channelID, PeriodSegment(periodID), repID)
+	return fmt.Sprintf("v1/channels/%s/init/%s/%s.mp4", channelID, pathseg.Encode(periodID), repID)
 }
 
 // --- Absolute URLs ---------------------------------------------------------
@@ -80,13 +73,13 @@ func MediaPlaylistURL(base, channelID, repID string) string {
 // carrying the extension it was stored under (see SegmentTemplatePath for why
 // this is not zero-padded).
 func SegmentURL(base, channelID, periodID, repID string, segNo uint64, ext string) string {
-	return Base(base) + "/v1/channels/" + channelID + "/segments/" + PeriodSegment(periodID) + "/" + repID + "/" +
+	return Base(base) + "/v1/channels/" + channelID + "/segments/" + pathseg.Encode(periodID) + "/" + repID + "/" +
 		strconv.FormatUint(segNo, 10) + ext
 }
 
 // InitURL is a representation's fMP4 initialization segment.
 func InitURL(base, channelID, periodID, repID string) string {
-	return Base(base) + "/v1/channels/" + channelID + "/init/" + PeriodSegment(periodID) + "/" + repID + ".mp4"
+	return Base(base) + "/v1/channels/" + channelID + "/init/" + pathseg.Encode(periodID) + "/" + repID + ".mp4"
 }
 
 // KeyProxyBaseURL is the prefix a key ID is appended to, and therefore must

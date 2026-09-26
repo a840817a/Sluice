@@ -69,51 +69,41 @@ func asDirName(mediaType, asID string) string {
 	return mediaType + "_" + asID
 }
 
-// repDir returns the directory that holds one representation's init segment,
-// media segments and sidecar.
+// RepLocation places one representation's files under the data directory: its
+// init segment, media segments and sidecar all live in Dir.
 //
-//	{dataDir}/{channelID}/periods/{periodID}/{mediaType}_{asID}/{repID}
+//	{DataDir}/{ChannelID}/periods/{PeriodID}/{MediaType}_{ASID}/{RepID}
 //
-// The period and representation IDs come from the upstream, so each is written
+// The period and representation IDs come from the origin, so each is written
 // as a pathseg-encoded directory name (ADR-0006): an ID with no id attribute
 // behind it is empty and would otherwise vanish from the path, and one
 // containing "/" or ".." would otherwise place files outside the data
-// directory. IDs made of letters, digits, ".", "_" and "-" are unchanged.
-// ParseIDDir reads a name back.
-func repDir(dataDir, channelID, periodID, mediaType, asID, repID string) string {
+// directory. IDs made of letters, digits, ".", "_" and "-" are unchanged, and
+// pathseg.Decode reads a name back.
+type RepLocation struct {
+	DataDir, ChannelID, PeriodID, MediaType, ASID, RepID string
+}
+
+// Dir is the representation's directory.
+func (l RepLocation) Dir() string {
 	return filepath.Join(
-		dataDir,
-		channelID,
+		l.DataDir,
+		l.ChannelID,
 		"periods",
-		pathseg.Encode(periodID),
-		asDirName(mediaType, asID),
-		pathseg.Encode(repID),
+		pathseg.Encode(l.PeriodID),
+		asDirName(l.MediaType, l.ASID),
+		pathseg.Encode(l.RepID),
 	)
 }
 
-// ParseIDDir returns the period or representation ID a directory name under
-// "periods" stands for, or false for a name the layout never writes.
-func ParseIDDir(name string) (string, bool) { return pathseg.Decode(name) }
-
-// SegmentPath returns the canonical path for an fMP4 media segment.
-//
-//	{repDir}/{segNo}.m4s
-func SegmentPath(dataDir, channelID, periodID, mediaType, asID, repID string, segNo uint64) string {
-	return SegmentPathExt(dataDir, channelID, periodID, mediaType, asID, repID, segNo, ExtFMP4)
+// SegmentPath is the path of media segment segNo stored with extension ext
+// (ExtFMP4, ExtTS or ExtVTT).
+func (l RepLocation) SegmentPath(segNo uint64, ext string) string {
+	return filepath.Join(l.Dir(), fmt.Sprintf("%d%s", segNo, ext))
 }
 
-// SegmentPathExt returns the canonical path for a media segment with an
-// explicit extension (ExtFMP4 or ExtTS).
-func SegmentPathExt(dataDir, channelID, periodID, mediaType, asID, repID string, segNo uint64, ext string) string {
-	return filepath.Join(
-		repDir(dataDir, channelID, periodID, mediaType, asID, repID),
-		fmt.Sprintf("%d%s", segNo, ext),
-	)
-}
+// InitPath is the path of the representation's init segment.
+func (l RepLocation) InitPath() string { return filepath.Join(l.Dir(), InitFileName) }
 
-// InitPath returns the canonical path for an init segment.
-//
-//	{repDir}/init.mp4
-func InitPath(dataDir, channelID, periodID, mediaType, asID, repID string) string {
-	return filepath.Join(repDir(dataDir, channelID, periodID, mediaType, asID, repID), InitFileName)
-}
+// SidecarPath is the path of the representation's segment metadata file.
+func (l RepLocation) SidecarPath() string { return filepath.Join(l.Dir(), SidecarFileName) }

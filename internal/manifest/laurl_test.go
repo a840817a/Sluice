@@ -88,7 +88,7 @@ func TestGeneratedManifestNeverPointsAtTheUpstreamLicenceServer(t *testing.T) {
 	}
 
 	const gateway = "https://gw.example.com/v1/channels/ch1/license"
-	out, err := Generate(p, index.NewChannelIndex().Snapshot(), GeneratorConfig{
+	out, err := Generate(p, index.NewChannelIndex(index.PublishAVBarrier).Snapshot(), GeneratorConfig{
 		GatewayBaseURL: "https://gw.example.com",
 		ChannelID:      "ch1",
 		LicenseURL:     gateway,
@@ -139,7 +139,7 @@ func TestGeneratedManifestRewritesTheNamespacePrefixedSpelling(t *testing.T) {
 	}
 
 	const gateway = "https://gw.example.com/v1/channels/ch1/license"
-	out, err := Generate(p, index.NewChannelIndex().Snapshot(), GeneratorConfig{
+	out, err := Generate(p, index.NewChannelIndex(index.PublishAVBarrier).Snapshot(), GeneratorConfig{
 		GatewayBaseURL: "https://gw.example.com",
 		ChannelID:      "ch1",
 		LicenseURL:     gateway,

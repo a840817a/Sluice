@@ -34,14 +34,6 @@ type SegmentMeta struct {
 	IV     string `json:"iv,omitempty"`
 }
 
-// SidecarPath returns the metadata file for one representation. It lives beside
-// that representation's segments.
-//
-//	{repDir}/segments.jsonl
-func SidecarPath(dataDir, channelID, periodID, mediaType, asID, repID string) string {
-	return filepath.Join(repDir(dataDir, channelID, periodID, mediaType, asID, repID), SidecarFileName)
-}
-
 // AppendSegmentMeta appends one record.
 //
 // Appending rather than rewriting keeps the per-segment cost constant and means

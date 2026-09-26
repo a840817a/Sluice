@@ -50,7 +50,7 @@ func TestVODPlaylistOutlastsBrokerCapacity(t *testing.T) {
 	broker := queue.NewBroker(brokerCap)
 	w := NewWatcher(config.Config{Store: config.StoreConfig{DataDir: t.TempDir()}},
 		"bp", srv.URL+"/master.m3u8", nil, false, "",
-		index.NewChannelIndex(), broker)
+		index.NewChannelIndex(index.PublishAVBarrier), broker)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -137,7 +137,7 @@ func TestFinishedRenditionsSurviveConcurrentAdmissionAndRetries(t *testing.T) {
 		t.Helper()
 		w := NewWatcher(config.Config{Store: config.StoreConfig{DataDir: t.TempDir()}},
 			channel, origin.URL+"/"+channel+"/master.m3u8", nil, false, "",
-			index.NewChannelIndex(), broker)
+			index.NewChannelIndex(index.PublishAVBarrier), broker)
 		if err := w.Run(ctx); err != nil {
 			t.Fatalf("watcher %s: Run() = %v, want nil for a finished playlist", channel, err)
 		}

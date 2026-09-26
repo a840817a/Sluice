@@ -8,7 +8,7 @@ import (
 
 func seedIndex(t *testing.T) *ChannelIndex {
 	t.Helper()
-	ci := NewChannelIndex()
+	ci := NewChannelIndex(PublishAVBarrier)
 	for _, p := range []struct {
 		period, as, mediaType string
 		reps                  []string
@@ -74,7 +74,7 @@ func TestForEachRepAllowsRepMethodsInsideTheCallback(t *testing.T) {
 
 func TestForEachRepOnEmptyIndex(t *testing.T) {
 	calls := 0
-	NewChannelIndex().ForEachRep(func(RepRef, *RepresentationState) { calls++ })
+	NewChannelIndex(PublishAVBarrier).ForEachRep(func(RepRef, *RepresentationState) { calls++ })
 	if calls != 0 {
 		t.Errorf("fn called %d times on an empty index, want 0", calls)
 	}

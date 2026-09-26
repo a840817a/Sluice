@@ -40,7 +40,7 @@ const segmentListUpstream = `<?xml version="1.0" encoding="utf-8"?>
 // manifest that reuses or omits ids.
 func publishedIndex(t *testing.T, timescale uint32, durTicks int64, segNos ...uint64) index.Snapshot {
 	t.Helper()
-	ci := index.NewChannelIndex()
+	ci := index.NewChannelIndex(index.PublishAVBarrier)
 	rep := ci.Period("p0").AS("0").Rep("v0", 32)
 
 	published := map[uint64]struct{}{}
@@ -114,7 +114,7 @@ func TestSegmentListStartNumberFollowsWhatIsPublished(t *testing.T) {
 // representation with nothing published yet is dropped rather than advertised
 // as something a player can request.
 func TestSegmentListRepresentationIsDroppedUntilSomethingIsPublished(t *testing.T) {
-	xml := generateOrFail(t, segmentListUpstream, index.NewChannelIndex().Snapshot())
+	xml := generateOrFail(t, segmentListUpstream, index.NewChannelIndex(index.PublishAVBarrier).Snapshot())
 
 	if strings.Contains(xml, `id="v0"`) {
 		t.Errorf("a representation with nothing published was advertised:\n%s", xml)

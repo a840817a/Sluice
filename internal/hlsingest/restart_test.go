@@ -18,7 +18,7 @@ type heldSegments map[string]map[string][]uint64
 // restartedWatcher builds a watcher over an index that already holds segs, the
 // way a gateway restart finds a channel that was ingesting before it went down.
 func restartedWatcher(segs heldSegments) *Watcher {
-	ci := index.NewChannelIndex()
+	ci := index.NewChannelIndex(index.PublishAVBarrier)
 	for periodID, reps := range segs {
 		for repID, nums := range reps {
 			v, mediaType := testVariant(), "video"

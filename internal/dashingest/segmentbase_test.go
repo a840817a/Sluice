@@ -94,7 +94,7 @@ func startRangeOrigin(t *testing.T, file []byte, rec *rangeOrigin) *httptest.Ser
 
 func segmentBaseWatcher(t *testing.T) *Watcher {
 	t.Helper()
-	return NewWatcher(config.Config{}, "ch", nil, index.NewChannelIndex(), queue.NewBroker(0))
+	return NewWatcher(config.Config{}, "ch", nil, index.NewChannelIndex(index.PublishAVBarrier), queue.NewBroker(0))
 }
 
 func parseMPD(t *testing.T, raw string) *imdp.ParsedMPD {

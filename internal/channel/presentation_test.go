@@ -139,7 +139,7 @@ func TestDASHPresentationProtocols(t *testing.T) {
 	if p := dashPresentation(enc); p.ServesHLS || !p.ServesDASH || p.Ready {
 		t.Errorf("encrypted DASH: ServesHLS %v ServesDASH %v Ready %v, want false true false", p.ServesHLS, p.ServesDASH, p.Ready)
 	}
-	rt := &Runtime{Index: index.NewChannelIndex()}
+	rt := &Runtime{Index: index.NewChannelIndex(index.PublishAVBarrier)}
 	if p := rt.Serving().Presentation; !p.ServesHLS || !p.ServesDASH || p.Ready {
 		t.Errorf("DASH before its first MPD = %+v, want servable both ways and not ready", p)
 	}
@@ -177,7 +177,7 @@ func TestResolveKeyRefusesWhatItMustNot(t *testing.T) {
 // Status decorates an HLS source's tracks from the same Presentation the
 // playlists are rendered from.
 func TestBuildTracksDecoratesHLSFromThePresentation(t *testing.T) {
-	ci := index.NewChannelIndex()
+	ci := index.NewChannelIndex(index.PublishAVBarrier)
 	ci.Period("0").AS("0").Rep("v0", 8).RestorePublished(seg(1))
 	sv := Serving{IsHLSSource: true, Presentation: Presentation{
 		Variants: []hlsdesc.Variant{{RepID: "v0", Codecs: "avc1.64001f", Width: 1280, Height: 720}},

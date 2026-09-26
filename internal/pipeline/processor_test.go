@@ -12,7 +12,7 @@ import (
 )
 
 func TestExpireOldSegments_UsesLiveEdgeWindow(t *testing.T) {
-	ci := index.NewChannelIndex()
+	ci := index.NewChannelIndex(index.PublishAVBarrier)
 	ps := ci.Period("p0")
 	as := ps.AS("v0")
 	as.SetMediaType("video")
@@ -47,7 +47,7 @@ func TestExpireOldSegments_UsesLiveEdgeWindow(t *testing.T) {
 }
 
 func TestExpireOldSegments_NoPublished_NoChange(t *testing.T) {
-	ci := index.NewChannelIndex()
+	ci := index.NewChannelIndex(index.PublishAVBarrier)
 	ps := ci.Period("p0")
 	as := ps.AS("v0")
 	as.SetMediaType("video")
@@ -78,7 +78,7 @@ func TestExpireOldSegments_NoPublished_NoChange(t *testing.T) {
 func expiryFixture(t *testing.T) (*index.ChannelIndex, *index.PeriodState, []string) {
 	t.Helper()
 	dir := t.TempDir()
-	ci := index.NewChannelIndex()
+	ci := index.NewChannelIndex(index.PublishAVBarrier)
 	ps := ci.Period("p0")
 	as := ps.AS("v0")
 	as.SetMediaType("video")

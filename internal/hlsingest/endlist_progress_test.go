@@ -39,7 +39,7 @@ func TestEndListProgressReportsWhoHasEnded(t *testing.T) {
 
 	w := NewWatcher(config.Config{Store: config.StoreConfig{DataDir: t.TempDir()}},
 		"ch1", srv.URL+"/master.m3u8", nil, false, "",
-		index.NewChannelIndex(), queue.NewBroker(64))
+		index.NewChannelIndex(index.PublishAVBarrier), queue.NewBroker(64))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

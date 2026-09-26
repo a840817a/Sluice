@@ -244,7 +244,7 @@ func (p *Processor) handle(res fetch.Result) {
 		if err := validate.ValidateInit(res.InitData); err != nil {
 			slog.Warn("init validation failed", "rep", task.RepID, "err", err)
 		} else {
-			initPath := store.InitPath(p.cfg.Store.DataDir, p.channelID, task.PeriodID, task.MediaType, task.ASID, task.RepID)
+			initPath := p.location(task).InitPath()
 			if err := store.Write(initPath, res.InitData); err != nil {
 				slog.Error("init write failed", "path", initPath, "err", err)
 			} else {
@@ -269,7 +269,7 @@ func (p *Processor) handle(res fetch.Result) {
 	case queue.FormatWebVTT:
 		segExt = store.ExtVTT
 	}
-	segPath := store.SegmentPathExt(p.cfg.Store.DataDir, p.channelID, task.PeriodID, task.MediaType, task.ASID, task.RepID, task.SegNo, segExt)
+	segPath := p.location(task).SegmentPath(task.SegNo, segExt)
 	writeStart := time.Now()
 	if err := store.Write(segPath, data); err != nil {
 		slog.Warn("segment write failed, requeueing", "path", segPath, "err", err)
@@ -303,7 +303,7 @@ func (p *Processor) handle(res fetch.Result) {
 	// segment, so the path stays empty and the init endpoint correctly 404s.
 	initPath := ""
 	if task.Format == queue.FormatFMP4 {
-		initPath = store.InitPath(p.cfg.Store.DataDir, p.channelID, task.PeriodID, task.MediaType, task.ASID, task.RepID)
+		initPath = p.location(task).InitPath()
 	}
 	seg := index.SegmentState{
 		SegNo:         task.SegNo,
@@ -451,8 +451,7 @@ func (p *Processor) decrypt(task *queue.SegmentTask, data []byte) ([]byte, error
 // persistSegmentMeta appends this segment's metadata to its representation's
 // sidecar, and occasionally compacts the file.
 func (p *Processor) persistSegmentMeta(task *queue.SegmentTask, seg index.SegmentState) {
-	path := store.SidecarPath(p.cfg.Store.DataDir, p.channelID,
-		task.PeriodID, task.MediaType, task.ASID, task.RepID)
+	path := p.location(task).SidecarPath()
 
 	m := store.SegmentMeta{
 		SegNo:         seg.SegNo,
@@ -523,4 +522,12 @@ func (p *Processor) warmKey(uri string) {
 			p.warmedMu.Unlock()
 		}
 	}()
+}
+
+// location places task's representation under the gateway's data directory.
+func (p *Processor) location(task *queue.SegmentTask) store.RepLocation {
+	return store.RepLocation{
+		DataDir: p.cfg.Store.DataDir, ChannelID: p.channelID,
+		PeriodID: task.PeriodID, MediaType: task.MediaType, ASID: task.ASID, RepID: task.RepID,
+	}
 }

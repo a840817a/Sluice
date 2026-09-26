@@ -65,7 +65,7 @@ func TestRebuildDoesNotStretchAcrossSegmentGap(t *testing.T) {
 	write(3, 2*segDur)
 	write(straggler, (straggler-1)*segDur)
 
-	ci := NewChannelIndex()
+	ci := NewChannelIndex(PublishAVBarrier)
 	if err := RebuildFromDiskForVOD(ci, dataDir, "ch"); err != nil {
 		t.Fatalf("RebuildFromDiskForVOD: %v", err)
 	}

@@ -8,8 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/a840817a/sluice/internal/gwurl"
 	"github.com/a840817a/sluice/internal/index"
+	"github.com/a840817a/sluice/internal/pathseg"
 	"github.com/a840817a/sluice/internal/store"
 	"github.com/go-chi/chi/v5"
 )
@@ -23,7 +23,7 @@ func (s *Server) handleSegment(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "channelID")
 	repID := chi.URLParam(r, "repID")
 	segFile := chi.URLParam(r, "segFile") // e.g. "000000001.m4s"
-	periodID, ok := gwurl.ParsePeriodSegment(chi.URLParam(r, "periodID"))
+	periodID, ok := pathseg.Decode(chi.URLParam(r, "periodID"))
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -57,7 +57,7 @@ func (s *Server) handleSegment(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "channelID")
 	repID := chi.URLParam(r, "repID")
-	periodID, ok := gwurl.ParsePeriodSegment(chi.URLParam(r, "periodID"))
+	periodID, ok := pathseg.Decode(chi.URLParam(r, "periodID"))
 	if !ok {
 		http.NotFound(w, r)
 		return

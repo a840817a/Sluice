@@ -15,8 +15,8 @@ import (
 // answering, just from the live window instead of the full asset. These cases
 // pin the rule where it now lives.
 func TestServingResolvesIndex(t *testing.T) {
-	live := index.NewChannelIndex()
-	vod := index.NewChannelIndex()
+	live := index.NewChannelIndex(index.PublishAVBarrier)
+	vod := index.NewChannelIndex(index.PublishAVBarrier)
 
 	tests := []struct {
 		name     string
@@ -74,7 +74,7 @@ func TestServingModePredicates(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		rt := &Runtime{Index: index.NewChannelIndex()}
+		rt := &Runtime{Index: index.NewChannelIndex(index.PublishAVBarrier)}
 		driveMode(t, rt, tc.mode)
 		sv := rt.Serving()
 
@@ -92,7 +92,7 @@ func TestServingModePredicates(t *testing.T) {
 // configuration that asked for it.
 func TestServingCapabilities(t *testing.T) {
 	t.Run("dash source serves dash and no keys", func(t *testing.T) {
-		rt := &Runtime{Index: index.NewChannelIndex()}
+		rt := &Runtime{Index: index.NewChannelIndex(index.PublishAVBarrier)}
 		sv := rt.Serving()
 
 		if sv.IsHLSSource {
@@ -109,7 +109,7 @@ func TestServingCapabilities(t *testing.T) {
 	t.Run("mpeg-ts hls source cannot serve dash", func(t *testing.T) {
 		// A zero Watcher has not discovered fMP4 segments, which is exactly the
 		// MPEG-TS case: serving it as DASH would require remuxing.
-		rt := &Runtime{Index: index.NewChannelIndex(), hls: &hlsingest.Watcher{}}
+		rt := &Runtime{Index: index.NewChannelIndex(index.PublishAVBarrier), hls: &hlsingest.Watcher{}}
 		sv := rt.Serving()
 
 		if !sv.IsHLSSource {
@@ -127,7 +127,7 @@ func TestServingCapabilities(t *testing.T) {
 // Serving is a value: reading it must not leave the caller holding something
 // that changes when the channel does.
 func TestServingIsASnapshot(t *testing.T) {
-	rt := &Runtime{ID: "c", Index: index.NewChannelIndex()}
+	rt := &Runtime{ID: "c", Index: index.NewChannelIndex(index.PublishAVBarrier)}
 	rt.setConfig(Config{Title: "before"})
 	rt.setStaticIngestStart(time.Unix(100, 0))
 

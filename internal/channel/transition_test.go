@@ -24,7 +24,7 @@ func registerRuntime(t *testing.T, m *Manager, id string, mode ChannelMode) *Run
 
 	rt := &Runtime{
 		ID:       id,
-		Index:    index.NewChannelIndex(),
+		Index:    index.NewChannelIndex(index.PublishAVBarrier),
 		Progress: progress.New(),
 		cancel:   cancel,
 		vodDone:  make(chan struct{}),

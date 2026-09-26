@@ -21,7 +21,7 @@ import (
 func stateWatcher(t *testing.T, path string) *Watcher {
 	t.Helper()
 	return NewWatcher(config.Config{}, "ch1", "http://origin.example.com/master.m3u8",
-		nil, false, path, index.NewChannelIndex(), queue.NewBroker(16))
+		nil, false, path, index.NewChannelIndex(index.PublishAVBarrier), queue.NewBroker(16))
 }
 
 func TestSourceStateRoundTrip(t *testing.T) {

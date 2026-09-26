@@ -109,7 +109,7 @@ func TestAwaitStaticUpstreamAsksTheSource(t *testing.T) {
 
 func TestStatusReportsTheSourceStatus(t *testing.T) {
 	want := &SourceStatus{EndedTargets: 2, PollTargets: 3}
-	rt := &Runtime{ID: "c", Index: index.NewChannelIndex(), Source: &fakeSource{status: want}}
+	rt := &Runtime{ID: "c", Index: index.NewChannelIndex(index.PublishAVBarrier), Source: &fakeSource{status: want}}
 	if got := buildStatus(rt).Source; got != want {
 		t.Errorf("status source = %+v, want %+v", got, want)
 	}
@@ -143,7 +143,7 @@ func TestVODTransitionCheckpointsTheSource(t *testing.T) {
 // The status lists periods in timeline order — a DASH source's in its MPD's
 // order, not the index's map order — so an operator reads them as they play.
 func TestStatusListsPeriodsInTimelineOrder(t *testing.T) {
-	ci := index.NewChannelIndex()
+	ci := index.NewChannelIndex(index.PublishAVBarrier)
 	for _, id := range []string{"b", "c", "a"} {
 		ci.Period(id)
 	}

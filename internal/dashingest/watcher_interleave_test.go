@@ -64,7 +64,7 @@ func TestTasksAreEnqueuedInPresentationOrder(t *testing.T) {
 		Worker:   config.WorkerConfig{FetchWorkers: 1, MaxRetriesStatic: 1},
 		Window:   config.WindowConfig{Depth: time.Hour},
 	}
-	w := NewWatcher(cfg, "order", nil, index.NewChannelIndex(), broker)
+	w := NewWatcher(cfg, "order", nil, index.NewChannelIndex(index.PublishAVBarrier), broker)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()

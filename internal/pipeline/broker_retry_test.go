@@ -44,7 +44,7 @@ func TestFiniteRetryThroughProcessorWithFullBroker(t *testing.T) {
 			}
 			processor := NewProcessor(config.Config{
 				Worker: config.WorkerConfig{MaxRetriesStatic: 1},
-			}, "retry", index.NewChannelIndex(), broker)
+			}, "retry", index.NewChannelIndex(index.PublishAVBarrier), broker)
 			done := make(chan struct{})
 			retryStarted := time.Now()
 			go func() {

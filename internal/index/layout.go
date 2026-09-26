@@ -1,6 +1,9 @@
 package index
 
-import "slices"
+import (
+	"slices"
+	"strings"
+)
 
 // PeriodLayout is one period of an index as Layout saw it.
 type PeriodLayout struct {
@@ -36,7 +39,7 @@ func (ci *ChannelIndex) Layout() []PeriodLayout {
 	for id, ps := range ci.periods {
 		out = append(out, ps.layout(id))
 	}
-	slices.SortFunc(out, func(a, b PeriodLayout) int { return compareIDs(a.ID, b.ID) })
+	slices.SortFunc(out, func(a, b PeriodLayout) int { return strings.Compare(a.ID, b.ID) })
 	return out
 }
 
@@ -52,19 +55,9 @@ func (ps *PeriodState) layout(id string) PeriodLayout {
 			al.Reps = append(al.Reps, RepLayout{ID: repID, Published: p, Committed: c, Expired: e})
 		}
 		as.mu.RUnlock()
-		slices.SortFunc(al.Reps, func(a, b RepLayout) int { return compareIDs(a.ID, b.ID) })
+		slices.SortFunc(al.Reps, func(a, b RepLayout) int { return strings.Compare(a.ID, b.ID) })
 		pl.AdaptationSets = append(pl.AdaptationSets, al)
 	}
-	slices.SortFunc(pl.AdaptationSets, func(a, b AdaptationSetLayout) int { return compareIDs(a.ID, b.ID) })
+	slices.SortFunc(pl.AdaptationSets, func(a, b AdaptationSetLayout) int { return strings.Compare(a.ID, b.ID) })
 	return pl
-}
-
-func compareIDs(a, b string) int {
-	switch {
-	case a < b:
-		return -1
-	case a > b:
-		return 1
-	}
-	return 0
 }

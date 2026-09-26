@@ -45,10 +45,10 @@ func buildLocalFixture(t *testing.T) (channelDir string, ci *index.ChannelIndex,
 		t.Fatal(err)
 	}
 
-	ci = index.NewChannelIndex()
+	ci = index.NewChannelIndex(index.PublishAVBarrier)
 	rep := ci.Period("1").AS("0").Rep("1", 0)
 	for i, n := range segNos {
-		p := store.SegmentPath(dataDir, channelID, "1", "video", "0", "1", n)
+		p := store.RepLocation{DataDir: dataDir, ChannelID: channelID, PeriodID: "1", MediaType: "video", ASID: "0", RepID: "1"}.SegmentPath(n, store.ExtFMP4)
 		if err := os.WriteFile(p, []byte("seg"), 0o644); err != nil {
 			t.Fatal(err)
 		}

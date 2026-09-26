@@ -22,7 +22,7 @@ func newProgressWatcher(t *testing.T) (*Watcher, *progress.Counters) {
 		Worker: config.WorkerConfig{FetchWorkers: 1, MaxRetriesStatic: 1},
 		Window: config.WindowConfig{Depth: time.Hour},
 	}
-	ci := index.NewChannelIndex()
+	ci := index.NewChannelIndex(index.PublishAVBarrier)
 	broker := queue.NewBroker(0) // unbounded: nothing may be dropped during the test
 	w := NewWatcher(cfg, "ch1", nil, ci, broker)
 	prog := progress.New()

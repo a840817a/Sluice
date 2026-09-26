@@ -41,11 +41,11 @@ func TestParseSegmentFile(t *testing.T) {
 	}
 }
 
-func TestSegmentPathExtRoundTrips(t *testing.T) {
+func TestSegmentPathRoundTrips(t *testing.T) {
 	// The path builder and the filename parser must agree, since the rebuilder
 	// and cleanup scanner discover on disk what the processor wrote.
 	for _, ext := range []string{ExtFMP4, ExtTS} {
-		p := SegmentPathExt("/data", "ch1", "p0", "video", "0", "720p", 42, ext)
+		p := RepLocation{DataDir: "/data", ChannelID: "ch1", PeriodID: "p0", MediaType: "video", ASID: "0", RepID: "720p"}.SegmentPath(42, ext)
 		base := p[len("/data/ch1/periods/p0/video_0/720p/"):]
 		segNo, gotExt, ok := ParseSegmentFile(base)
 		if !ok {
@@ -57,11 +57,17 @@ func TestSegmentPathExtRoundTrips(t *testing.T) {
 	}
 }
 
-func TestSegmentPathDefaultsToFMP4(t *testing.T) {
-	// Existing DASH callers rely on SegmentPath keeping its .m4s behavior.
-	got := SegmentPath("/data", "ch1", "p0", "video", "0", "720p", 7)
-	want := "/data/ch1/periods/p0/video_0/720p/7.m4s"
-	if got != want {
-		t.Errorf("SegmentPath = %q, want %q", got, want)
+// The layout on disk is what a rebuild after an upgrade reads back, so its
+// shape must not drift.
+func TestRepLocationLayout(t *testing.T) {
+	l := RepLocation{DataDir: "/data", ChannelID: "ch1", PeriodID: "p0", MediaType: "video", ASID: "0", RepID: "720p"}
+	for got, want := range map[string]string{
+		l.SegmentPath(7, ExtFMP4): "/data/ch1/periods/p0/video_0/720p/7.m4s",
+		l.InitPath():              "/data/ch1/periods/p0/video_0/720p/init.mp4",
+		l.SidecarPath():           "/data/ch1/periods/p0/video_0/720p/segments.jsonl",
+	} {
+		if got != want {
+			t.Errorf("path = %q, want %q", got, want)
+		}
 	}
 }

@@ -64,7 +64,7 @@ func newEndOfStreamWatcher(t *testing.T, mpdURL string) *Watcher {
 		Worker:   config.WorkerConfig{FetchWorkers: 1, MaxRetriesStatic: 1},
 		Window:   config.WindowConfig{Depth: time.Hour},
 	}
-	return NewWatcher(cfg, "eos", nil, index.NewChannelIndex(), queue.NewBroker(0))
+	return NewWatcher(cfg, "eos", nil, index.NewChannelIndex(index.PublishAVBarrier), queue.NewBroker(0))
 }
 
 // TestRunReturnsWhenUpstreamGoesStatic is the DASH half of "the upstream ended".

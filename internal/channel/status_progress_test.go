@@ -19,7 +19,7 @@ func TestStoredSegmentsCountsEveryStatus(t *testing.T) {
 	if got := storedSegments(ci); got != 7 {
 		t.Errorf("storedSegments = %d, want 7", got)
 	}
-	if got := storedSegments(index.NewChannelIndex()); got != 0 {
+	if got := storedSegments(index.NewChannelIndex(index.PublishAVBarrier)); got != 0 {
 		t.Errorf("storedSegments(empty) = %d, want 0", got)
 	}
 }
@@ -84,7 +84,7 @@ func TestBuildProgressStaticChannelHasTotalAndETA(t *testing.T) {
 	prog := progress.New()
 	prog.SetExpectedTotal(1000)
 	prog.AddStored(400, 4_000_000)
-	rt := &Runtime{ID: "ch1", Index: index.NewChannelIndex(), Progress: prog, Broker: queue.NewBroker(16)}
+	rt := &Runtime{ID: "ch1", Index: index.NewChannelIndex(index.PublishAVBarrier), Progress: prog, Broker: queue.NewBroker(16)}
 	rt.setConfig(Config{})
 
 	p := buildStatus(rt).Progress
@@ -104,7 +104,7 @@ func TestBuildProgressCappedTotalSuppressesETA(t *testing.T) {
 	prog.SetExpectedTotal(100_000)
 	prog.MarkCapped()
 	prog.AddStored(10, 1000)
-	rt := &Runtime{ID: "ch1", Index: index.NewChannelIndex(), Progress: prog, Broker: queue.NewBroker(16)}
+	rt := &Runtime{ID: "ch1", Index: index.NewChannelIndex(index.PublishAVBarrier), Progress: prog, Broker: queue.NewBroker(16)}
 	rt.setConfig(Config{})
 
 	p := buildStatus(rt).Progress
@@ -123,7 +123,7 @@ func TestBuildProgressReportsQueueAndDrops(t *testing.T) {
 	b.Push(&queue.SegmentTask{ChannelID: "ch", RepID: "r0", SegNo: 1, Priority: 0})
 	b.Push(&queue.SegmentTask{ChannelID: "ch", RepID: "r0", SegNo: 2, Priority: 9}) // rejected
 
-	rt := &Runtime{ID: "ch1", Index: index.NewChannelIndex(), Progress: progress.New(), Broker: b}
+	rt := &Runtime{ID: "ch1", Index: index.NewChannelIndex(index.PublishAVBarrier), Progress: progress.New(), Broker: b}
 	rt.setConfig(Config{})
 
 	p := buildStatus(rt).Progress
@@ -139,7 +139,7 @@ func TestBuildProgressSurfacesErrors(t *testing.T) {
 	prog := progress.New()
 	prog.RecordSegmentError("fetch", "connection reset by peer", "v0", 42)
 	prog.SetSourceError("manifest", "502 Bad Gateway")
-	rt := &Runtime{ID: "ch1", Index: index.NewChannelIndex(), Progress: prog, Broker: queue.NewBroker(16)}
+	rt := &Runtime{ID: "ch1", Index: index.NewChannelIndex(index.PublishAVBarrier), Progress: prog, Broker: queue.NewBroker(16)}
 	rt.setConfig(Config{})
 
 	p := buildStatus(rt).Progress
@@ -191,7 +191,7 @@ func TestBuildTracksCoversEveryIndexedRep(t *testing.T) {
 }
 
 func TestBuildTracksEmptyIndexYieldsNil(t *testing.T) {
-	rt := &Runtime{ID: "ch1", Index: index.NewChannelIndex()}
+	rt := &Runtime{ID: "ch1", Index: index.NewChannelIndex(index.PublishAVBarrier)}
 	rt.setConfig(Config{})
 
 	s := buildStatus(rt)
@@ -324,7 +324,7 @@ func TestChannelReturnsOnlyTheRequestedChannel(t *testing.T) {
 
 	rt1 := &Runtime{ID: "ch1", Index: statusIndex(t), Progress: progress.New()}
 	rt1.setConfig(Config{MPDURL: "http://x/1.mpd"})
-	rt2 := &Runtime{ID: "ch2", Index: index.NewChannelIndex(), Progress: progress.New()}
+	rt2 := &Runtime{ID: "ch2", Index: index.NewChannelIndex(index.PublishAVBarrier), Progress: progress.New()}
 	rt2.setConfig(Config{MPDURL: "http://x/2.mpd"})
 	m.runtimes["ch1"] = rt1
 	m.runtimes["ch2"] = rt2

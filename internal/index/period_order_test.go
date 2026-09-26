@@ -8,7 +8,7 @@ import (
 // HLS names periods by epoch. Sorted as strings, epoch 10 would come before
 // epoch 2, and every consumer of the order would put a later stream first.
 func TestSnapshotOrdersNumericPeriodsNumerically(t *testing.T) {
-	ci := NewChannelIndex()
+	ci := NewChannelIndex(PublishAVBarrier)
 	for _, id := range []string{"10", "2", "0", "1"} {
 		ci.Period(id).AS("0").Rep("v0", 8).RestorePublished(SegmentState{SegNo: 1, EndPTS: 1, Timescale: 1})
 	}
@@ -30,7 +30,7 @@ func TestOrderPeriodIDsFollowsTheDocument(t *testing.T) {
 // later period's segments from it, and a shrinking range would renumber them
 // while a live window slides.
 func TestSegNoRangeSurvivesEviction(t *testing.T) {
-	rep := NewChannelIndex().Period("0").AS("0").Rep("v0", 2)
+	rep := NewChannelIndex(PublishAVBarrier).Period("0").AS("0").Rep("v0", 2)
 	if _, _, ok := rep.SegNoRange(); ok {
 		t.Fatal("an empty representation reported a range")
 	}
@@ -53,7 +53,7 @@ func TestSegNoRangeSurvivesEviction(t *testing.T) {
 // EXT-X-DISCONTINUITY-SEQUENCE must keep counting one whose segment has been
 // evicted. Only publication records one, and a restored segment counts.
 func TestDiscontinuitiesSurviveEviction(t *testing.T) {
-	rep := NewChannelIndex().Period("0").AS("0").Rep("v0", 2)
+	rep := NewChannelIndex(PublishAVBarrier).Period("0").AS("0").Rep("v0", 2)
 	rep.RestorePublished(SegmentState{SegNo: 9, EndPTS: 1, Timescale: 1, Discontinuity: true})
 	for n := uint64(10); n <= 14; n++ {
 		rep.commit(SegmentState{SegNo: n, EndPTS: 1, Timescale: 1, Discontinuity: n == 11})

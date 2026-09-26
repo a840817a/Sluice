@@ -20,7 +20,7 @@ func newTestWatcher() *Watcher {
 	return NewWatcher(
 		config.Config{},
 		"ch1", "https://origin.example.com/live/master.m3u8", nil, false, "",
-		index.NewChannelIndex(),
+		index.NewChannelIndex(index.PublishAVBarrier),
 		queue.NewBroker(4096),
 	)
 }
@@ -258,7 +258,7 @@ func TestDiscoverMasterPlaylist(t *testing.T) {
 	defer srv.Close()
 
 	w := NewWatcher(config.Config{}, "ch1", srv.URL+"/master.m3u8", nil, false, "",
-		index.NewChannelIndex(), queue.NewBroker(16))
+		index.NewChannelIndex(index.PublishAVBarrier), queue.NewBroker(16))
 
 	if err := w.discover(context.Background()); err != nil {
 		t.Fatalf("discover: %v", err)
@@ -288,7 +288,7 @@ func TestDiscoverBareMediaPlaylist(t *testing.T) {
 	defer srv.Close()
 
 	w := NewWatcher(config.Config{}, "ch1", srv.URL+"/index.m3u8", nil, false, "",
-		index.NewChannelIndex(), queue.NewBroker(16))
+		index.NewChannelIndex(index.PublishAVBarrier), queue.NewBroker(16))
 
 	if err := w.discover(context.Background()); err != nil {
 		t.Fatalf("discover: %v", err)
@@ -310,7 +310,7 @@ func TestDiscoverRejectsNonPlaylist(t *testing.T) {
 	defer srv.Close()
 
 	w := NewWatcher(config.Config{}, "ch1", srv.URL+"/index.m3u8", nil, false, "",
-		index.NewChannelIndex(), queue.NewBroker(16))
+		index.NewChannelIndex(index.PublishAVBarrier), queue.NewBroker(16))
 
 	if err := w.discover(context.Background()); err == nil {
 		t.Error("discover accepted a non-playlist response")
@@ -324,7 +324,7 @@ func TestDiscoverPropagatesHTTPError(t *testing.T) {
 	defer srv.Close()
 
 	w := NewWatcher(config.Config{}, "ch1", srv.URL+"/index.m3u8", nil, false, "",
-		index.NewChannelIndex(), queue.NewBroker(16))
+		index.NewChannelIndex(index.PublishAVBarrier), queue.NewBroker(16))
 
 	if err := w.discover(context.Background()); err == nil {
 		t.Error("discover ignored a 404 response")
@@ -399,7 +399,7 @@ func TestEnqueueNewDerivesIVFromSequenceWhenAbsent(t *testing.T) {
 
 func TestEnqueueNewHonoursDecryptMode(t *testing.T) {
 	w := NewWatcher(config.Config{}, "ch1", "https://o.example.com/m.m3u8", nil,
-		true, "", index.NewChannelIndex(), queue.NewBroker(64))
+		true, "", index.NewChannelIndex(index.PublishAVBarrier), queue.NewBroker(64))
 	st := &variantState{}
 	w.enqueueNew(context.Background(), testVariant(), st, encryptedPlaylist(0, 1, "https://drm.example.com/k.bin", ""))
 
@@ -540,7 +540,7 @@ func TestDiscoverDemuxedAudioRenditions(t *testing.T) {
 	defer srv.Close()
 
 	w := NewWatcher(config.Config{}, "ch1", srv.URL+"/master.m3u8", nil, false, "",
-		index.NewChannelIndex(), queue.NewBroker(16))
+		index.NewChannelIndex(index.PublishAVBarrier), queue.NewBroker(16))
 	if err := w.discover(context.Background()); err != nil {
 		t.Fatalf("discover: %v", err)
 	}
@@ -575,7 +575,7 @@ func TestDiscoverMuxedAudioRenditionIgnored(t *testing.T) {
 	defer srv.Close()
 
 	w := NewWatcher(config.Config{}, "ch1", srv.URL+"/master.m3u8", nil, false, "",
-		index.NewChannelIndex(), queue.NewBroker(16))
+		index.NewChannelIndex(index.PublishAVBarrier), queue.NewBroker(16))
 	if err := w.discover(context.Background()); err != nil {
 		t.Fatalf("discover: %v", err)
 	}
@@ -601,14 +601,14 @@ func TestSourceStateRoundTripsRenditions(t *testing.T) {
 
 	// First process: discover writes the state file.
 	w1 := NewWatcher(config.Config{}, "ch1", srv.URL+"/master.m3u8", nil, false, statePath,
-		index.NewChannelIndex(), queue.NewBroker(16))
+		index.NewChannelIndex(index.PublishAVBarrier), queue.NewBroker(16))
 	if err := w1.discover(context.Background()); err != nil {
 		t.Fatalf("discover: %v", err)
 	}
 
 	// Second process (restart): loads state on construction, without discovery.
 	w2 := NewWatcher(config.Config{}, "ch1", srv.URL+"/master.m3u8", nil, false, statePath,
-		index.NewChannelIndex(), queue.NewBroker(16))
+		index.NewChannelIndex(index.PublishAVBarrier), queue.NewBroker(16))
 
 	vs := w2.Describe().Variants
 	if len(vs) != 1 || vs[0].RepID != "v0" || vs[0].AudioGroup != "aud" {
@@ -643,7 +643,7 @@ func TestDiscoverDemuxedSubtitles(t *testing.T) {
 	defer srv.Close()
 
 	w := NewWatcher(config.Config{}, "ch1", srv.URL+"/master.m3u8", nil, false, "",
-		index.NewChannelIndex(), queue.NewBroker(16))
+		index.NewChannelIndex(index.PublishAVBarrier), queue.NewBroker(16))
 	if err := w.discover(context.Background()); err != nil {
 		t.Fatalf("discover: %v", err)
 	}

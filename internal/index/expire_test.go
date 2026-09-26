@@ -17,7 +17,7 @@ func expSeg(segNo uint64, endSec float64, path string) SegmentState {
 
 func newRepWith(t *testing.T, segs ...SegmentState) *RepresentationState {
 	t.Helper()
-	rep := NewChannelIndex().Period("p0").AS("v0").Rep("r0", 16)
+	rep := NewChannelIndex(PublishAVBarrier).Period("p0").AS("v0").Rep("r0", 16)
 	published := map[uint64]struct{}{}
 	for _, s := range segs {
 		rep.commit(s)
@@ -76,7 +76,7 @@ func TestExpireAndCollectPathsIsNotRepeatable(t *testing.T) {
 // yet serveable. Expiry works on the published window, so committed segments
 // must not be swept out from under it.
 func TestExpireAndCollectPathsLeavesCommittedSegments(t *testing.T) {
-	rep := NewChannelIndex().Period("p0").AS("v0").Rep("r0", 16)
+	rep := NewChannelIndex(PublishAVBarrier).Period("p0").AS("v0").Rep("r0", 16)
 	rep.commit(expSeg(1, 10, "/data/ch/1.m4s")) // committed, never published
 
 	got := rep.ExpireAndCollectPaths(25)

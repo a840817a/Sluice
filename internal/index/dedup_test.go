@@ -85,7 +85,7 @@ func TestRingBufferPushReplacesSameSegNo(t *testing.T) {
 // Commit is the path every fetched segment takes, so the collapse must be fixed
 // there and not only in the buffer primitive.
 func TestCommitIsIdempotentPerSegNo(t *testing.T) {
-	ci := NewChannelIndex()
+	ci := NewChannelIndex(PublishAVBarrier)
 	rep := ci.Period("p0").AS("0").Rep("v0", 16)
 
 	for _, n := range []uint64{5, 6, 7} {
@@ -165,7 +165,7 @@ func TestPushReportsWhetherSegmentWasNew(t *testing.T) {
 // TestCommitReportsWhetherSegmentWasNew is the same guarantee at the level the
 // processor actually calls.
 func TestCommitReportsWhetherSegmentWasNew(t *testing.T) {
-	ci := NewChannelIndex()
+	ci := NewChannelIndex(PublishAVBarrier)
 	rep := ci.Period("p0").AS("0").Rep("v0", 16)
 
 	seg := func(n uint64) SegmentState {

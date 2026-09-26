@@ -20,9 +20,9 @@ func TestSidecarCompactionKeepsSegmentsStillOnDisk(t *testing.T) {
 	} {
 		t.Run(tc.ext, func(t *testing.T) {
 			dir := t.TempDir()
-			p := NewProcessor(config.Config{Store: config.StoreConfig{DataDir: dir}}, "ch", index.NewChannelIndex(), nil)
+			p := NewProcessor(config.Config{Store: config.StoreConfig{DataDir: dir}}, "ch", index.NewChannelIndex(index.PublishAVBarrier), nil)
 			task := &queue.SegmentTask{ChannelID: "ch", PeriodID: "0", MediaType: tc.mediaType, ASID: "0", RepID: "r0"}
-			if err := store.Write(store.SegmentPathExt(dir, "ch", "0", tc.mediaType, "0", "r0", 0, tc.ext), []byte("x")); err != nil {
+			if err := store.Write(store.RepLocation{DataDir: dir, ChannelID: "ch", PeriodID: "0", MediaType: tc.mediaType, ASID: "0", RepID: "r0"}.SegmentPath(0, tc.ext), []byte("x")); err != nil {
 				t.Fatal(err)
 			}
 			// Two records, then compact on the second: only segment 0 has a
@@ -31,7 +31,7 @@ func TestSidecarCompactionKeepsSegmentsStillOnDisk(t *testing.T) {
 			p.sidecarAppends[task.RepKey()] = sidecarCompactEvery - 1
 			task.SegNo = 1
 			p.persistSegmentMeta(task, index.SegmentState{SegNo: 1, EndPTS: 1, Timescale: 1})
-			records, err := store.ReadSegmentMeta(store.SidecarPath(dir, "ch", "0", tc.mediaType, "0", "r0"))
+			records, err := store.ReadSegmentMeta(store.RepLocation{DataDir: dir, ChannelID: "ch", PeriodID: "0", MediaType: tc.mediaType, ASID: "0", RepID: "r0"}.SidecarPath())
 			if err != nil {
 				t.Fatal(err)
 			}
