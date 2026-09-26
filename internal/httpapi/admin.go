@@ -88,7 +88,7 @@ func (a *AdminServer) handleUpdateChannel(w http.ResponseWriter, r *http.Request
 	// An unknown channel is a 404 whatever the body says. UpdateConfig checks
 	// again under its operation lock, so a delete racing this request still
 	// ends in 404 rather than recreating the channel.
-	if _, ok := a.manager.Channel(id); !ok {
+	if !a.manager.HasChannel(id) {
 		writeErr(w, http.StatusNotFound, "channel not found")
 		return
 	}

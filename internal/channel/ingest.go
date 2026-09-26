@@ -288,3 +288,136 @@ func (c *channelIngest) Join(ctx context.Context) bool {
 		return false
 	}
 }
+
+// launchIngest starts the channel's goroutines: its ingest — the fetch pool,
+// the processor, and the supervisor that keeps the source running — and the
+// watch for a finished upstream, which lives as long as the source does.
+//
+// Every goroutine is counted in rt.wg, which is what lets Stop join them rather
+// than merely cancel them — see Stop for why that matters.
+func (m *Manager) launchIngest(sourceCtx, poolCtx, processorCtx context.Context, rt *Runtime, cfg Config, pl *ingestPipeline, ingest *channelIngest) {
+	ingest.launch(&rt.wg,
+		func() { pl.pool.Run(poolCtx) },
+		func() { pl.processor.Run(processorCtx, pl.pool) },
+		func() { m.superviseSource(sourceCtx, rt, cfg) },
+	)
+	rt.wg.Add(1)
+	go func() { defer rt.wg.Done(); m.awaitStaticUpstream(sourceCtx, rt) }()
+}
+
+// staticUpstreamPollInterval is how often a running channel is asked whether
+// its upstream turned out to be a finished asset.
+const staticUpstreamPollInterval = time.Second
+
+// awaitStaticUpstream moves a channel into ModeStaticIngesting as soon as the
+// watcher has seen that the upstream is a finished asset.
+//
+// superviseSource also sets that mode, but only once the source returns, and
+// the two used to be the same instant: enumeration was a tight push loop that
+// returned in milliseconds. A paced producer does not return until every
+// segment it named has been queued, which for an asset much larger than the
+// queue is most of the way through the download — so the channel spent that
+// whole time reporting itself as live, and the admin page showed LIVE for an
+// asset that was plainly being fetched.
+//
+// This only promotes; the transition itself still waits for the source to
+// return and the pipeline to drain, because that is what says the work is done.
+// A channel whose auto-VOD is suppressed is left alone, matching the same
+// exemption in superviseSource.
+func (m *Manager) awaitStaticUpstream(ctx context.Context, rt *Runtime) {
+	if rt.Source == nil {
+		return
+	}
+	ticker := time.NewTicker(staticUpstreamPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !staticIngestVisible(rt.Source.FinishedAsset(), rt.autoVODAllowed()) {
+				continue
+			}
+			if _, ok := rt.modes.PromoteStatic(); ok {
+				rt.setStaticIngestStart(time.Now())
+				slog.Info("upstream is a finished asset, ingesting", "channel", rt.ID)
+			}
+			return
+		}
+	}
+}
+
+// staticIngestVisible reports whether a live channel should already be shown as
+// ingesting a finished asset: the upstream has said so, and this channel is not
+// one whose auto-VOD was deliberately suppressed.
+func staticIngestVisible(upstreamFinished, autoVODAllowed bool) bool {
+	return upstreamFinished && autoVODAllowed
+}
+
+// superviseSource runs the channel's source, restarting it with backoff until
+// the context is cancelled or ingestion completes.
+func (m *Manager) superviseSource(ctx context.Context, rt *Runtime, cfg Config) {
+	backoff := 2 * time.Second
+	for {
+		err := rt.Source.Run(ctx)
+		if err == nil {
+			// A cancellation-aware source can race the manual transition and
+			// return nil after its context has been cancelled. That is not an
+			// end-of-stream signal, and in particular must not overwrite the
+			// mode the manual path already claimed.
+			if ctx.Err() != nil {
+				return
+			}
+			// Source returned cleanly: ingestion is complete — a static MPD, or
+			// an HLS playlist that reached EXT-X-ENDLIST. Enter StaticIngesting
+			// mode and wait for the broker to drain before doing the full VOD
+			// transition.
+			//
+			// Unless this channel was just restored to live, in which case the
+			// upstream is expected to still be finished: fall through to the
+			// backoff and keep re-running the source, so that a stream which
+			// does come back is picked up (and lifts the suppression) instead
+			// of the restore being undone within seconds.
+			if !rt.autoVODAllowed() {
+				slog.Info("source completed while auto-VOD is suppressed, waiting for upstream to resume",
+					"channel", rt.ID, "backoff", backoff)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
+				if backoff < 60*time.Second {
+					backoff *= 2
+				}
+				continue
+			}
+			if cfg.IsVOD {
+				return
+			}
+			// awaitStaticUpstream may have promoted the channel already.
+			if from, ok := rt.modes.PromoteStatic(); ok || from == ModeStaticIngesting {
+				if rt.StaticIngestStartTime().IsZero() {
+					rt.setStaticIngestStart(time.Now())
+				}
+				rt.wg.Add(1)
+				go func() {
+					defer rt.wg.Done()
+					m.awaitStaticIngestComplete(rt)
+				}()
+			}
+			return
+		}
+		if err == context.Canceled {
+			return
+		}
+		slog.Error("watcher stopped, restarting", "channel", rt.ID, "err", err, "backoff", backoff)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		if backoff < 60*time.Second {
+			backoff *= 2
+		}
+	}
+}
