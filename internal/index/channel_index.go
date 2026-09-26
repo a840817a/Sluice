@@ -2,6 +2,7 @@
 package index
 
 import (
+	"slices"
 	"sync"
 	"time"
 )
@@ -325,17 +326,30 @@ type RepresentationState struct {
 	// period boundary.
 	first, last uint64
 	seen        bool
+	// discontinuities holds the number of every segment this representation
+	// has published that begins with an upstream discontinuity. Like the range
+	// it outlives the ring: once such a segment leaves a live playlist,
+	// EXT-X-DISCONTINUITY-SEQUENCE must still count its tag (RFC 8216
+	// §6.2.2), and the segment itself is no longer there to say so.
+	discontinuities map[uint64]struct{}
 }
 
-// recordPublished widens the lifetime range to segNo. Caller holds rs.mu.
-func (rs *RepresentationState) recordPublished(segNo uint64) {
-	if !rs.seen || segNo < rs.first {
-		rs.first = segNo
+// recordPublished widens the lifetime range to seg and remembers a
+// discontinuity it begins with. Caller holds rs.mu.
+func (rs *RepresentationState) recordPublished(seg SegmentState) {
+	if !rs.seen || seg.SegNo < rs.first {
+		rs.first = seg.SegNo
 	}
-	if !rs.seen || segNo > rs.last {
-		rs.last = segNo
+	if !rs.seen || seg.SegNo > rs.last {
+		rs.last = seg.SegNo
 	}
 	rs.seen = true
+	if seg.Discontinuity {
+		if rs.discontinuities == nil {
+			rs.discontinuities = make(map[uint64]struct{})
+		}
+		rs.discontinuities[seg.SegNo] = struct{}{}
+	}
 }
 
 // SegNoRange returns the lowest and highest segment numbers this
@@ -346,6 +360,23 @@ func (rs *RepresentationState) SegNoRange() (first, last uint64, ok bool) {
 	return rs.first, rs.last, rs.seen
 }
 
+// Discontinuities returns, in ascending order, the number of every segment
+// this representation has ever published that begins with an upstream
+// discontinuity. A restart recomputes them from what is on disk.
+func (rs *RepresentationState) Discontinuities() []uint64 {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if len(rs.discontinuities) == 0 {
+		return nil
+	}
+	out := make([]uint64, 0, len(rs.discontinuities))
+	for n := range rs.discontinuities {
+		out = append(out, n)
+	}
+	slices.Sort(out)
+	return out
+}
+
 // RestorePublished adds a segment directly as StatusPublished, bypassing the
 // A/V barrier. Used during startup index rebuild from disk — segments that
 // were previously committed and published do not need re-validation.
@@ -353,7 +384,7 @@ func (rs *RepresentationState) RestorePublished(seg SegmentState) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	seg.Status = StatusPublished
-	rs.recordPublished(seg.SegNo)
+	rs.recordPublished(seg)
 	rs.buf.Push(seg)
 }
 
@@ -405,7 +436,7 @@ func (rs *RepresentationState) MarkPublished(segNos map[uint64]struct{}) {
 	rs.buf.UpdateWhere(func(s *SegmentState) {
 		if _, ok := segNos[s.SegNo]; ok && s.Status == StatusCommitted {
 			s.Status = StatusPublished
-			rs.recordPublished(s.SegNo)
+			rs.recordPublished(*s)
 		}
 	})
 }

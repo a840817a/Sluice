@@ -2,6 +2,7 @@ package hlsout
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -127,5 +128,80 @@ func TestMediaKeepsNumberingThatContinuesAcrossPeriods(t *testing.T) {
 	}
 	if got := playlistSegments(out); len(got) != 10 || got[9] != "/segments/b/v0/9.ts" {
 		t.Errorf("segments = %v", got)
+	}
+}
+
+// discontinuitySequences maps each segment URI path a playlist lists to its
+// discontinuity sequence number: EXT-X-DISCONTINUITY-SEQUENCE plus the
+// EXT-X-DISCONTINUITY tags before it.
+func discontinuitySequences(out string) map[string]int {
+	m := map[string]int{}
+	n := 0
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "#EXT-X-DISCONTINUITY-SEQUENCE:"):
+			n, _ = strconv.Atoi(strings.TrimPrefix(line, "#EXT-X-DISCONTINUITY-SEQUENCE:"))
+		case line == "#EXT-X-DISCONTINUITY":
+			n++
+		case strings.Contains(line, "/segments/"):
+			m[line[strings.Index(line, "/segments/"):]] = n
+		}
+	}
+	return m
+}
+
+// As a live window slides, every segment it still shows keeps its
+// discontinuity sequence number (RFC 8216 §6.2.2): a discontinuity whose tag
+// leaves the playlist — or is dropped because its segment now opens the
+// playlist — is carried by EXT-X-DISCONTINUITY-SEQUENCE instead. That holds
+// for a period boundary and for an upstream discontinuity inside a period,
+// which the representation's lifetime record still knows once its segment has
+// gone. A discontinuity on a period's first segment is the boundary itself.
+func TestDiscontinuitySequenceStableWhileTheWindowSlides(t *testing.T) {
+	// period holds segments present..6 of a period that has published 1..6,
+	// with upstream discontinuities at discs.
+	period := func(id string, present uint64, discs ...uint64) PeriodSegments {
+		segs := segRange(present, 6)
+		for i := range segs {
+			for _, d := range discs {
+				if segs[i].SegNo == d {
+					segs[i].Discontinuity = true
+				}
+			}
+		}
+		return PeriodSegments{PeriodID: id, Segments: segs, First: 1, Last: 6, RangeKnown: true, Discontinuities: discs}
+	}
+	gone := func(p PeriodSegments) PeriodSegments { p.Segments = nil; return p }
+	for _, tc := range []struct {
+		name          string
+		before, after []PeriodSegments
+	}{
+		{"upstream discontinuity leaves the window",
+			[]PeriodSegments{period("0", 1, 4)}, []PeriodSegments{period("0", 5, 4)}},
+		{"upstream discontinuity opens the window",
+			[]PeriodSegments{period("0", 1, 4)}, []PeriodSegments{period("0", 4, 4)}},
+		{"several upstream discontinuities leave the window",
+			[]PeriodSegments{period("0", 1, 2, 3, 5)}, []PeriodSegments{period("0", 6, 2, 3, 5)}},
+		{"period boundary leaves the window",
+			[]PeriodSegments{period("0", 4), period("1", 1)}, []PeriodSegments{gone(period("0", 4)), period("1", 2)}},
+		{"earlier period's upstream discontinuity leaves the window",
+			[]PeriodSegments{period("0", 3, 4), period("1", 1)}, []PeriodSegments{gone(period("0", 3, 4)), period("1", 2)}},
+		{"discontinuity on a period's first segment is its boundary",
+			[]PeriodSegments{period("0", 4), period("1", 1, 1, 3)}, []PeriodSegments{gone(period("0", 4)), period("1", 4, 1, 3)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before, after := string(Media(tc.before, mediaOpts())), string(Media(tc.after, mediaOpts()))
+			was, is := discontinuitySequences(before), discontinuitySequences(after)
+			if len(is) == 0 {
+				t.Fatalf("the slid playlist lists no segments:\n%s", after)
+			}
+			for uri, n := range is {
+				if m, ok := was[uri]; !ok {
+					t.Errorf("%s is not in the playlist before the slide:\n%s", uri, before)
+				} else if m != n {
+					t.Errorf("%s: discontinuity sequence %d before the slide, %d after\nbefore:\n%s\nafter:\n%s", uri, m, n, before, after)
+				}
+			}
+		})
 	}
 }

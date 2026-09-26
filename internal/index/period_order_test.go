@@ -48,3 +48,21 @@ func TestSegNoRangeSurvivesEviction(t *testing.T) {
 		t.Errorf("an unpublished segment widened the range to %d", last)
 	}
 }
+
+// Like the range, the record of upstream discontinuities outlives the ring:
+// EXT-X-DISCONTINUITY-SEQUENCE must keep counting one whose segment has been
+// evicted. Only publication records one, and a restored segment counts.
+func TestDiscontinuitiesSurviveEviction(t *testing.T) {
+	rep := NewChannelIndex().Period("0").AS("0").Rep("v0", 2)
+	rep.RestorePublished(SegmentState{SegNo: 9, EndPTS: 1, Timescale: 1, Discontinuity: true})
+	for n := uint64(10); n <= 14; n++ {
+		rep.Commit(SegmentState{SegNo: n, EndPTS: 1, Timescale: 1, Discontinuity: n == 11})
+		rep.MarkPublished(map[uint64]struct{}{n: {}})
+	}
+	// Committed but never published: in no playlist, so not recorded.
+	rep.Commit(SegmentState{SegNo: 15, EndPTS: 1, Timescale: 1, Discontinuity: true})
+
+	if got := rep.Discontinuities(); !slices.Equal(got, []uint64{9, 11}) {
+		t.Errorf("Discontinuities = %v, want [9 11] after evicting both", got)
+	}
+}

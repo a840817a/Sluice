@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -261,13 +262,15 @@ func TestUnusualPeriodIDReachesItsSegment(t *testing.T) {
 
 // The playlist numbers a later period after an earlier one's lifetime range,
 // so the handler must pass that range on rather than let it be recomputed
-// from whatever the ring still holds, and must order epochs numerically.
+// from whatever the ring still holds, and must order epochs numerically. The
+// same holds for the lifetime record of upstream discontinuities, which
+// EXT-X-DISCONTINUITY-SEQUENCE counts.
 func TestPeriodSegmentsCarryLifetimeRangeInOrder(t *testing.T) {
 	ci := index.NewChannelIndex()
 	for _, period := range []string{"10", "2"} {
 		rep := ci.Period(period).AS("0").Rep("v0", 2) // holds 2; 5 published
 		for n := uint64(100); n <= 104; n++ {
-			rep.Commit(index.SegmentState{SegNo: n, EndPTS: 1, Timescale: 1})
+			rep.Commit(index.SegmentState{SegNo: n, EndPTS: 1, Timescale: 1, Discontinuity: n == 101})
 			rep.MarkPublished(map[uint64]struct{}{n: {}})
 		}
 	}
@@ -279,6 +282,9 @@ func TestPeriodSegmentsCarryLifetimeRangeInOrder(t *testing.T) {
 	for _, p := range got {
 		if !p.RangeKnown || p.First != 100 || p.Last != 104 {
 			t.Errorf("period %s range = %d..%d (known %v), want the lifetime 100..104", p.PeriodID, p.First, p.Last, p.RangeKnown)
+		}
+		if !slices.Equal(p.Discontinuities, []uint64{101}) {
+			t.Errorf("period %s discontinuities = %v, want the evicted 101", p.PeriodID, p.Discontinuities)
 		}
 	}
 }

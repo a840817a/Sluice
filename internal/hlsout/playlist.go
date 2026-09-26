@@ -78,6 +78,13 @@ type PeriodSegments struct {
 	// Segments.
 	First, Last uint64
 	RangeKnown  bool
+	// Discontinuities are the numbers of every segment the representation has
+	// ever published in this period that begins with an upstream
+	// discontinuity (index.RepresentationState.Discontinuities). They let
+	// EXT-X-DISCONTINUITY-SEQUENCE keep counting a discontinuity whose segment
+	// has left the window. When RangeKnown is false they are taken from
+	// Segments.
+	Discontinuities []uint64
 	// InitURI, when non-empty, is this period's EXT-X-MAP, and marks the
 	// playlist as fMP4.
 	InitURI string
@@ -97,6 +104,20 @@ func (p PeriodSegments) segNoRange() (first, last uint64, ok bool) {
 		}
 	}
 	return first, last, len(p.Segments) > 0
+}
+
+// discontinuityNos returns the period's lifetime discontinuity segment numbers.
+func (p PeriodSegments) discontinuityNos() []uint64 {
+	if p.RangeKnown {
+		return p.Discontinuities
+	}
+	var out []uint64
+	for _, s := range p.Segments {
+		if s.Discontinuity {
+			out = append(out, s.SegNo)
+		}
+	}
+	return out
 }
 
 // playlistEntry is one segment as the playlist numbers it.
@@ -246,8 +267,9 @@ func Master(variants []hlsdesc.Variant, o MasterOptions) []byte {
 // Only a run of consecutive media sequence numbers is ever emitted: a playlist
 // that skips one desynchronises players. Which run is chosen depends on the
 // mode — see contiguousRun. Each period boundary inside the run is marked
-// with EXT-X-DISCONTINUITY and a fresh EXT-X-MAP, and
-// EXT-X-DISCONTINUITY-SEQUENCE counts the boundaries already before it.
+// with EXT-X-DISCONTINUITY and a fresh EXT-X-MAP, as is each upstream
+// discontinuity, and EXT-X-DISCONTINUITY-SEQUENCE counts both kinds already
+// before it (discontinuitiesBefore).
 func Media(periods []PeriodSegments, o MediaOptions) []byte {
 	base := strings.TrimRight(o.GatewayBaseURL, "/")
 
@@ -283,9 +305,7 @@ func Media(periods []PeriodSegments, o MediaOptions) []byte {
 	var discSeq int
 	if len(run) > 0 {
 		mediaSeq = run[0].msn
-		// Every period before the window's first one ended in a boundary
-		// that has already left the playlist.
-		discSeq = periodsBefore(periods, run[0].period)
+		discSeq = discontinuitiesBefore(periods, run[0])
 	}
 	fmt.Fprintf(&b, "#EXT-X-MEDIA-SEQUENCE:%d\n", mediaSeq)
 
@@ -332,13 +352,31 @@ func Media(periods []PeriodSegments, o MediaOptions) []byte {
 	return []byte(b.String())
 }
 
-// periodsBefore counts the periods before position i that hold segments, each
-// of which ended in a period boundary.
-func periodsBefore(periods []PeriodSegments, i int) int {
+// discontinuitiesBefore is the EXT-X-DISCONTINUITY-SEQUENCE of a playlist
+// that opens with head: the discontinuities up to and including head's own,
+// whose tag the playlist leaves out because it would describe a break from a
+// segment the client never saw. RFC 8216 §6.2.2 requires the value to count
+// every discontinuity tag removed from the playlist, so each segment still in
+// it keeps its discontinuity sequence number as the window slides.
+//
+// A discontinuity is either a period boundary — every period before head's
+// that holds segments ended in one — or an upstream discontinuity inside a
+// period. One on a period's first segment is that period's boundary, or
+// opens the stream, and is not counted a second time.
+func discontinuitiesBefore(periods []PeriodSegments, head playlistEntry) int {
 	n := 0
-	for _, p := range periods[:i] {
-		if _, _, ok := p.segNoRange(); ok {
+	for i, p := range periods[:head.period+1] {
+		first, _, ok := p.segNoRange()
+		if !ok {
+			continue
+		}
+		if i < head.period {
 			n++
+		}
+		for _, d := range p.discontinuityNos() {
+			if d != first && (i < head.period || d <= head.seg.SegNo) {
+				n++
+			}
 		}
 	}
 	return n

@@ -166,6 +166,7 @@ func (s *Server) periodSegmentsForRep(sv ch.Serving, channelID, repID string) []
 		if first, last, ok := rep.SegNoRange(); ok {
 			p.First, p.Last, p.RangeKnown = first, last, true
 		}
+		p.Discontinuities = append(p.Discontinuities, rep.Discontinuities()...)
 	})
 
 	var docOrder []string
