@@ -48,7 +48,8 @@ func TestDASHArtifactsSurviveRestartWithOriginOffline(t *testing.T) {
 			case <-time.After(20 * time.Second):
 				t.Fatalf("VOD completion observer did not run (mode %v)", h1.mgr.Get(id).Mode())
 			}
-			status, _ := h1.mgr.StatusFor(id)
+			info, _ := h1.mgr.Channel(id)
+			status := info.Status
 			if status.Mode != "vod" {
 				t.Fatalf("mode = %q, want vod", status.Mode)
 			}

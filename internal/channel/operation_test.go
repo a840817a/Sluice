@@ -38,7 +38,7 @@ func TestBlockedStopDoesNotBlockOtherChannelUpdate(t *testing.T) {
 	if err := store.Put("b", base); err != nil {
 		t.Fatal(err)
 	}
-	rtB, err := m.Start(context.Background(), "b", base)
+	rtB, err := m.startForTest(context.Background(), "b", base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestBlockedStopDoesNotBlockOtherChannelUpdate(t *testing.T) {
 
 	started := make(chan error, 1)
 	go func() {
-		_, err := m.Start(context.Background(), "c", base)
+		_, err := m.startForTest(context.Background(), "c", base)
 		started <- err
 	}()
 	select {
@@ -109,8 +109,8 @@ func TestBlockedStopDoesNotBlockOtherChannelUpdate(t *testing.T) {
 // A Start for the channel being stopped waits until all work on the old runtime
 // has drained, so it cannot write segment state alongside its predecessor.
 func TestStartWaitsForSameChannelStop(t *testing.T) {
-	m := NewManager(configForTest(t))
-	rt, err := m.Start(context.Background(), "ch", deadChannel())
+	m := newTestManager(t, configForTest(t))
+	rt, err := m.startForTest(context.Background(), "ch", deadChannel())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestStartWaitsForSameChannelStop(t *testing.T) {
 	}
 	started := make(chan startResult, 1)
 	go func() {
-		replacement, startErr := m.Start(context.Background(), "ch", deadChannel())
+		replacement, startErr := m.startForTest(context.Background(), "ch", deadChannel())
 		started <- startResult{rt: replacement, err: startErr}
 		close(startDone)
 	}()
@@ -180,7 +180,7 @@ func TestStartWaitsForSameChannelStop(t *testing.T) {
 // entered it must publish before StopAll detaches the runtimes, so shutdown
 // cannot leave a newly started channel behind.
 func TestStopAllDoesNotMissStartAlreadyInProgress(t *testing.T) {
-	m := NewManager(configForTest(t))
+	m := newTestManager(t, configForTest(t))
 	unlock := m.lockOperation("ch")
 	released := false
 	defer func() {
@@ -191,7 +191,7 @@ func TestStopAllDoesNotMissStartAlreadyInProgress(t *testing.T) {
 
 	startDone := make(chan struct{})
 	go func() {
-		_, _ = m.Start(context.Background(), "ch", deadChannel())
+		_, _ = m.startForTest(context.Background(), "ch", deadChannel())
 		close(startDone)
 	}()
 	waitForOperationUsers(t, m, "ch", 2)

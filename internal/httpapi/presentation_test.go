@@ -30,16 +30,12 @@ func startDASHChannel(t *testing.T, id string, upstreamMPD []byte) http.Handler 
 		}
 		chCfg.IsVOD = true
 	}
-	mgr := ch.NewManager(cfg)
+	mgr := newTestManager(t, cfg)
 	t.Cleanup(mgr.StopAll)
-	if _, err := mgr.Start(context.Background(), id, chCfg); err != nil {
+	if _, err := createChannel(mgr, context.Background(), id, chCfg); err != nil {
 		t.Fatal(err)
 	}
-	st, err := ch.NewStore(filepath.Join(dataDir, "channels.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return NewRouter(cfg, NewServer(cfg, mgr), NewAdminServer(context.Background(), mgr, st), UI{})
+	return NewRouter(cfg, NewServer(cfg, mgr), NewAdminServer(context.Background(), mgr), UI{})
 }
 
 func getBody(t *testing.T, h http.Handler, path string) (int, string) {

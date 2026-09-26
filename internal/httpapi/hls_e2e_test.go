@@ -100,8 +100,8 @@ func startHLSChannel(t *testing.T, originURL string) (*Server, config.Config) {
 		Worker: config.WorkerConfig{FetchWorkers: 2, MaxRetriesStatic: 2},
 		Window: config.WindowConfig{Depth: time.Hour},
 	}
-	mgr := ch.NewManager(cfg)
-	if _, err := mgr.Start(context.Background(), "hls1", ch.Config{
+	mgr := newTestManager(t, cfg)
+	if _, err := createChannel(mgr, context.Background(), "hls1", ch.Config{
 		SourceType: ch.SourceHLS,
 		MPDURL:     originURL + "/master.m3u8",
 		Enabled:    true,
@@ -324,8 +324,8 @@ func TestHealthAdvertisesPlayableURL(t *testing.T) {
 // than unavailable — clear DASH sources are serveable as HLS once discovered.
 func TestDASHChannelHLSNotReadyBeforeMPD(t *testing.T) {
 	cfg := config.Config{Store: config.StoreConfig{DataDir: t.TempDir()}}
-	mgr := ch.NewManager(cfg)
-	if _, err := mgr.Start(context.Background(), "dash1", ch.Config{
+	mgr := newTestManager(t, cfg)
+	if _, err := createChannel(mgr, context.Background(), "dash1", ch.Config{
 		MPDURL:  "http://127.0.0.1:0/live.mpd", // unreachable: never becomes ready
 		Enabled: true,
 	}); err != nil {

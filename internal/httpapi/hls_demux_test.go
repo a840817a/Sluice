@@ -75,8 +75,8 @@ func TestDemuxedHLSAudioIngestedAndServed(t *testing.T) {
 		Worker: config.WorkerConfig{FetchWorkers: 4, MaxRetriesStatic: 2},
 		Window: config.WindowConfig{Depth: time.Hour},
 	}
-	mgr := ch.NewManager(cfg)
-	if _, err := mgr.Start(context.Background(), "dx", ch.Config{
+	mgr := newTestManager(t, cfg)
+	if _, err := createChannel(mgr, context.Background(), "dx", ch.Config{
 		SourceType: ch.SourceHLS, MPDURL: origin.URL + "/master.m3u8", Enabled: true,
 	}); err != nil {
 		t.Fatalf("start: %v", err)

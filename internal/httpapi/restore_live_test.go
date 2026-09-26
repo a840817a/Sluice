@@ -62,7 +62,7 @@ func TestRestoreToLiveLiveChannelIs400(t *testing.T) {
 	admin := newTestAdminServer(t)
 	cfg := deadVODChannel()
 	cfg.IsVOD = false
-	if err := admin.store.Put("ch", cfg); err != nil {
+	if err := storeOf(t, admin).Put("ch", cfg); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 	if got := restoreExec(admin, "ch").Code; got != http.StatusBadRequest {
@@ -77,10 +77,7 @@ func TestRestoreToLiveClearsIsVOD(t *testing.T) {
 	admin := newTestAdminServer(t)
 	t.Cleanup(func() { admin.manager.StopAll() })
 
-	if err := admin.store.Put("ch", deadVODChannel()); err != nil {
-		t.Fatalf("put: %v", err)
-	}
-	if _, err := admin.manager.Start(context.Background(), "ch", deadVODChannel()); err != nil {
+	if _, err := createChannel(admin.manager, context.Background(), "ch", deadVODChannel()); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 
@@ -88,7 +85,7 @@ func TestRestoreToLiveClearsIsVOD(t *testing.T) {
 		t.Fatalf("status = %d, want 200", got)
 	}
 
-	saved, ok := admin.store.Get("ch")
+	saved, ok := storeOf(t, admin).Get("ch")
 	if !ok {
 		t.Fatal("channel disappeared from the store")
 	}
@@ -127,10 +124,7 @@ func TestRestoreToLiveOutlivesTheRequest(t *testing.T) {
 		Enabled:    true,
 		IsVOD:      true,
 	}
-	if err := admin.store.Put("ch", cfg); err != nil {
-		t.Fatalf("put: %v", err)
-	}
-	if _, err := admin.manager.Start(context.Background(), "ch", cfg); err != nil {
+	if _, err := createChannel(admin.manager, context.Background(), "ch", cfg); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 

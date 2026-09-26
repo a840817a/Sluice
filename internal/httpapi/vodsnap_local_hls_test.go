@@ -75,10 +75,10 @@ func TestVODTransitionWritesResolvableLocalPlaylists(t *testing.T) {
 		Window: config.WindowConfig{Depth: time.Hour},
 	}
 
-	mgr := ch.NewManager(cfg)
+	mgr := newTestManager(t, cfg)
 	t.Cleanup(func() { _ = mgr.Stop("hlslocal") })
 
-	if _, err := mgr.Start(context.Background(), "hlslocal", ch.Config{
+	if _, err := createChannel(mgr, context.Background(), "hlslocal", ch.Config{
 		SourceType: ch.SourceHLS,
 		MPDURL:     origin.URL + "/master.m3u8",
 		Enabled:    true,

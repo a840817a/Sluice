@@ -37,12 +37,11 @@ func newTestRouter(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatalf("store init: %v", err)
 	}
-	mgr := ch.NewManager(cfg)
-	mgr.SetStore(store)
+	mgr := ch.NewManager(cfg, store)
 	// Zero UI: the static assets live in internal/web, which these tests do not
 	// import, so every UI route falls back to its "not loaded" placeholder —
 	// which is exactly what TestRouteTable asserts on below.
-	return NewRouter(cfg, NewServer(cfg, mgr), NewAdminServer(context.Background(), mgr, store), UI{})
+	return NewRouter(cfg, NewServer(cfg, mgr), NewAdminServer(context.Background(), mgr), UI{})
 }
 
 func doReq(t *testing.T, h http.Handler, method, path string, auth bool) *httptest.ResponseRecorder {

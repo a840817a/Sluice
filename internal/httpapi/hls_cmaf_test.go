@@ -109,8 +109,8 @@ func startCMAFChannel(t *testing.T, originURL string) *Server {
 		Worker: config.WorkerConfig{FetchWorkers: 2, MaxRetriesStatic: 2},
 		Window: config.WindowConfig{Depth: time.Hour},
 	}
-	mgr := ch.NewManager(cfg)
-	if _, err := mgr.Start(context.Background(), "cmaf", ch.Config{
+	mgr := newTestManager(t, cfg)
+	if _, err := createChannel(mgr, context.Background(), "cmaf", ch.Config{
 		SourceType: ch.SourceHLS,
 		MPDURL:     originURL + "/master.m3u8",
 		Enabled:    true,

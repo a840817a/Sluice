@@ -46,13 +46,13 @@ func encryptedHLSOrigin(t *testing.T, finished bool, key http.HandlerFunc) *http
 func warningsManager(t *testing.T) (*Manager, *Store, gocfg.Config) {
 	t.Helper()
 	cfg := gocfg.Config{Store: gocfg.StoreConfig{DataDir: t.TempDir()}, Worker: gocfg.WorkerConfig{FetchWorkers: 1}, Window: gocfg.WindowConfig{Depth: time.Hour}}
-	m := NewManager(cfg)
+	m := newTestManager(t, cfg)
 	t.Cleanup(m.StopAll)
 	st, err := NewStore(filepath.Join(cfg.Store.DataDir, "channels.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.SetStore(st)
+	m.store = st
 	return m, st, cfg
 }
 
@@ -66,7 +66,7 @@ func requireVODWithWarning(t *testing.T, m *Manager, rt *Runtime, done <-chan st
 	if rt.Mode() != ModeVOD {
 		t.Fatalf("mode = %v, want VOD", rt.Mode())
 	}
-	status, _ := m.StatusFor(rt.ID)
+	status, _ := runningStatus(m, rt.ID)
 	for _, w := range status.VODWarnings {
 		if strings.Contains(w, want) {
 			return
@@ -84,7 +84,7 @@ func TestVODCompletesWhenPassthroughKeyIsUnavailable(t *testing.T) {
 	}
 	done := make(chan struct{})
 	m.SetOnVODReady(func(*Runtime) { close(done) })
-	rt, err := m.Start(context.Background(), "keys", cfg)
+	rt, err := m.startForTest(context.Background(), "keys", cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestVODCompletesWithStrayTSSegment(t *testing.T) {
 	}
 	done := make(chan struct{})
 	m.SetOnVODReady(func(*Runtime) { close(done) })
-	rt, err := m.Start(context.Background(), "stray", cfg)
+	rt, err := m.startForTest(context.Background(), "stray", cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestHotEditDoesNotWaitForVODKeyCheckpoint(t *testing.T) {
 	}
 	done := make(chan struct{})
 	m.SetOnVODReady(func(*Runtime) { close(done) })
-	rt, err := m.Start(context.Background(), "edit", cfg)
+	rt, err := m.startForTest(context.Background(), "edit", cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestVODRebuildFailureKeepsCheckpointWarnings(t *testing.T) {
 	if rt.Mode() != ModeVODFailed {
 		t.Fatalf("mode = %v, want VODFailed", rt.Mode())
 	}
-	status, _ := m.StatusFor(rt.ID)
+	status, _ := runningStatus(m, rt.ID)
 	if status.Mode != "vod_failed" || len(status.VODWarnings) == 0 {
 		t.Fatalf("status = %q with warnings %q, want vod_failed with the checkpoint's warning", status.Mode, status.VODWarnings)
 	}
@@ -223,7 +223,7 @@ func TestVODRebuildFailureKeepsCheckpointWarnings(t *testing.T) {
 		t.Fatal(err)
 	}
 	rt.wg.Wait()
-	status, _ = m.StatusFor(rt.ID)
+	status, _ = runningStatus(m, rt.ID)
 	if status.Mode != "vod" || len(status.VODWarnings) != 0 {
 		t.Fatalf("retry status = %q with warnings %q, want vod with none", status.Mode, status.VODWarnings)
 	}
@@ -239,7 +239,7 @@ func unreadablePeriodsRuntime(t *testing.T) (*Manager, *Runtime, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.SetStore(st)
+	m.store = st
 	if err := st.Put("unreadable", deadChannel()); err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestVODKeyCheckpointIsBounded(t *testing.T) {
 	}
 	done := make(chan struct{})
 	m.SetOnVODReady(func(*Runtime) { close(done) })
-	rt, err := m.Start(context.Background(), "slow", cfg)
+	rt, err := m.startForTest(context.Background(), "slow", cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,46 +5,28 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"regexp"
 
 	ch "github.com/a840817a/sluice/internal/channel"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
 
-var validChannelID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
-
 // AdminServer holds dependencies for admin API handlers.
 type AdminServer struct {
 	manager *ch.Manager
-	store   *ch.Store
 	ctx     context.Context // parent context for starting channels
 }
 
 // NewAdminServer creates an AdminServer.
-func NewAdminServer(ctx context.Context, manager *ch.Manager, store *ch.Store) *AdminServer {
-	return &AdminServer{manager: manager, store: store, ctx: ctx}
+func NewAdminServer(ctx context.Context, manager *ch.Manager) *AdminServer {
+	return &AdminServer{manager: manager, ctx: ctx}
 }
 
 // handleListChannels returns all configured channels with their running status.
 //
 // GET /admin/api/channels
 func (a *AdminServer) handleListChannels(w http.ResponseWriter, r *http.Request) {
-	stored := a.store.List()
-	running := a.manager.Status()
-
-	out := make(map[string]interface{}, len(stored))
-	for id, cfg := range stored {
-		status, ok := running[id]
-		if !ok {
-			status = ch.ChannelStatus{ID: id, MPDURL: cfg.MPDURL, Running: false}
-		}
-		out[id] = map[string]interface{}{
-			"config": cfg,
-			"status": status,
-		}
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, a.manager.Channels())
 }
 
 // handleCreateChannel creates and starts a new channel.
@@ -62,9 +44,6 @@ func (a *AdminServer) handleCreateChannel(w http.ResponseWriter, r *http.Request
 	}
 	if req.ID == "" {
 		req.ID = uuid.New().String()
-	} else if !validChannelID.MatchString(req.ID) {
-		writeErr(w, http.StatusBadRequest, "id must match [a-zA-Z0-9_-]{1,64}")
-		return
 	}
 	if err := req.Config.Validate(); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -72,9 +51,12 @@ func (a *AdminServer) handleCreateChannel(w http.ResponseWriter, r *http.Request
 	}
 	req.Config.Enabled = true
 	if err := a.manager.Create(a.ctx, req.ID, req.Config); err != nil {
-		if errors.Is(err, ch.ErrChannelExists) {
+		switch {
+		case errors.Is(err, ch.ErrInvalidChannelID):
+			writeErr(w, http.StatusBadRequest, "id must match [a-zA-Z0-9_-]{1,64}")
+		case errors.Is(err, ch.ErrChannelExists):
 			writeErr(w, http.StatusConflict, "channel already exists")
-		} else {
+		default:
 			writeErr(w, http.StatusInternalServerError, err.Error())
 		}
 		return
@@ -103,12 +85,6 @@ type updateResponse struct {
 // PUT /admin/api/channels/{channelID}
 func (a *AdminServer) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "channelID")
-	// Keep the established 404 precedence without using this snapshot for the
-	// commit: UpdateConfig re-reads under its operation lock.
-	if _, exists := a.store.Get(id); !exists {
-		writeErr(w, http.StatusNotFound, "channel not found")
-		return
-	}
 	var cfg ch.Config
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
@@ -172,28 +148,12 @@ func (a *AdminServer) handleDeleteChannel(w http.ResponseWriter, r *http.Request
 //
 // GET /admin/api/channels/{channelID}/status
 func (a *AdminServer) handleChannelStatus(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "channelID")
-	rt := a.manager.Get(id)
-	if rt == nil {
-		cfg, ok := a.store.Get(id)
-		if !ok {
-			writeErr(w, http.StatusNotFound, "channel not found")
-			return
-		}
-		writeJSON(w, http.StatusOK, ch.ChannelStatus{
-			ID:      id,
-			MPDURL:  cfg.MPDURL,
-			Running: false,
-		})
-		return
-	}
-	status, ok := a.manager.StatusFor(id)
+	info, ok := a.manager.Channel(chi.URLParam(r, "channelID"))
 	if !ok {
-		// Stopped between the Get above and here.
-		writeJSON(w, http.StatusOK, ch.ChannelStatus{ID: id, Running: false})
+		writeErr(w, http.StatusNotFound, "channel not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, status)
+	writeJSON(w, http.StatusOK, info.Status)
 }
 
 // handleTransitionToVOD manually triggers a live→VOD transition for a channel.
@@ -218,14 +178,14 @@ func (a *AdminServer) handleTransitionToVOD(w http.ResponseWriter, r *http.Reque
 // POST /admin/api/channels/{channelID}/restore-to-live
 func (a *AdminServer) handleRestoreToLive(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "channelID")
-	if _, ok := a.store.Get(id); !ok {
-		writeErr(w, http.StatusNotFound, "channel not found")
-		return
-	}
 	// a.ctx, never the request's: the channel outlives the response, and a
 	// request-scoped context would cancel its ingest the moment this returns.
 	if err := a.manager.RestoreToLive(a.ctx, id); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		if errors.Is(err, ch.ErrChannelNotFound) {
+			writeErr(w, http.StatusNotFound, "channel not found")
+		} else {
+			writeErr(w, http.StatusBadRequest, err.Error())
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{

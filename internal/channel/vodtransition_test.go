@@ -61,8 +61,7 @@ func managerWithStore(t *testing.T) (*Manager, *Store, string) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
-	m := NewManager(gwCfg)
-	m.SetStore(store)
+	m := NewManager(gwCfg, store)
 	t.Cleanup(m.StopAll)
 	return m, store, gwCfg.Store.DataDir
 }
@@ -110,7 +109,7 @@ func TestUpstreamEndTransitionsToVOD(t *testing.T) {
 	if err := store.Put("ch", cfg); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	rt, err := m.Start(context.Background(), "ch", cfg)
+	rt, err := m.startForTest(context.Background(), "ch", cfg)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -143,7 +142,7 @@ func TestWindowModeChannelStillTransitions(t *testing.T) {
 	if err := store.Put("ch", cfg); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	rt, err := m.Start(context.Background(), "ch", cfg)
+	rt, err := m.startForTest(context.Background(), "ch", cfg)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -171,7 +170,7 @@ func TestRestoreToLiveSuppressesImmediateRetransition(t *testing.T) {
 	if err := store.Put("ch", cfg); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	rt, err := m.Start(context.Background(), "ch", cfg)
+	rt, err := m.startForTest(context.Background(), "ch", cfg)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -223,7 +222,7 @@ func TestRestoreToLiveRejectsALiveChannel(t *testing.T) {
 	if err := store.Put("ch", cfg); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	if _, err := m.Start(context.Background(), "ch", cfg); err != nil {
+	if _, err := m.startForTest(context.Background(), "ch", cfg); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	if err := m.RestoreToLive(context.Background(), "ch"); err == nil {

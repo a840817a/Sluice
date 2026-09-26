@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,14 +35,14 @@ func deadChannel() Config {
 }
 
 func TestManagerStartIsIdempotent(t *testing.T) {
-	m := NewManager(configForTest(t))
+	m := newTestManager(t, configForTest(t))
 	t.Cleanup(m.StopAll)
 
-	rt1, err := m.Start(context.Background(), "ch1", deadChannel())
+	rt1, err := m.startForTest(context.Background(), "ch1", deadChannel())
 	if err != nil {
 		t.Fatalf("first start: %v", err)
 	}
-	rt2, err := m.Start(context.Background(), "ch1", deadChannel())
+	rt2, err := m.startForTest(context.Background(), "ch1", deadChannel())
 	if err != nil {
 		t.Fatalf("second start: %v", err)
 	}
@@ -54,10 +55,10 @@ func TestManagerStartIsIdempotent(t *testing.T) {
 }
 
 func TestManagerStopRemovesChannel(t *testing.T) {
-	m := NewManager(configForTest(t))
+	m := newTestManager(t, configForTest(t))
 	t.Cleanup(m.StopAll)
 
-	if _, err := m.Start(context.Background(), "ch1", deadChannel()); err != nil {
+	if _, err := m.startForTest(context.Background(), "ch1", deadChannel()); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	if err := m.Stop("ch1"); err != nil {
@@ -69,7 +70,7 @@ func TestManagerStopRemovesChannel(t *testing.T) {
 	if err := m.Stop("ch1"); err == nil {
 		t.Error("stopping an already-stopped channel returned nil error, want an error")
 	}
-	if got := m.Status(); len(got) != 0 {
+	if got := runningStatuses(m); len(got) != 0 {
 		t.Errorf("Status reported %d channels after Stop, want 0", len(got))
 	}
 }
@@ -82,10 +83,10 @@ func TestManagerStopRemovesChannel(t *testing.T) {
 // introduced. Without a bound the suite would hang instead of failing, which is
 // far harder to diagnose than a red test.
 func TestManagerStopReturnsPromptly(t *testing.T) {
-	m := NewManager(configForTest(t))
+	m := newTestManager(t, configForTest(t))
 	t.Cleanup(m.StopAll)
 
-	if _, err := m.Start(context.Background(), "ch1", deadChannel()); err != nil {
+	if _, err := m.startForTest(context.Background(), "ch1", deadChannel()); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 
@@ -103,14 +104,14 @@ func TestManagerStopReturnsPromptly(t *testing.T) {
 }
 
 func TestManagerStopAllClearsEveryChannel(t *testing.T) {
-	m := NewManager(configForTest(t))
+	m := newTestManager(t, configForTest(t))
 
 	for _, id := range []string{"ch1", "ch2", "ch3"} {
-		if _, err := m.Start(context.Background(), id, deadChannel()); err != nil {
+		if _, err := m.startForTest(context.Background(), id, deadChannel()); err != nil {
 			t.Fatalf("start %s: %v", id, err)
 		}
 	}
-	if got := m.Status(); len(got) != 3 {
+	if got := runningStatuses(m); len(got) != 3 {
 		t.Fatalf("started 3 channels, Status reports %d", len(got))
 	}
 
@@ -122,7 +123,7 @@ func TestManagerStopAllClearsEveryChannel(t *testing.T) {
 		t.Fatal("StopAll did not return within 5s")
 	}
 
-	if got := m.Status(); len(got) != 0 {
+	if got := runningStatuses(m); len(got) != 0 {
 		t.Errorf("Status reports %d channels after StopAll, want 0", len(got))
 	}
 	for _, id := range []string{"ch1", "ch2", "ch3"} {
@@ -132,17 +133,16 @@ func TestManagerStopAllClearsEveryChannel(t *testing.T) {
 	}
 }
 
-func TestManagerSetStoreBeforeStart(t *testing.T) {
+func TestManagerStartsWithAStore(t *testing.T) {
 	cfg := configForTest(t)
 	store, err := NewStore(filepath.Join(cfg.Store.DataDir, "channels.json"))
 	if err != nil {
 		t.Fatalf("store init: %v", err)
 	}
-	m := NewManager(cfg)
-	m.SetStore(store)
+	m := NewManager(cfg, store)
 	t.Cleanup(m.StopAll)
 
-	if _, err := m.Start(context.Background(), "ch1", deadChannel()); err != nil {
+	if _, err := m.startForTest(context.Background(), "ch1", deadChannel()); err != nil {
 		t.Fatalf("start with a store attached: %v", err)
 	}
 	if m.Get("ch1") == nil {
@@ -156,14 +156,13 @@ func TestUpdateConfigHotUpdatesRunningChannel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewManager(cfg)
-	m.SetStore(store)
+	m := NewManager(cfg, store)
 	t.Cleanup(m.StopAll)
 
 	if err := store.Put("ch1", deadChannel()); err != nil {
 		t.Fatal(err)
 	}
-	rt, err := m.Start(context.Background(), "ch1", deadChannel())
+	rt, err := m.startForTest(context.Background(), "ch1", deadChannel())
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -196,14 +195,13 @@ func TestUpdateConfigRestartsFrozenFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewManager(cfg)
-	m.SetStore(store)
+	m := NewManager(cfg, store)
 	t.Cleanup(m.StopAll)
 
 	if err := store.Put("ch1", deadChannel()); err != nil {
 		t.Fatal(err)
 	}
-	rt, err := m.Start(context.Background(), "ch1", deadChannel())
+	rt, err := m.startForTest(context.Background(), "ch1", deadChannel())
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -229,8 +227,7 @@ func TestUpdateConfigOnMissingChannel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewManager(cfg)
-	m.SetStore(store)
+	m := NewManager(cfg, store)
 	t.Cleanup(m.StopAll)
 
 	if _, err := m.UpdateConfig(context.Background(), "nope", deadChannel()); !errors.Is(err, ErrChannelNotFound) {
@@ -241,10 +238,10 @@ func TestUpdateConfigOnMissingChannel(t *testing.T) {
 // Config is swapped by the admin API while HTTP handlers read it. Under -race
 // this fails outright if the atomic is ever replaced by a plain field.
 func TestConfigSwapIsRaceFree(t *testing.T) {
-	m := NewManager(configForTest(t))
+	m := newTestManager(t, configForTest(t))
 	t.Cleanup(m.StopAll)
 
-	rt, err := m.Start(context.Background(), "ch1", deadChannel())
+	rt, err := m.startForTest(context.Background(), "ch1", deadChannel())
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -263,4 +260,49 @@ func TestConfigSwapIsRaceFree(t *testing.T) {
 		_ = rt.Config().Title
 	}
 	<-done
+}
+
+// At boot the manager starts what the store enables, and nothing else: not a
+// disabled channel, and not one whose ID — hand-edited into channels.json —
+// the manager would never have accepted, since the ID becomes a directory
+// under the data directory.
+func TestStartEnabledStartsWhatTheStoreEnables(t *testing.T) {
+	m := newTestManager(t, configForTest(t))
+	t.Cleanup(m.StopAll)
+	off := deadChannel()
+	off.Enabled = false
+	for id, cfg := range map[string]Config{"on": deadChannel(), "off": off, "../escape": deadChannel()} {
+		if err := m.store.Put(id, cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	m.StartEnabled(context.Background())
+
+	if m.Get("on") == nil {
+		t.Error("an enabled channel was not started")
+	}
+	if m.Get("off") != nil {
+		t.Error("a disabled channel was started")
+	}
+	if m.Get("../escape") != nil {
+		t.Error("a channel with an invalid ID was started")
+	}
+}
+
+// Create refuses an ID the manager does not accept, before storing anything.
+func TestCreateRejectsAnInvalidID(t *testing.T) {
+	m := newTestManager(t, configForTest(t))
+	t.Cleanup(m.StopAll)
+	for _, id := range []string{"", "../escape", "a/b", "bad id!", strings.Repeat("x", 65)} {
+		if err := m.Create(context.Background(), id, deadChannel()); !errors.Is(err, ErrInvalidChannelID) {
+			t.Errorf("Create(%q) = %v, want ErrInvalidChannelID", id, err)
+		}
+		if _, ok := m.Channel(id); ok {
+			t.Errorf("Create(%q) stored the channel", id)
+		}
+	}
+	if err := m.Create(context.Background(), "ok_ID-1", deadChannel()); err != nil {
+		t.Errorf("Create of a valid ID: %v", err)
+	}
 }

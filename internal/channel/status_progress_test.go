@@ -314,8 +314,13 @@ func TestChannelStatusKeepsItsOriginalKeys(t *testing.T) {
 	}
 }
 
-func TestStatusForReturnsOnlyTheRequestedChannel(t *testing.T) {
-	m := &Manager{runtimes: make(map[string]*Runtime)}
+func TestChannelReturnsOnlyTheRequestedChannel(t *testing.T) {
+	m := newTestManager(t, configForTest(t))
+	for id, url := range map[string]string{"ch1": "http://x/1.mpd", "ch2": "http://x/2.mpd", "ch3": "http://x/3.mpd"} {
+		if err := m.store.Put(id, Config{MPDURL: url}); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	rt1 := &Runtime{ID: "ch1", Index: statusIndex(t), Progress: progress.New()}
 	rt1.setConfig(Config{MPDURL: "http://x/1.mpd"})
@@ -324,18 +329,21 @@ func TestStatusForReturnsOnlyTheRequestedChannel(t *testing.T) {
 	m.runtimes["ch1"] = rt1
 	m.runtimes["ch2"] = rt2
 
-	got, ok := m.StatusFor("ch1")
-	if !ok {
-		t.Fatal("StatusFor(ch1) reported not running")
+	got, ok := m.Channel("ch1")
+	if !ok || !got.Status.Running {
+		t.Fatalf("Channel(ch1) = %+v, %v; want it running", got, ok)
 	}
-	if got.ID != "ch1" || got.MPDURL != "http://x/1.mpd" {
-		t.Errorf("StatusFor(ch1) = %+v", got)
+	if got.Status.ID != "ch1" || got.Status.MPDURL != "http://x/1.mpd" {
+		t.Errorf("Channel(ch1) status = %+v", got.Status)
 	}
-	if len(got.Tracks) != 3 {
-		t.Errorf("got %d tracks, want 3", len(got.Tracks))
+	if len(got.Status.Tracks) != 3 {
+		t.Errorf("got %d tracks, want 3", len(got.Status.Tracks))
 	}
 
-	if _, ok := m.StatusFor("nope"); ok {
-		t.Error("StatusFor of an unknown channel reported running")
+	if got, ok := m.Channel("ch3"); !ok || got.Status.Running || got.Status.MPDURL != "http://x/3.mpd" {
+		t.Errorf("Channel(ch3), configured but stopped = %+v, %v", got, ok)
+	}
+	if _, ok := m.Channel("nope"); ok {
+		t.Error("Channel of an unknown channel reported it")
 	}
 }

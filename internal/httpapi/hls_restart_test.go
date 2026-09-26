@@ -34,20 +34,18 @@ func boot(t *testing.T, dataDir string) *restartHarness {
 	if err != nil {
 		t.Fatalf("open channel store: %v", err)
 	}
-	mgr := ch.NewManager(cfg)
-	mgr.SetStore(store)
+	mgr := ch.NewManager(cfg, store)
 	return &restartHarness{cfg: cfg, store: store, mgr: mgr, srv: NewServer(cfg, mgr)}
 }
 
-// start launches every channel the store knows about, as startup does.
+// start launches every channel the store knows about, as startup does, and
+// fails the test if one of them did not come up.
 func (h *restartHarness) start(t *testing.T) {
 	t.Helper()
+	h.mgr.StartEnabled(context.Background())
 	for id, cfg := range h.store.List() {
-		if !cfg.Enabled {
-			continue
-		}
-		if _, err := h.mgr.Start(context.Background(), id, cfg); err != nil {
-			t.Fatalf("start channel %s: %v", id, err)
+		if cfg.Enabled && h.mgr.Get(id) == nil {
+			t.Fatalf("channel %s did not start", id)
 		}
 	}
 }

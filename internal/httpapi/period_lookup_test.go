@@ -28,11 +28,7 @@ import (
 // periodRouter serves the gateway's public routes for a manager.
 func periodRouter(t *testing.T, cfg config.Config, mgr *ch.Manager) http.Handler {
 	t.Helper()
-	st, err := ch.NewStore(filepath.Join(cfg.Store.DataDir, "channels.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return NewRouter(cfg, NewServer(cfg, mgr), NewAdminServer(context.Background(), mgr, st), UI{})
+	return NewRouter(cfg, NewServer(cfg, mgr), NewAdminServer(context.Background(), mgr), UI{})
 }
 
 func get(t *testing.T, h http.Handler, path string) (int, []byte) {
@@ -68,9 +64,9 @@ func TestSegmentAndInitURLsNameOnePeriod(t *testing.T) {
 	}
 
 	cfg := config.Config{Store: config.StoreConfig{DataDir: dataDir}, Server: config.ServerConfig{BaseURL: "http://gw.test"}}
-	mgr := ch.NewManager(cfg)
+	mgr := newTestManager(t, cfg)
 	t.Cleanup(mgr.StopAll)
-	if _, err := mgr.Start(context.Background(), id, ch.Config{MPDURL: "http://origin.invalid/a.mpd", IsVOD: true}); err != nil {
+	if _, err := createChannel(mgr, context.Background(), id, ch.Config{MPDURL: "http://origin.invalid/a.mpd", IsVOD: true}); err != nil {
 		t.Fatal(err)
 	}
 	h := periodRouter(t, cfg, mgr)
@@ -156,9 +152,9 @@ func TestLivePlaylistFollowsUpstreamReset(t *testing.T) {
 		Worker: config.WorkerConfig{FetchWorkers: 2},
 		Window: config.WindowConfig{Depth: time.Hour},
 	}
-	mgr := ch.NewManager(cfg)
+	mgr := newTestManager(t, cfg)
 	t.Cleanup(mgr.StopAll)
-	if _, err := mgr.Start(context.Background(), "live", ch.Config{
+	if _, err := createChannel(mgr, context.Background(), "live", ch.Config{
 		SourceType: ch.SourceHLS, MPDURL: origin.URL + "/master.m3u8", Enabled: true,
 	}); err != nil {
 		t.Fatal(err)
@@ -246,9 +242,9 @@ func TestUnusualPeriodIDReachesItsSegment(t *testing.T) {
 		}
 	}
 	cfg := config.Config{Store: config.StoreConfig{DataDir: dataDir}, Server: config.ServerConfig{BaseURL: "http://gw.test"}}
-	mgr := ch.NewManager(cfg)
+	mgr := newTestManager(t, cfg)
 	t.Cleanup(mgr.StopAll)
-	if _, err := mgr.Start(context.Background(), id, ch.Config{MPDURL: "http://origin.invalid/a.mpd", IsVOD: true}); err != nil {
+	if _, err := createChannel(mgr, context.Background(), id, ch.Config{MPDURL: "http://origin.invalid/a.mpd", IsVOD: true}); err != nil {
 		t.Fatal(err)
 	}
 	h := periodRouter(t, cfg, mgr)
@@ -274,7 +270,7 @@ func TestPeriodSegmentsCarryLifetimeRangeInOrder(t *testing.T) {
 			rep.MarkPublished(map[uint64]struct{}{n: {}})
 		}
 	}
-	srv := NewServer(config.Config{}, ch.NewManager(config.Config{}))
+	srv := NewServer(config.Config{}, newTestManager(t, config.Config{}))
 	got := srv.periodSegmentsForRep(ch.Serving{Index: ci}, "c", "v0")
 	if len(got) != 2 || got[0].PeriodID != "2" || got[1].PeriodID != "10" {
 		t.Fatalf("periods = %+v, want 2 then 10", got)
@@ -312,7 +308,7 @@ func TestUnpublishedSegmentAtAPeriodEdgeKeepsBothPeriods(t *testing.T) {
 	commit("0", 1, 5, 4) // segment 5 committed, never published
 	commit("1", 1, 3, 3)
 
-	srv := NewServer(config.Config{}, ch.NewManager(config.Config{}))
+	srv := NewServer(config.Config{}, newTestManager(t, config.Config{}))
 	periods := srv.periodSegmentsForRep(ch.Serving{Index: ci}, "c", "v0")
 	want := []string{"0/v0/1", "0/v0/2", "0/v0/3", "0/v0/4", "1/v0/1", "1/v0/2", "1/v0/3"}
 	for _, vod := range []bool{true, false} {

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"path/filepath"
 
@@ -14,7 +13,7 @@ import (
 	"github.com/a840817a/sluice/internal/web"
 )
 
-// gateway is the fully composed gateway: store, manager, HTTP server and the
+// gateway is the fully composed gateway: manager, HTTP server and the
 // router that serves them, with every cross-component callback already wired.
 //
 // It exists so that composition is testable. main() adds only what a test
@@ -23,7 +22,6 @@ import (
 // lives here instead.
 type gateway struct {
 	cfg     config.Config
-	store   *channel.Store
 	manager *channel.Manager
 	server  *httpapi.Server
 	// handler is the router; main wraps it in an *http.Server.
@@ -59,22 +57,12 @@ func newGateway(ctx context.Context, cfg config.Config) (*gateway, error) {
 	}
 
 	// --- Channel manager ---
-	manager := channel.NewManager(cfg)
-	manager.SetStore(chStore) // enables VOD state persistence across restarts
+	manager := channel.NewManager(cfg, chStore)
 	srv := httpapi.NewServer(cfg, manager)
-
-	// Start all previously persisted channels.
-	for id, chCfg := range chStore.List() {
-		if !chCfg.Enabled {
-			continue
-		}
-		if _, err := manager.Start(ctx, id, chCfg); err != nil {
-			slog.Error("channel start failed", "id", id, "err", err)
-		}
-	}
+	manager.StartEnabled(ctx)
 
 	// --- HTTP routing ---
-	adminSrv := httpapi.NewAdminServerFromContext(ctx, manager, chStore)
+	adminSrv := httpapi.NewAdminServer(ctx, manager)
 	handler := httpapi.NewRouter(cfg, srv, adminSrv, httpapi.UI{
 		Admin:        web.AdminHandler(),
 		Player:       web.PlayerHandler(),
@@ -83,7 +71,6 @@ func newGateway(ctx context.Context, cfg config.Config) (*gateway, error) {
 
 	return &gateway{
 		cfg:     cfg,
-		store:   chStore,
 		manager: manager,
 		server:  srv,
 		handler: handler,

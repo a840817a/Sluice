@@ -33,8 +33,8 @@ func TestDASHUpstreamIDsStayPlayableAndContained(t *testing.T) {
 				Worker: config.WorkerConfig{FetchWorkers: 4, MaxRetriesStatic: 2},
 				Window: config.WindowConfig{Depth: time.Hour},
 			}
-			mgr := ch.NewManager(cfg)
-			if _, err := mgr.Start(context.Background(), "d", ch.Config{
+			mgr := newTestManager(t, cfg)
+			if _, err := createChannel(mgr, context.Background(), "d", ch.Config{
 				MPDURL: origin.URL + "/manifest.mpd", Enabled: true,
 			}); err != nil {
 				t.Fatalf("start: %v", err)

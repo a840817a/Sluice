@@ -19,7 +19,7 @@ func TestVODConfigFailureCompletesWithWarning(t *testing.T) {
 	if err := st.Put("ch", Config{}); err != nil {
 		t.Fatal(err)
 	}
-	m.SetStore(st)
+	m.store = st
 	rt := registerRuntime(t, m, "ch", ModeLive)
 	var calls atomic.Int32
 	m.SetOnVODReady(func(*Runtime) { calls.Add(1) })
@@ -40,7 +40,7 @@ func TestVODConfigFailureCompletesWithWarning(t *testing.T) {
 	if calls.Load() != 1 || !rt.Progress.Snapshot().IngestComplete {
 		t.Fatal("config failure did not publish exactly once")
 	}
-	status, _ := m.StatusFor("ch")
+	status, _ := runningStatus(m, "ch")
 	if len(status.VODWarnings) != 1 || !strings.Contains(status.VODWarnings[0], "persist VOD state") {
 		t.Fatalf("vod_warnings = %q, want the store failure", status.VODWarnings)
 	}

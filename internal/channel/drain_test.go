@@ -130,10 +130,10 @@ func TestStopLeavesNoWritesBehind(t *testing.T) {
 		Worker: gocfg.WorkerConfig{FetchWorkers: 4, MaxRetriesStatic: 1},
 		Window: gocfg.WindowConfig{Depth: time.Hour},
 	}
-	m := NewManager(cfg)
+	m := newTestManager(t, cfg)
 	t.Cleanup(m.StopAll)
 
-	if _, err := m.Start(context.Background(), "ch1", Config{
+	if _, err := m.startForTest(context.Background(), "ch1", Config{
 		SourceType: SourceHLS,
 		MPDURL:     origin.URL + "/master.m3u8",
 		Enabled:    true,
@@ -253,10 +253,10 @@ func TestStopCancelsInFlightKeyFetch(t *testing.T) {
 		Worker: gocfg.WorkerConfig{FetchWorkers: 2, MaxRetriesStatic: 1},
 		Window: gocfg.WindowConfig{Depth: time.Hour},
 	}
-	m := NewManager(cfg)
+	m := newTestManager(t, cfg)
 	t.Cleanup(m.StopAll)
 
-	if _, err := m.Start(context.Background(), "ch1", Config{
+	if _, err := m.startForTest(context.Background(), "ch1", Config{
 		SourceType: SourceHLS,
 		MPDURL:     origin.URL + "/master.m3u8",
 		HLSKeyMode: KeyModePassthrough,

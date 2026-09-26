@@ -25,10 +25,10 @@ func TestVODTransitionSnapshotsManifestToDisk(t *testing.T) {
 		Window: config.WindowConfig{Depth: time.Hour},
 	}
 
-	mgr := ch.NewManager(cfg)
+	mgr := newTestManager(t, cfg)
 	t.Cleanup(func() { _ = mgr.Stop("vodsnap") })
 
-	if _, err := mgr.Start(context.Background(), "vodsnap", ch.Config{
+	if _, err := createChannel(mgr, context.Background(), "vodsnap", ch.Config{
 		MPDURL:  origin.URL + "/manifest.mpd",
 		Enabled: true,
 	}); err != nil {

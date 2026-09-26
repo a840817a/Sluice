@@ -14,7 +14,7 @@ import (
 
 func TestCheckpointVODMediaRepairsHLSSidecarsPerRepresentation(t *testing.T) {
 	dir := t.TempDir()
-	m := NewManager(gocfg.Config{Store: gocfg.StoreConfig{DataDir: dir}})
+	m := newTestManager(t, gocfg.Config{Store: gocfg.StoreConfig{DataDir: dir}})
 	ci := index.NewChannelIndex()
 	rt := &Runtime{ID: "channel", Index: ci, Source: hlsSource{w: &hlsingest.Watcher{}}}
 
@@ -65,7 +65,7 @@ func TestCheckpointVODMediaRepairsHLSSidecarsPerRepresentation(t *testing.T) {
 
 func TestCheckpointVODMediaReportsUnknownHistoricalTSSegment(t *testing.T) {
 	dir := t.TempDir()
-	m := NewManager(gocfg.Config{Store: gocfg.StoreConfig{DataDir: dir}})
+	m := newTestManager(t, gocfg.Config{Store: gocfg.StoreConfig{DataDir: dir}})
 	rt := &Runtime{ID: "channel", Index: index.NewChannelIndex(), Source: hlsSource{w: &hlsingest.Watcher{}}}
 	path := store.SegmentPathExt(dir, rt.ID, "p0", index.MediaVideo, "0", "v0", 7, store.ExtTS)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -85,7 +85,7 @@ func TestCheckpointVODMediaReportsUnknownHistoricalTSSegment(t *testing.T) {
 
 func TestCheckpointVODMediaRetriesAfterBlockedSidecarPath(t *testing.T) {
 	dir := t.TempDir()
-	m := NewManager(gocfg.Config{Store: gocfg.StoreConfig{DataDir: dir}})
+	m := newTestManager(t, gocfg.Config{Store: gocfg.StoreConfig{DataDir: dir}})
 	ci := index.NewChannelIndex()
 	rt := &Runtime{ID: "channel", Index: ci, Source: hlsSource{w: &hlsingest.Watcher{}}}
 	path := store.SegmentPathExt(dir, rt.ID, "p0", index.MediaVideo, "0", "v0", 7, store.ExtTS)
@@ -123,7 +123,7 @@ func TestCheckpointVODMediaRetriesAfterBlockedSidecarPath(t *testing.T) {
 
 func TestCheckpointVODMediaAggregatesMissingMetadataPerDirectory(t *testing.T) {
 	dir := t.TempDir()
-	m := NewManager(gocfg.Config{Store: gocfg.StoreConfig{DataDir: dir}})
+	m := newTestManager(t, gocfg.Config{Store: gocfg.StoreConfig{DataDir: dir}})
 	rt := &Runtime{ID: "channel", Index: index.NewChannelIndex(), Source: hlsSource{w: &hlsingest.Watcher{}}}
 	for n := uint64(1); n <= 500; n++ {
 		path := store.SegmentPathExt(dir, rt.ID, "p0", index.MediaVideo, "0", "v0", n, store.ExtTS)

@@ -97,8 +97,8 @@ func startChannelWithKeyMode(t *testing.T, originURL, keyMode string) *Server {
 		Worker: config.WorkerConfig{FetchWorkers: 2, MaxRetriesStatic: 2},
 		Window: config.WindowConfig{Depth: time.Hour},
 	}
-	mgr := ch.NewManager(cfg)
-	if _, err := mgr.Start(context.Background(), "enc", ch.Config{
+	mgr := newTestManager(t, cfg)
+	if _, err := createChannel(mgr, context.Background(), "enc", ch.Config{
 		SourceType: ch.SourceHLS,
 		HLSKeyMode: keyMode,
 		MPDURL:     originURL + "/master.m3u8",

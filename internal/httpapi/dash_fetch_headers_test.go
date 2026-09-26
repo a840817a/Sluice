@@ -109,8 +109,8 @@ func TestDASHFetchHeadersReachManifestAndSegments(t *testing.T) {
 		Worker: config.WorkerConfig{FetchWorkers: 2, MaxRetriesStatic: 2},
 		Window: config.WindowConfig{Depth: time.Hour},
 	}
-	mgr := ch.NewManager(cfg)
-	if _, err := mgr.Start(context.Background(), "hdr", ch.Config{
+	mgr := newTestManager(t, cfg)
+	if _, err := createChannel(mgr, context.Background(), "hdr", ch.Config{
 		MPDURL:  origin.URL + "/manifest.mpd",
 		Enabled: true,
 		FetchHeaders: []ch.Header{
@@ -164,8 +164,8 @@ func TestGatewayAuthHeaderOverridesChannelHeader(t *testing.T) {
 			AuthValue:  "Bearer gateway",
 		},
 	}
-	mgr := ch.NewManager(cfg)
-	if _, err := mgr.Start(context.Background(), "hdr2", ch.Config{
+	mgr := newTestManager(t, cfg)
+	if _, err := createChannel(mgr, context.Background(), "hdr2", ch.Config{
 		MPDURL:       origin.URL + "/manifest.mpd",
 		Enabled:      true,
 		FetchHeaders: []ch.Header{{Name: "Authorization", Value: "Bearer channel"}},

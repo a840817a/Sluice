@@ -1,10 +1,8 @@
 package httpapi
 
 import (
-	"context"
 	"net/http"
 
-	ch "github.com/a840817a/sluice/internal/channel"
 	"github.com/a840817a/sluice/internal/config"
 	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -119,13 +117,4 @@ func NewRouter(
 	})
 
 	return r
-}
-
-// NewAdminServerFromContext is a convenience constructor used in main.
-func NewAdminServerFromContext(
-	ctx context.Context,
-	manager *ch.Manager,
-	store *ch.Store,
-) *AdminServer {
-	return NewAdminServer(ctx, manager, store)
 }

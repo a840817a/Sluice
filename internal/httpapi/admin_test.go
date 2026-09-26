@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	ch "github.com/a840817a/sluice/internal/channel"
@@ -35,12 +36,26 @@ func newTestAdminServerIn(t *testing.T) (*AdminServer, string) {
 	}
 	mgr := ch.NewManager(config.Config{
 		Store: config.StoreConfig{DataDir: dir},
-	})
-	// The manager and the admin server share one store, exactly as
-	// cmd/gateway wires them. A restart persists through the manager, so a
-	// manager without the store cannot complete one.
-	mgr.SetStore(store)
-	return NewAdminServer(context.Background(), mgr, store), dir
+	}, store)
+	admin := NewAdminServer(context.Background(), mgr)
+	adminStores.Store(admin, store)
+	return admin, dir
+}
+
+// adminStores maps each test admin server to the channel store its manager
+// was built over, for tests that seed or inspect the configuration on disk
+// directly — as an operator editing channels.json, or a previous run, would
+// have left it.
+var adminStores sync.Map
+
+// storeOf returns the channel store behind a test admin server.
+func storeOf(t *testing.T, admin *AdminServer) *ch.Store {
+	t.Helper()
+	st, ok := adminStores.Load(admin)
+	if !ok {
+		t.Fatal("admin server was not built by newTestAdminServerIn")
+	}
+	return st.(*ch.Store)
 }
 
 // adminCall runs one named handler. adminExec dispatches on the HTTP method and
@@ -113,10 +128,7 @@ func liveChannel() ch.Config {
 
 func TestHandleUpdateChannel_HotAppliesWithoutRestart(t *testing.T) {
 	admin := newTestAdminServer(t)
-	if err := admin.store.Put("ch1", liveChannel()); err != nil {
-		t.Fatalf("seed store: %v", err)
-	}
-	rt, err := admin.manager.Start(context.Background(), "ch1", liveChannel())
+	rt, err := createChannel(admin.manager, context.Background(), "ch1", liveChannel())
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -145,7 +157,7 @@ func TestHandleUpdateChannel_HotAppliesWithoutRestart(t *testing.T) {
 	if now := rt.Config().Title; now != "renamed" {
 		t.Errorf("runtime Title = %q, want %q", now, "renamed")
 	}
-	stored, _ := admin.store.Get("ch1")
+	stored, _ := storeOf(t, admin).Get("ch1")
 	if stored.Title != "renamed" {
 		t.Errorf("stored Title = %q, want %q — a hot update must still persist", stored.Title, "renamed")
 	}
@@ -153,10 +165,7 @@ func TestHandleUpdateChannel_HotAppliesWithoutRestart(t *testing.T) {
 
 func TestHandleUpdateChannel_RestartsOnFrozenField(t *testing.T) {
 	admin := newTestAdminServer(t)
-	if err := admin.store.Put("ch1", liveChannel()); err != nil {
-		t.Fatalf("seed store: %v", err)
-	}
-	rt, err := admin.manager.Start(context.Background(), "ch1", liveChannel())
+	rt, err := createChannel(admin.manager, context.Background(), "ch1", liveChannel())
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -188,7 +197,7 @@ func TestHandleUpdateChannel_RestartsOnFrozenField(t *testing.T) {
 // not reported as a hot apply against a runtime that does not exist.
 func TestHandleUpdateChannel_StartsStoppedChannel(t *testing.T) {
 	admin := newTestAdminServer(t)
-	if err := admin.store.Put("ch1", liveChannel()); err != nil {
+	if err := storeOf(t, admin).Put("ch1", liveChannel()); err != nil {
 		t.Fatalf("seed store: %v", err)
 	}
 	t.Cleanup(admin.manager.StopAll)
@@ -217,10 +226,7 @@ func TestHandleUpdateChannel_StartsStoppedChannel(t *testing.T) {
 
 func TestHandleRestartChannel(t *testing.T) {
 	admin := newTestAdminServer(t)
-	if err := admin.store.Put("ch1", liveChannel()); err != nil {
-		t.Fatalf("seed store: %v", err)
-	}
-	rt, err := admin.manager.Start(context.Background(), "ch1", liveChannel())
+	rt, err := createChannel(admin.manager, context.Background(), "ch1", liveChannel())
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -292,9 +298,8 @@ func TestHandleCreateChannel_DuplicateID(t *testing.T) {
 		t.Fatalf("store init: %v", err)
 	}
 	_ = store.Put("dup", ch.Config{MPDURL: "http://example.com/a.mpd", Enabled: true})
-	mgr := ch.NewManager(config.Config{Store: config.StoreConfig{DataDir: dir}})
-	mgr.SetStore(store)
-	admin := NewAdminServer(context.Background(), mgr, store)
+	mgr := ch.NewManager(config.Config{Store: config.StoreConfig{DataDir: dir}}, store)
+	admin := NewAdminServer(context.Background(), mgr)
 
 	w := adminExec(admin, http.MethodPost, "/admin/api/channels",
 		map[string]interface{}{"id": "dup", "mpd_url": "http://example.com/b.mpd"}, nil)
@@ -345,7 +350,7 @@ func TestHandleUpdateChannel_PreservesInternalVODState(t *testing.T) {
 		Enabled:             true,
 		IsVOD:               true,
 	}
-	if err := admin.store.Put("vodch", oldCfg); err != nil {
+	if err := storeOf(t, admin).Put("vodch", oldCfg); err != nil {
 		t.Fatalf("seed store: %v", err)
 	}
 
@@ -362,7 +367,7 @@ func TestHandleUpdateChannel_PreservesInternalVODState(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	updated, ok := admin.store.Get("vodch")
+	updated, ok := storeOf(t, admin).Get("vodch")
 	if !ok {
 		t.Fatal("updated channel missing from store")
 	}
@@ -416,7 +421,7 @@ func TestAdminDeleteChannelRemovesConfigButNotSegments(t *testing.T) {
 		t.Errorf("204 response carried a body: %q", body)
 	}
 
-	if _, ok := admin.store.Get("gone"); ok {
+	if _, ok := storeOf(t, admin).Get("gone"); ok {
 		t.Error("channel is still in the store after a 204")
 	}
 	if _, err := os.Stat(segPath); err != nil {

@@ -192,14 +192,20 @@ func TestBuildStatusEmptyIndex(t *testing.T) {
 	}
 }
 
-// Manager.Status must report one entry per running channel and nothing else.
-func TestManagerStatusListsRunningChannels(t *testing.T) {
-	m := NewManager(configForTest(t))
+// Manager.Channels reports every configured channel: a running one with its
+// live status, a stopped one as not running.
+func TestManagerChannelsListsEveryConfiguredChannel(t *testing.T) {
+	m := newTestManager(t, configForTest(t))
 
-	if got := m.Status(); len(got) != 0 {
+	if got := m.Channels(); len(got) != 0 {
 		t.Fatalf("empty manager reported %d channels", len(got))
 	}
 
+	for id, url := range map[string]string{"ch1": "u1", "ch2": "u2", "ch3": "u3"} {
+		if err := m.store.Put(id, Config{MPDURL: url}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	rt1 := &Runtime{ID: "ch1", Index: statusIndex(t)}
 	rt1.setConfig(Config{MPDURL: "u1"})
 	rt2 := &Runtime{ID: "ch2", Index: index.NewChannelIndex()}
@@ -210,14 +216,17 @@ func TestManagerStatusListsRunningChannels(t *testing.T) {
 	m.runtimes["ch2"] = rt2
 	m.mu.Unlock()
 
-	got := m.Status()
-	if len(got) != 2 {
-		t.Fatalf("got %d channels, want 2", len(got))
+	got := m.Channels()
+	if len(got) != 3 {
+		t.Fatalf("got %d channels, want 3", len(got))
 	}
-	if s, ok := got["ch1"]; !ok || s.MPDURL != "u1" || len(s.Periods) != 2 {
-		t.Errorf("ch1 status = %+v", s)
+	if c, ok := got["ch1"]; !ok || !c.Status.Running || c.Status.MPDURL != "u1" || len(c.Status.Periods) != 2 {
+		t.Errorf("ch1 = %+v", c)
 	}
-	if s, ok := got["ch2"]; !ok || s.MPDURL != "u2" || len(s.Periods) != 0 {
-		t.Errorf("ch2 status = %+v", s)
+	if c, ok := got["ch2"]; !ok || !c.Status.Running || c.Status.MPDURL != "u2" || len(c.Status.Periods) != 0 {
+		t.Errorf("ch2 = %+v", c)
+	}
+	if c, ok := got["ch3"]; !ok || c.Status.Running || c.Status.ID != "ch3" || c.Status.MPDURL != "u3" || c.Config.MPDURL != "u3" {
+		t.Errorf("ch3, configured but stopped = %+v", c)
 	}
 }

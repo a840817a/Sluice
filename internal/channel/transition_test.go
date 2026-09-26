@@ -44,7 +44,7 @@ func registerRuntime(t *testing.T, m *Manager, id string, mode ChannelMode) *Run
 
 func managerForTransition(t *testing.T) *Manager {
 	t.Helper()
-	return NewManager(gocfg.Config{Store: gocfg.StoreConfig{DataDir: t.TempDir()}})
+	return newTestManager(t, gocfg.Config{Store: gocfg.StoreConfig{DataDir: t.TempDir()}})
 }
 
 func TestTransitionToVODRefusesWhatItCannotTransition(t *testing.T) {

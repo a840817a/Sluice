@@ -59,24 +59,17 @@ func startVODChannelWithAdmin(t *testing.T, originURL, channelID string) *AdminS
 		Worker: config.WorkerConfig{FetchWorkers: 2, MaxRetriesStatic: 2},
 		Window: config.WindowConfig{Depth: time.Hour},
 	}
-	store, err := ch.NewStore(filepath.Join(dir, "channels.json"))
-	if err != nil {
-		t.Fatalf("store init: %v", err)
-	}
 	chCfg := ch.Config{
 		SourceType: ch.SourceHLS,
 		MPDURL:     originURL + "/master.m3u8",
 		Enabled:    true,
 	}
-	if err := store.Put(channelID, chCfg); err != nil {
-		t.Fatalf("store put: %v", err)
-	}
-	mgr := ch.NewManager(cfg)
-	if _, err := mgr.Start(context.Background(), channelID, chCfg); err != nil {
+	mgr := newTestManager(t, cfg)
+	if _, err := createChannel(mgr, context.Background(), channelID, chCfg); err != nil {
 		t.Fatalf("start channel: %v", err)
 	}
 	t.Cleanup(func() { _ = mgr.Stop(channelID) })
-	return NewAdminServer(context.Background(), mgr, store)
+	return NewAdminServer(context.Background(), mgr)
 }
 
 // TestAdminProgressReportsVODDownload is the end-to-end proof of the download
@@ -237,8 +230,8 @@ func TestAdminStatusOmitsProgressForStoppedChannel(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("store put: %v", err)
 	}
-	mgr := ch.NewManager(config.Config{Store: config.StoreConfig{DataDir: dir}})
-	admin := NewAdminServer(context.Background(), mgr, store)
+	mgr := ch.NewManager(config.Config{Store: config.StoreConfig{DataDir: dir}}, store)
+	admin := NewAdminServer(context.Background(), mgr)
 
 	list := adminList(admin)
 	var out map[string]struct {

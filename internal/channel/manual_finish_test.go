@@ -60,8 +60,7 @@ func gatedFinishChannel(t *testing.T, finished bool) (*Manager, *Runtime, *Store
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewManager(cfg)
-	m.SetStore(st)
+	m := NewManager(cfg, st)
 	t.Cleanup(m.StopAll)
 	done := make(chan struct{})
 	m.SetOnVODReady(func(rt *Runtime) { close(done) })
@@ -69,7 +68,7 @@ func gatedFinishChannel(t *testing.T, finished bool) (*Manager, *Runtime, *Store
 	if err := st.Put("finish", cc); err != nil {
 		t.Fatal(err)
 	}
-	rt, err := m.Start(context.Background(), "finish", cc)
+	rt, err := m.startForTest(context.Background(), "finish", cc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +161,7 @@ func failedVODRebuild(t *testing.T) (*Manager, *Runtime, *Store, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.SetStore(st)
+	m.store = st
 	if err := st.Put("broken", deadChannel()); err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +207,7 @@ func TestVODRebuildFailureCanBeRecoveredByRestart(t *testing.T) {
 
 func TestVODRebuildFailureCanBeRetried(t *testing.T) {
 	m, rt, st, blocker := failedVODRebuild(t)
-	if status, ok := m.StatusFor(rt.ID); !ok || status.Mode != "vod_failed" {
+	if status, ok := runningStatus(m, rt.ID); !ok || status.Mode != "vod_failed" {
 		t.Fatalf("status = %+v, want visible retryable failure", status)
 	}
 	// Retrying before the disk problem is resolved must remain retryable.
@@ -274,11 +273,11 @@ func TestVODCompletionWaitsForPassthroughKey(t *testing.T) {
 			origin := httptest.NewServer(mux)
 			t.Cleanup(origin.Close)
 			cfg := gocfg.Config{Store: gocfg.StoreConfig{DataDir: t.TempDir()}, Worker: gocfg.WorkerConfig{FetchWorkers: 1}, Window: gocfg.WindowConfig{Depth: time.Hour}}
-			m := NewManager(cfg)
+			m := newTestManager(t, cfg)
 			t.Cleanup(m.StopAll)
 			done := make(chan struct{})
 			m.SetOnVODReady(func(*Runtime) { close(done) })
-			rt, err := m.Start(context.Background(), "keys", Config{SourceType: SourceHLS, HLSKeyMode: KeyModePassthrough, MPDURL: origin.URL + "/master.m3u8", Enabled: true})
+			rt, err := m.startForTest(context.Background(), "keys", Config{SourceType: SourceHLS, HLSKeyMode: KeyModePassthrough, MPDURL: origin.URL + "/master.m3u8", Enabled: true})
 			if err != nil {
 				t.Fatal(err)
 			}

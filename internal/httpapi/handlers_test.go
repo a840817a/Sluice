@@ -15,8 +15,8 @@ import (
 )
 
 // newTestServer builds a Server backed by an empty Manager (no channels running).
-func newTestServer() *Server {
-	mgr := ch.NewManager(config.Config{})
+func newTestServer(t *testing.T) *Server {
+	mgr := newTestManager(t, config.Config{})
 	return NewServer(config.Config{}, mgr)
 }
 
@@ -40,7 +40,7 @@ func executeRequest(handler http.HandlerFunc, method, path string, routeParams m
 }
 
 func TestHandleManifest_ChannelNotFound(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer(t)
 	w := executeRequest(srv.handleManifest, http.MethodGet, "/v1/channels/noexist/manifest.mpd",
 		map[string]string{"channelID": "noexist"})
 	if w.Code != http.StatusNotFound {
@@ -49,7 +49,7 @@ func TestHandleManifest_ChannelNotFound(t *testing.T) {
 }
 
 func TestHandleSegment_ChannelNotFound(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer(t)
 	w := executeRequest(srv.handleSegment, http.MethodGet, "/v1/channels/noexist/segments/0/r0/000000001.m4s",
 		map[string]string{"channelID": "noexist", "periodID": "0", "repID": "r0", "segFile": "000000001.m4s"})
 	if w.Code != http.StatusNotFound {
@@ -58,7 +58,7 @@ func TestHandleSegment_ChannelNotFound(t *testing.T) {
 }
 
 func TestHandleSegment_MalformedSegFile(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer(t)
 	w := executeRequest(srv.handleSegment, http.MethodGet, "/v1/channels/ch1/segments/0/r0/notanumber.m4s",
 		map[string]string{"channelID": "ch1", "periodID": "0", "repID": "r0", "segFile": "notanumber.m4s"})
 	if w.Code != http.StatusNotFound {
@@ -67,7 +67,7 @@ func TestHandleSegment_MalformedSegFile(t *testing.T) {
 }
 
 func TestHandleInit_ChannelNotFound(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer(t)
 	w := executeRequest(srv.handleInit, http.MethodGet, "/v1/channels/noexist/init/0/r0.mp4",
 		map[string]string{"channelID": "noexist", "periodID": "0", "repID": "r0"})
 	if w.Code != http.StatusNotFound {
@@ -78,8 +78,8 @@ func TestHandleInit_ChannelNotFound(t *testing.T) {
 func TestHandleLicense_DisabledDRM(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Config{Store: config.StoreConfig{DataDir: dir}}
-	mgr := ch.NewManager(cfg)
-	if _, err := mgr.Start(context.Background(), "ch1", ch.Config{
+	mgr := newTestManager(t, cfg)
+	if _, err := createChannel(mgr, context.Background(), "ch1", ch.Config{
 		MPDURL:              "http://example.com/live.mpd",
 		PlayReadyLicenseURL: "http://example.com/pr",
 		EnablePlayReady:     ch.BoolPtr(false),
@@ -98,7 +98,7 @@ func TestHandleLicense_DisabledDRM(t *testing.T) {
 }
 
 func TestHandleChannelHealth_UnknownChannel(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer(t)
 	w := executeRequest(srv.handleChannelHealth, http.MethodGet, "/v1/channels/noexist/health",
 		map[string]string{"channelID": "noexist"})
 
@@ -133,8 +133,8 @@ func TestHandleManifest_VODFallsBackToSavedManifest(t *testing.T) {
 	}
 
 	cfg := config.Config{Store: config.StoreConfig{DataDir: dir}}
-	mgr := ch.NewManager(cfg)
-	if _, err := mgr.Start(context.Background(), channelID, ch.Config{
+	mgr := newTestManager(t, cfg)
+	if _, err := createChannel(mgr, context.Background(), channelID, ch.Config{
 		MPDURL:  "http://example.com/final.mpd",
 		Enabled: true,
 		IsVOD:   true,

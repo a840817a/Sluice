@@ -17,13 +17,12 @@ func managerForConfigUpdate(t *testing.T, id string, cfg Config) (*Manager, *Sto
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewManager(gwCfg)
-	m.SetStore(store)
+	m := NewManager(gwCfg, store)
 	t.Cleanup(m.StopAll)
 	if err := store.Put(id, cfg); err != nil {
 		t.Fatal(err)
 	}
-	rt, err := m.Start(context.Background(), id, cfg)
+	rt, err := m.startForTest(context.Background(), id, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,8 +38,7 @@ func TestUpdateConfigRestartJoinsPendingVODTransition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewManager(gwCfg)
-	m.SetStore(store)
+	m := NewManager(gwCfg, store)
 	base := deadChannel()
 	base.SourceType = SourceDASH
 	if err := store.Put("ch", base); err != nil {
@@ -48,7 +46,7 @@ func TestUpdateConfigRestartJoinsPendingVODTransition(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	rt, err := m.Start(ctx, "ch", base)
+	rt, err := m.startForTest(ctx, "ch", base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,15 +130,14 @@ func TestRestartAdoptsVODCompletedDuringStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewManager(gwCfg)
-	m.SetStore(store)
+	m := NewManager(gwCfg, store)
 	t.Cleanup(m.StopAll)
 	base := deadChannel()
 	base.SourceType = SourceDASH
 	if err := store.Put("ch", base); err != nil {
 		t.Fatal(err)
 	}
-	rt, err := m.Start(context.Background(), "ch", base)
+	rt, err := m.startForTest(context.Background(), "ch", base)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -93,9 +93,9 @@ func TestClearDASHServesHLS(t *testing.T) {
 		Worker: config.WorkerConfig{FetchWorkers: 4, MaxRetriesStatic: 2},
 		Window: config.WindowConfig{Depth: time.Hour},
 	}
-	mgr := ch.NewManager(cfg)
+	mgr := newTestManager(t, cfg)
 	// A DASH channel: SourceType empty/dash, MPDURL is the MPD.
-	if _, err := mgr.Start(context.Background(), "d2h", ch.Config{
+	if _, err := createChannel(mgr, context.Background(), "d2h", ch.Config{
 		MPDURL: origin.URL + "/manifest.mpd", Enabled: true,
 	}); err != nil {
 		t.Fatalf("start: %v", err)
@@ -181,8 +181,8 @@ func TestClearDASHHealthAdvertisesHLS(t *testing.T) {
 		Worker: config.WorkerConfig{FetchWorkers: 4, MaxRetriesStatic: 2},
 		Window: config.WindowConfig{Depth: time.Hour},
 	}
-	mgr := ch.NewManager(cfg)
-	if _, err := mgr.Start(context.Background(), "d2h", ch.Config{
+	mgr := newTestManager(t, cfg)
+	if _, err := createChannel(mgr, context.Background(), "d2h", ch.Config{
 		MPDURL: origin.URL + "/manifest.mpd", Enabled: true,
 	}); err != nil {
 		t.Fatalf("start: %v", err)

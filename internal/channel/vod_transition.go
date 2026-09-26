@@ -129,22 +129,20 @@ func (t *vodTransition) publish(finalMPD *imdp.ParsedMPD) vodOutcome {
 	}
 	warnings = append(warnings, a.persistDASHManifests()...)
 	m.mu.RLock()
-	st, cb := m.store, m.onVODReady
+	cb := m.onVODReady
 	m.mu.RUnlock()
-	if st != nil {
-		// Merge under the store's lock rather than Get+Put: an operator can
-		// be saving an edit to this same channel right now, and a plain
-		// read-modify-write would silently drop whichever side lost.
-		merged, syncErr, saveErr := st.update(rt.ID, func(c *Config) { c.IsVOD = true })
-		if saveErr != nil {
-			warnings = append(warnings, fmt.Sprintf("persist VOD state: %v", saveErr))
-		} else {
-			// The rename happened, so the new config is committed even when
-			// its directory sync failed.
-			rt.setConfig(merged)
-			if syncErr != nil {
-				warnings = append(warnings, fmt.Sprintf("sync VOD state: %v", syncErr))
-			}
+	// Merge under the store's lock rather than Get+Put: an operator can be
+	// saving an edit to this same channel right now, and a plain
+	// read-modify-write would silently drop whichever side lost.
+	merged, syncErr, saveErr := m.store.update(rt.ID, func(c *Config) { c.IsVOD = true })
+	if saveErr != nil {
+		warnings = append(warnings, fmt.Sprintf("persist VOD state: %v", saveErr))
+	} else {
+		// The rename happened, so the new config is committed even when its
+		// directory sync failed.
+		rt.setConfig(merged)
+		if syncErr != nil {
+			warnings = append(warnings, fmt.Sprintf("sync VOD state: %v", syncErr))
 		}
 	}
 	recordVODWarnings(rt, warnings)

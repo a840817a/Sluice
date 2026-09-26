@@ -66,8 +66,8 @@ func TestHLSBackfillsInteriorGap(t *testing.T) {
 		Worker: config.WorkerConfig{FetchWorkers: 4, MaxRetriesStatic: 1},
 		Window: config.WindowConfig{Depth: time.Hour},
 	}
-	mgr := ch.NewManager(cfg)
-	if _, err := mgr.Start(t.Context(), "bf", ch.Config{
+	mgr := newTestManager(t, cfg)
+	if _, err := createChannel(mgr, t.Context(), "bf", ch.Config{
 		SourceType: ch.SourceHLS, MPDURL: origin.URL + "/master.m3u8", Enabled: true,
 	}); err != nil {
 		t.Fatalf("start: %v", err)

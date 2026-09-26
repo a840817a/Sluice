@@ -186,30 +186,26 @@ type Manager struct {
 	operationLocks   map[string]*channelOperationLock
 	gwCfg            gocfg.Config // gateway-level config (data dir, worker counts, etc.)
 	runtimes         map[string]*Runtime
-	store            *Store            // optional; when set, VOD state is persisted on transition
-	onVODReady       func(rt *Runtime) // optional; called after any successful VOD transition
+	// store is where every channel's configuration lives. The manager is the
+	// only writer, and a channel runs only while it is in the store.
+	store      *Store
+	onVODReady func(rt *Runtime) // optional; called after any successful VOD transition
 	// suppressVOD carries the "do not auto-transition" mark across the restart
 	// that RestoreToLive performs. It cannot live on the Runtime because that
-	// restart builds a new one; Start consumes the entry and clears it.
+	// restart builds a new one; start consumes the entry and clears it.
 	suppressVOD map[string]bool
 }
 
-// NewManager creates a Manager. gwCfg supplies gateway-level defaults.
-func NewManager(gwCfg gocfg.Config) *Manager {
+// NewManager creates a Manager over the channel configurations in store. gwCfg
+// supplies gateway-level defaults.
+func NewManager(gwCfg gocfg.Config, store *Store) *Manager {
 	return &Manager{
 		gwCfg:          gwCfg,
+		store:          store,
 		runtimes:       make(map[string]*Runtime),
 		suppressVOD:    make(map[string]bool),
 		operationLocks: make(map[string]*channelOperationLock),
 	}
-}
-
-// SetStore attaches a channel store so the manager can persist VOD state
-// transitions across restarts. Call before any Start().
-func (m *Manager) SetStore(s *Store) {
-	m.mu.Lock()
-	m.store = s
-	m.mu.Unlock()
 }
 
 // SetOnVODReady installs an optional completion observer. Required artifacts
@@ -221,19 +217,38 @@ func (m *Manager) SetOnVODReady(fn func(rt *Runtime)) {
 	m.mu.Unlock()
 }
 
-// Start launches all goroutines for a channel. Idempotent: if already running,
-// the existing runtime is returned unchanged.
+// StartEnabled starts every enabled channel in the store. It is how the
+// gateway brings its channels up at boot. A channel that fails to start, or
+// whose stored ID is not a valid channel ID — the store file can be edited by
+// hand — is logged and skipped, so one bad channel does not keep the others
+// down.
+func (m *Manager) StartEnabled(ctx context.Context) {
+	for id, cfg := range m.store.List() {
+		if !cfg.Enabled {
+			continue
+		}
+		if !ValidChannelID(id) {
+			slog.Error("channel not started: invalid id in the channel store", "id", id)
+			continue
+		}
+		unlock := m.lockOperation(id)
+		_, err := m.start(ctx, id, cfg)
+		unlock()
+		if err != nil {
+			slog.Error("channel start failed", "id", id, "err", err)
+		}
+	}
+}
+
+// start launches all goroutines for a channel. Idempotent: if already running,
+// the existing runtime is returned unchanged. id's operation lock must be held,
+// and cfg must be the channel's stored configuration: every entry point that
+// calls it (Create, StartEnabled, the restarts) persists first.
 //
 // The order here carries meaning that is easy to break: the ingest machinery is
 // built before the runtime that publishes it, the runtime is registered before
 // ingest starts, and a VOD channel returns before any ingest goroutine is
 // launched at all. What each piece is made of lives in newIngestPipeline.
-func (m *Manager) Start(parentCtx context.Context, id string, cfg Config) (*Runtime, error) {
-	defer m.lockOperation(id)()
-	return m.start(parentCtx, id, cfg)
-}
-
-// start is Start with id's operation lock already held.
 func (m *Manager) start(parentCtx context.Context, id string, cfg Config) (*Runtime, error) {
 	m.mu.RLock()
 	if rt, ok := m.runtimes[id]; ok {
@@ -588,32 +603,52 @@ func (m *Manager) StopAll() {
 	}
 }
 
-// Status returns a point-in-time snapshot of all running channels.
-func (m *Manager) Status() map[string]ChannelStatus {
+// ChannelInfo is one configured channel: its stored configuration and what it
+// is doing now.
+type ChannelInfo struct {
+	Config Config        `json:"config"`
+	Status ChannelStatus `json:"status"`
+}
+
+// Channels returns every configured channel, running or not, keyed by ID.
+func (m *Manager) Channels() map[string]ChannelInfo {
+	stored := m.store.List()
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	out := make(map[string]ChannelStatus, len(m.runtimes))
+	running := make(map[string]*Runtime, len(m.runtimes))
 	for id, rt := range m.runtimes {
-		out[id] = buildStatus(rt)
+		running[id] = rt
+	}
+	m.mu.RUnlock()
+
+	out := make(map[string]ChannelInfo, len(stored))
+	for id, cfg := range stored {
+		out[id] = ChannelInfo{Config: cfg, Status: channelStatus(id, cfg, running[id])}
 	}
 	return out
 }
 
-// StatusFor returns a snapshot of one running channel, or false if it is not
-// running. It exists so a single-channel request does not have to build every
-// other channel's status — including their per-track breakdowns — to throw all
-// but one away.
-func (m *Manager) StatusFor(id string) (ChannelStatus, bool) {
-	m.mu.RLock()
-	rt, ok := m.runtimes[id]
-	m.mu.RUnlock()
+// Channel returns one configured channel, running or not, and false if no
+// channel has that ID. It builds only that channel's status, so a
+// single-channel request does not pay for every other channel's per-track
+// breakdown.
+func (m *Manager) Channel(id string) (ChannelInfo, bool) {
+	cfg, ok := m.store.Get(id)
 	if !ok {
-		return ChannelStatus{}, false
+		return ChannelInfo{}, false
 	}
-	return buildStatus(rt), true
+	return ChannelInfo{Config: cfg, Status: channelStatus(id, cfg, m.Get(id))}, true
 }
 
-// ChannelStatus is a JSON-serialisable snapshot of a running channel.
+// channelStatus is the status of a configured channel: rt's, or a stopped one
+// when rt is nil.
+func channelStatus(id string, cfg Config, rt *Runtime) ChannelStatus {
+	if rt == nil {
+		return ChannelStatus{ID: id, MPDURL: cfg.MPDURL, Running: false}
+	}
+	return buildStatus(rt)
+}
+
+// ChannelStatus is a JSON-serialisable snapshot of a channel.
 type ChannelStatus struct {
 	ID      string        `json:"id"`
 	MPDURL  string        `json:"mpd_url"`

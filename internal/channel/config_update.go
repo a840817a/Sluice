@@ -7,27 +7,28 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 )
 
 var (
 	ErrChannelNotFound = errors.New("channel not found")
 	ErrChannelExists   = errors.New("channel already exists")
+	// ErrInvalidChannelID: the ID does not match validChannelID.
+	ErrInvalidChannelID = errors.New("channel id must match [a-zA-Z0-9_-]{1,64}")
 )
+
+// validChannelID is the shape of every channel ID the manager accepts. The ID
+// is the first directory under the data directory and appears in every URL
+// the channel serves, so it is kept to characters that are safe in both.
+var validChannelID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+
+// ValidChannelID reports whether id is a channel ID the manager accepts.
+func ValidChannelID(id string) bool { return validChannelID.MatchString(id) }
 
 // UpdateResult describes the lifecycle work UpdateConfig performed.
 type UpdateResult struct {
 	Restarted     bool
 	RestartFields []string
-}
-
-func (m *Manager) storeForOperation() (*Store, error) {
-	m.mu.RLock()
-	store := m.store
-	m.mu.RUnlock()
-	if store == nil {
-		return nil, fmt.Errorf("no channel store attached")
-	}
-	return store, nil
 }
 
 // mergedOperatorConfig replaces the fields an operator owns while retaining
@@ -47,18 +48,13 @@ func mergedOperatorConfig(requested, current Config, restoreLive bool) Config {
 // would allow an old IsVOD=false snapshot to overwrite its completed state.
 // id's operation lock must be held.
 func (m *Manager) restartWithConfig(ctx context.Context, id string, requested Config, restoreLive bool) error {
-	store, err := m.storeForOperation()
-	if err != nil {
-		return err
-	}
-
 	_ = m.stop(id)
-	oldCfg, ok := store.Get(id)
+	oldCfg, ok := m.store.Get(id)
 	if !ok {
 		return ErrChannelNotFound
 	}
 
-	merged, err := store.Update(id, func(current *Config) {
+	merged, err := m.store.Update(id, func(current *Config) {
 		*current = mergedOperatorConfig(requested, *current, restoreLive)
 	})
 	if err != nil {
@@ -70,7 +66,7 @@ func (m *Manager) restartWithConfig(ctx context.Context, id string, requested Co
 		return fmt.Errorf("store error: %w", err)
 	}
 	if _, err := m.start(ctx, id, merged); err != nil {
-		rollbackErr := store.Put(id, oldCfg)
+		rollbackErr := m.store.Put(id, oldCfg)
 		var rollbackStartErr error
 		if oldCfg.Enabled {
 			_, rollbackStartErr = m.start(ctx, id, oldCfg)
@@ -95,14 +91,9 @@ func (m *Manager) restartWithConfig(ctx context.Context, id string, requested Co
 // operator's call to make; the admin UI warns before asking for it.
 func (m *Manager) RestoreToLive(ctx context.Context, id string) error {
 	defer m.lockOperation(id)()
-	store, err := m.storeForOperation()
-	if err != nil {
-		return err
-	}
-
-	cfg, ok := store.Get(id)
+	cfg, ok := m.store.Get(id)
 	if !ok {
-		return fmt.Errorf("channel %q not found", id)
+		return ErrChannelNotFound
 	}
 	if !cfg.IsVOD {
 		return fmt.Errorf("channel %q is not in VOD mode", id)
@@ -133,11 +124,7 @@ func (m *Manager) RestoreToLive(ctx context.Context, id string) error {
 func (m *Manager) UpdateConfig(ctx context.Context, id string, requested Config) (UpdateResult, error) {
 	defer m.lockOperation(id)()
 
-	store, err := m.storeForOperation()
-	if err != nil {
-		return UpdateResult{}, err
-	}
-	if _, ok := store.Get(id); !ok {
+	if _, ok := m.store.Get(id); !ok {
 		return UpdateResult{}, ErrChannelNotFound
 	}
 
@@ -150,7 +137,7 @@ func (m *Manager) UpdateConfig(ctx context.Context, id string, requested Config)
 	}
 
 	rt.configMu.Lock()
-	oldCfg, exists := store.Get(id)
+	oldCfg, exists := m.store.Get(id)
 	if !exists {
 		rt.configMu.Unlock()
 		return UpdateResult{}, ErrChannelNotFound
@@ -163,7 +150,7 @@ func (m *Manager) UpdateConfig(ctx context.Context, id string, requested Config)
 		return UpdateResult{Restarted: true, RestartFields: blockers}, err
 	}
 
-	merged, err := store.Update(id, func(current *Config) {
+	merged, err := m.store.Update(id, func(current *Config) {
 		*current = mergedOperatorConfig(requested, *current, false)
 	})
 	if err != nil {
@@ -179,17 +166,17 @@ func (m *Manager) UpdateConfig(ctx context.Context, id string, requested Config)
 	return UpdateResult{}, nil
 }
 
-// Create persists and starts a new channel as one lifecycle operation.
+// Create persists and starts a new channel as one lifecycle operation. The
+// ID must satisfy ValidChannelID.
 func (m *Manager) Create(ctx context.Context, id string, cfg Config) error {
-	defer m.lockOperation(id)()
-	store, err := m.storeForOperation()
-	if err != nil {
-		return err
+	if !ValidChannelID(id) {
+		return ErrInvalidChannelID
 	}
-	if _, ok := store.Get(id); ok {
+	defer m.lockOperation(id)()
+	if _, ok := m.store.Get(id); ok {
 		return ErrChannelExists
 	}
-	if err := store.Put(id, cfg); err != nil {
+	if err := m.store.Put(id, cfg); err != nil {
 		return fmt.Errorf("store error: %w", err)
 	}
 	if _, err := m.start(ctx, id, cfg); err != nil {
@@ -202,15 +189,11 @@ func (m *Manager) Create(ctx context.Context, id string, cfg Config) error {
 // end of Stop. That read includes any VOD transition Stop had to join.
 func (m *Manager) Restart(ctx context.Context, id string) error {
 	defer m.lockOperation(id)()
-	store, err := m.storeForOperation()
-	if err != nil {
-		return err
-	}
-	if _, ok := store.Get(id); !ok {
+	if _, ok := m.store.Get(id); !ok {
 		return ErrChannelNotFound
 	}
 	_ = m.stop(id)
-	cfg, ok := store.Get(id)
+	cfg, ok := m.store.Get(id)
 	if !ok {
 		return ErrChannelNotFound
 	}
@@ -224,15 +207,11 @@ func (m *Manager) Restart(ctx context.Context, id string) error {
 // intentionally left in place.
 func (m *Manager) Delete(id string) error {
 	defer m.lockOperation(id)()
-	store, err := m.storeForOperation()
-	if err != nil {
-		return err
-	}
-	if _, ok := store.Get(id); !ok {
+	if _, ok := m.store.Get(id); !ok {
 		return ErrChannelNotFound
 	}
 	_ = m.stop(id)
-	if err := store.Delete(id); err != nil {
+	if err := m.store.Delete(id); err != nil {
 		return fmt.Errorf("store error: %w", err)
 	}
 	return nil

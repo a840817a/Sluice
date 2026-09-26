@@ -41,12 +41,9 @@ func TestConfigEditPreservesVODCompletedDuringRequest(t *testing.T) {
 	cfg := liveChannel()
 	origin := startEmptyLiveHLSOrigin(t)
 	cfg.MPDURL = origin.URL + "/master.m3u8"
-	if err := admin.store.Put("edit", cfg); err != nil {
-		t.Fatal(err)
-	}
 	completed := make(chan struct{})
 	admin.manager.SetOnVODReady(func(*ch.Runtime) { close(completed) })
-	rt, err := admin.manager.Start(context.Background(), "edit", cfg)
+	rt, err := createChannel(admin.manager, context.Background(), "edit", cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +95,7 @@ func TestConfigEditPreservesVODCompletedDuringRequest(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("edit status %d: %s", response.Code, response.Body.String())
 	}
-	saved, ok := admin.store.Get("edit")
+	saved, ok := storeOf(t, admin).Get("edit")
 	if !ok || !saved.IsVOD || saved.Title != cfg.Title {
 		t.Fatalf("edit lost VOD state or operator fields: %+v", saved)
 	}
@@ -144,10 +141,7 @@ func TestConfigEditPersistenceFailureKeepsCommittedSettings(t *testing.T) {
 			before := liveChannel()
 			before.Title = "committed"
 			before.FetchHeaders = []ch.Header{{Name: "X-Token", Value: "original"}}
-			if err := admin.store.Put("edit", before); err != nil {
-				t.Fatal(err)
-			}
-			rt, err := admin.manager.Start(context.Background(), "edit", before)
+			rt, err := createChannel(admin.manager, context.Background(), "edit", before)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -163,7 +157,7 @@ func TestConfigEditPersistenceFailureKeepsCommittedSettings(t *testing.T) {
 			if response.Code != http.StatusInternalServerError {
 				t.Fatalf("failed persistence status=%d: %s", response.Code, response.Body.String())
 			}
-			saved, ok := admin.store.Get("edit")
+			saved, ok := storeOf(t, admin).Get("edit")
 			if !ok || !reflect.DeepEqual(saved, before) {
 				t.Fatalf("failed edit changed stored settings: %+v", saved)
 			}
@@ -186,10 +180,7 @@ func TestFailedConfigEditDoesNotUndoAnotherCommittedEdit(t *testing.T) {
 	t.Cleanup(admin.manager.StopAll)
 	initial := liveChannel()
 	initial.Title = "initial"
-	if err := admin.store.Put("edit", initial); err != nil {
-		t.Fatal(err)
-	}
-	rt, err := admin.manager.Start(context.Background(), "edit", initial)
+	rt, err := createChannel(admin.manager, context.Background(), "edit", initial)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +232,7 @@ func TestFailedConfigEditDoesNotUndoAnotherCommittedEdit(t *testing.T) {
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("older edit should fail persistence: %d %s", response.Code, response.Body.String())
 	}
-	saved, _ := admin.store.Get("edit")
+	saved, _ := storeOf(t, admin).Get("edit")
 	if !reflect.DeepEqual(saved, newer) || !reflect.DeepEqual(rt.Config(), newer) {
 		t.Fatalf("failed edit undid newer commit: stored=%+v runtime=%+v", saved, rt.Config())
 	}

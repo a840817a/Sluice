@@ -29,10 +29,10 @@ func TestVODTransitionWritesResolvableLocalManifest(t *testing.T) {
 		Window: config.WindowConfig{Depth: time.Hour},
 	}
 
-	mgr := ch.NewManager(cfg)
+	mgr := newTestManager(t, cfg)
 	t.Cleanup(func() { _ = mgr.Stop("localsnap") })
 
-	if _, err := mgr.Start(context.Background(), "localsnap", ch.Config{
+	if _, err := createChannel(mgr, context.Background(), "localsnap", ch.Config{
 		MPDURL:  origin.URL + "/manifest.mpd",
 		Enabled: true,
 	}); err != nil {
