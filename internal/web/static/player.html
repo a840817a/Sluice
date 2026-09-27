@@ -177,6 +177,31 @@ html, body {
   text-align: center;
 }
 #error-box.show { display: flex; }
+
+/* ── Picture-in-picture placeholder ── */
+#pip-placeholder {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: .9rem;
+  pointer-events: none;
+}
+#wrap.pip #pip-placeholder { display: flex; }
+/* Chrome draws its own PiP notice inside the element, under the title. */
+#wrap.pip #video { opacity: 0; }
+#pip-placeholder svg { width: 48px; height: 48px; fill: rgba(255,255,255,.55); }
+#pip-msg { color: rgba(255,255,255,.75); font-size: .95rem; }
+#btn-pip-return {
+  pointer-events: auto;
+  background: rgba(255,255,255,.12);
+  border: 1px solid rgba(255,255,255,.2);
+  border-radius: 8px;
+  color: #fff;
+  font-size: .85rem;
+  padding: .45rem 1rem;
+  cursor: pointer;
+}
+#btn-pip-return:hover { background: rgba(255,255,255,.2); }
 #error-msg { color: #fca5a5; font-size: .9rem; max-width: 480px; }
 
 /* ── Bottom bar ── */
@@ -428,6 +453,12 @@ html, body {
         <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
       </div>
       <div id="seek-toast"></div>
+      <!-- Shown in place of the video while it plays in the picture-in-picture window -->
+      <div id="pip-placeholder">
+        <svg viewBox="0 0 24 24"><path d="M19 11h-8v6h8v-6zm4 8V4.98C23 3.88 22.1 3 21 3H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 .02H3V4.97h18v14.05z"/></svg>
+        <div id="pip-msg">正在以子母畫面播放</div>
+        <button id="btn-pip-return">移回此頁</button>
+      </div>
     </div>
 
     <!-- Bottom bar -->
@@ -496,6 +527,16 @@ html, body {
           <div id="qual-menu" role="menu" aria-label="畫質選單" aria-hidden="true"></div>
         </div>
 
+        <!-- Picture-in-picture (hidden until supported and loaded) -->
+        <button class="ibtn" id="btn-pip" title="子母畫面 (I)" style="display:none">
+          <svg id="ico-pip-enter" viewBox="0 0 24 24">
+            <path d="M19 11h-8v6h8v-6zm4 8V4.98C23 3.88 22.1 3 21 3H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 .02H3V4.97h18v14.05z"/>
+          </svg>
+          <svg id="ico-pip-exit" viewBox="0 0 24 24" style="display:none">
+            <path d="M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14zM6 8h7v5H6V8z"/>
+          </svg>
+        </button>
+
         <!-- Fullscreen -->
         <button class="ibtn" id="btn-fs" title="全螢幕 (F)">
           <svg id="ico-expand" viewBox="0 0 24 24">
@@ -550,6 +591,10 @@ const volWrap    = document.getElementById('vol-wrap');
 const qualBtn    = document.getElementById('qual-btn');
 const qualMenu   = document.getElementById('qual-menu');
 const btnFs      = document.getElementById('btn-fs');
+const btnPip     = document.getElementById('btn-pip');
+const icoPipEnter = document.getElementById('ico-pip-enter');
+const icoPipExit  = document.getElementById('ico-pip-exit');
+const btnPipReturn = document.getElementById('btn-pip-return');
 const icoExpand  = document.getElementById('ico-expand');
 const icoShrink  = document.getElementById('ico-shrink');
 const center     = document.getElementById('center');
@@ -580,6 +625,9 @@ let activePointerId  = null;
 let initialResyncCleanup = null;
 let progressHoverX = null;
 let progressHovering = false;
+let pipReady = false;           // true once a manifest has loaded
+let pipLastPauseAt = 0;         // when the video last paused inside PiP
+let pipResumeIfPausedUntil = 0; // see handleLeavePip
 
 const STALL_RECOVERY_MSG   = '播放卡住，正在嘗試恢復…';
 const STALL_WAIT_MS        = 8000;
@@ -694,6 +742,7 @@ function applyModeConfig() {
     stopLiveProgressTicker();
     stopAVResyncWatchdog();
   }
+  refreshMediaSessionActions();
 }
 
 // Toggle liveSync rate adjustment so the user can pause at a past time
@@ -904,7 +953,7 @@ function startAVResyncWatchdog() {
   stopAVResyncWatchdog();
   avResyncTimer = setInterval(() => {
     avResyncPending = true;
-    if (document.hidden) scheduleAVResyncNudge(0);
+    if (videoHidden()) scheduleAVResyncNudge(0);
   }, AV_RESYNC_INTERVAL_MS);
 }
 function stopAVResyncWatchdog() {
@@ -1127,11 +1176,17 @@ async function init() {
   video.addEventListener('ended',       clearPlaybackBusyState);
   video.addEventListener('volumechange', refreshVolumeUI);
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) scheduleAVResyncNudge(0);
+    if (videoHidden()) scheduleAVResyncNudge(0);
   });
+  video.addEventListener('enterpictureinpicture', handleEnterPip);
+  video.addEventListener('leavepictureinpicture', handleLeavePip);
+  video.addEventListener('pause', handlePipPause);
+  registerAutoPip();
 
   try {
     await loadWithRetry();
+    pipReady = true;
+    refreshPipButton();
     isLive = player.isLive();
     applyModeConfig();
     restoreQualityPreference();
@@ -1162,7 +1217,8 @@ function showControls(lock) {
 }
 
 function hideControls() {
-  if (video.paused) return;
+  // In PiP the page shows no video, so the controls have nothing to get out of the way of.
+  if (video.paused || inPip()) return;
   overlay.classList.add('hidden');
   wrap.style.cursor = 'none';
 }
@@ -1177,6 +1233,7 @@ async function togglePlay() {
     const result = await attemptAutoplay(true);
     if (result.ok) showCenterIcon('play');
   } else {
+    pipResumeIfPausedUntil = 0; // the viewer's pause, not a PiP close
     video.pause();
     showCenterIcon('pause');
   }
@@ -1815,7 +1872,17 @@ function toggleFullscreen() {
     } else if (document.webkitExitFullscreen) {
       document.webkitExitFullscreen();
     }
-  } else if (wrap.requestFullscreen) {
+  } else {
+    // A fullscreen page with the video still in the PiP window would be empty.
+    // Not awaited: requestFullscreen must run while the click still counts
+    // as a user gesture.
+    if (inPip()) document.exitPictureInPicture().catch(() => {});
+    enterFullscreen();
+  }
+}
+
+function enterFullscreen() {
+  if (wrap.requestFullscreen) {
     wrap.requestFullscreen().catch(() => {});
   } else if (wrap.webkitRequestFullscreen) {
     wrap.webkitRequestFullscreen();
@@ -1836,6 +1903,119 @@ video.addEventListener('webkitbeginfullscreen', refreshFullscreenIcon);
 video.addEventListener('webkitendfullscreen', refreshFullscreenIcon);
 
 btnFs.addEventListener('click', toggleFullscreen);
+
+// ── Picture-in-picture ────────────────────────────────────────────────────
+const pipSupported = !!(document.pictureInPictureEnabled &&
+  video.requestPictureInPicture && !video.disablePictureInPicture);
+
+function inPip() {
+  return !!document.pictureInPictureElement && document.pictureInPictureElement === video;
+}
+
+// videoHidden reports whether nobody can see the video: a hidden tab hides it
+// unless it is playing in the PiP window.
+function videoHidden() {
+  return document.hidden && !inPip();
+}
+
+function pipAvailable() {
+  return pipSupported && pipReady;
+}
+
+function refreshPipButton() {
+  btnPip.style.display = pipAvailable() ? '' : 'none';
+  const active = inPip();
+  icoPipEnter.style.display = active ? 'none' : '';
+  icoPipExit.style.display  = active ? '' : 'none';
+  btnPip.title = active ? '結束子母畫面 (I)' : '子母畫面 (I)';
+}
+
+async function togglePip() {
+  if (!pipAvailable()) return;
+  try {
+    if (inPip()) {
+      await document.exitPictureInPicture();
+    } else {
+      await video.requestPictureInPicture();
+    }
+  } catch (err) {
+    console.warn('[pip failed]', err);
+  }
+}
+
+function handleEnterPip() {
+  pipLastPauseAt = 0;
+  wrap.classList.add('pip');
+  refreshPipButton();
+  showControls(true);
+}
+
+// Leaving PiP keeps playback going, including when the viewer closes the
+// window with its ✕, which Chrome turns into a pause. Chrome may fire that
+// pause just before or just after leavepictureinpicture, so a pause inside
+// PIP_CLOSE_PAUSE_MS of leaving counts as the close; a pause the viewer made
+// earlier inside PiP is kept. No event says the ✕ was used, so a pause inside
+// PiP followed by a close within that window is taken for the close too.
+const PIP_CLOSE_PAUSE_MS = 500;
+function handleLeavePip() {
+  wrap.classList.remove('pip');
+  refreshPipButton();
+  showControls(false);
+  const now = performance.now();
+  if (video.paused) {
+    if (!video.ended && pipLastPauseAt && now - pipLastPauseAt < PIP_CLOSE_PAUSE_MS) {
+      attemptAutoplay(false);
+    }
+  } else {
+    pipResumeIfPausedUntil = now + PIP_CLOSE_PAUSE_MS;
+  }
+  pipLastPauseAt = 0;
+  if (document.hidden) scheduleAVResyncNudge(0);
+}
+
+function handlePipPause() {
+  const now = performance.now();
+  if (inPip()) {
+    pipLastPauseAt = now;
+    return;
+  }
+  if (now < pipResumeIfPausedUntil) {
+    pipResumeIfPausedUntil = 0;
+    if (!video.ended) attemptAutoplay(false);
+  }
+}
+
+// Media Session actions show up as buttons in the PiP window. Seeking only
+// makes sense for VOD; a live channel keeps just play and pause.
+function setMediaSessionAction(action, handler) {
+  try {
+    navigator.mediaSession.setActionHandler(action, handler);
+  } catch (_) {
+    // The browser does not know this action.
+  }
+}
+
+function refreshMediaSessionActions() {
+  if (!('mediaSession' in navigator)) return;
+  setMediaSessionAction('seekbackward', isLive ? null : () => seek(-10));
+  setMediaSessionAction('seekforward',  isLive ? null : () => seek(+10));
+}
+
+// Lets Chrome move a playing video into PiP when the viewer switches tabs;
+// whether it does is the browser's call.
+function registerAutoPip() {
+  if (!pipSupported || !('mediaSession' in navigator)) return;
+  setMediaSessionAction('enterpictureinpicture', () => {
+    if (pipReady && !inPip()) {
+      video.requestPictureInPicture().catch(err => console.warn('[auto pip failed]', err));
+    }
+  });
+}
+
+btnPip.addEventListener('click', togglePip);
+btnPipReturn.addEventListener('click', () => {
+  if (inPip()) document.exitPictureInPicture().catch(() => {});
+});
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────
 document.addEventListener('keydown', e => {
@@ -1861,6 +2041,8 @@ document.addEventListener('keydown', e => {
       video.muted = !video.muted; showControls(false); break;
     case 'f': case 'F':
       toggleFullscreen(); break;
+    case 'i': case 'I':
+      togglePip(); break;
     case 'Escape':
       setQualityMenuOpen(false); break;
     default:
