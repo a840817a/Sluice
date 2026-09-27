@@ -59,6 +59,10 @@ false, "widevine": false}}` pointing at an HLS stream from ffmpeg (`-f lavfi
 live one). The player's functions are globals, so drive states from the page
 (`reconnect(...)`, `applyModeConfig()`).
 
+To time a start, poll until `video.currentTime` advances. `playing` is no
+measure: Shaka buffers by setting the playback rate to 0, so `playing` fires
+within milliseconds whatever the buffering goal.
+
 Picture-in-picture and fullscreen need a real user gesture: press the key or
 click the button through the browser tool, then script the rest. The built-in
 browser pane never enters fullscreen, and the PiP window's own ✕ is outside

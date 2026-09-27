@@ -175,6 +175,8 @@ html, body {
   background: rgba(0,0,0,.55);
   padding: 2rem;
   text-align: center;
+  /* Above the controls, which have nothing to act on once loading failed. */
+  z-index: 10;
 }
 #error-box.show { display: flex; }
 
@@ -191,7 +193,7 @@ html, body {
 #wrap.pip #video { opacity: 0; }
 #pip-placeholder svg { width: 48px; height: 48px; fill: rgba(255,255,255,.55); }
 #pip-msg { color: rgba(255,255,255,.75); font-size: .95rem; }
-#btn-pip-return {
+#btn-pip-return, #btn-retry {
   pointer-events: auto;
   background: rgba(255,255,255,.12);
   border: 1px solid rgba(255,255,255,.2);
@@ -201,7 +203,8 @@ html, body {
   padding: .45rem 1rem;
   cursor: pointer;
 }
-#btn-pip-return:hover { background: rgba(255,255,255,.2); }
+#btn-pip-return:hover, #btn-retry:hover { background: rgba(255,255,255,.2); }
+#btn-retry[hidden] { display: none; }
 #error-msg { color: #fca5a5; font-size: .9rem; max-width: 480px; }
 
 /* ── Bottom bar ── */
@@ -436,6 +439,7 @@ html, body {
       <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
     </svg>
     <div id="error-msg"></div>
+    <button id="btn-retry" hidden>重試</button>
   </div>
 
   <!-- Controls overlay -->
@@ -567,6 +571,7 @@ const overlay    = document.getElementById('overlay');
 const spinner    = document.getElementById('spinner');
 const errorBox   = document.getElementById('error-box');
 const errorMsg   = document.getElementById('error-msg');
+const btnRetry   = document.getElementById('btn-retry');
 const liveBadge  = document.getElementById('live-badge');
 const chanTitle  = document.getElementById('channel-title');
 const startOverlay = document.getElementById('start-overlay');
@@ -1141,7 +1146,7 @@ async function recoverPlaybackStall() {
 async function init() {
   shaka.polyfill.installAll();
   if (!shaka.Player.isBrowserSupported()) {
-    showError('此瀏覽器不支援 Shaka Player，請改用 Chrome 或 Edge。');
+    showError('此瀏覽器不支援 Shaka Player，請改用 Chrome 或 Edge。', false);
     return;
   }
 
@@ -1160,6 +1165,12 @@ async function init() {
   player.addEventListener('adaptation',     refreshQualityActive);
   player.addEventListener('variantchanged', refreshQualityActive);
   player.addEventListener('buffering',      handleShakaBuffering);
+  // Only the manifest says whether a channel is live. Apply the matching
+  // streaming config before any media loads: under VOD's rebufferingGoal a live
+  // start waits for 10 s of buffer, seconds longer than it needs to.
+  player.addEventListener('manifestparsed', () => {
+    player.configure({ streaming: player.isLive() ? LIVE_STREAMING_CFG : VOD_STREAMING_CFG });
+  });
 
   video.addEventListener('waiting',     () => {
     setMediaWaiting(true);
@@ -2056,8 +2067,10 @@ document.addEventListener('keydown', e => {
 });
 
 // ── Error ─────────────────────────────────────────────────────────────────
-function showError(msg) {
+// retry offers a button that reloads the page; an unsupported browser gets none.
+function showError(msg, retry = true) {
   errorMsg.textContent = msg;
+  btnRetry.hidden = !retry;
   errorBox.classList.add('show');
   shakaBuffering = false;
   setStartOverlayVisible(false);
@@ -2065,6 +2078,10 @@ function showError(msg) {
   resetRecoveryState();
   stallRecovering = false;
 }
+
+// A reload starts over from init: every error shown here either stopped init
+// or came after recovery gave up, so there is no player state worth keeping.
+btnRetry.addEventListener('click', () => location.reload());
 
 document.addEventListener('DOMContentLoaded', init);
 
