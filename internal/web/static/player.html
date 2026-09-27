@@ -60,30 +60,32 @@ html, body {
   flex: 1;
 }
 
-#live-badge {
-  display: none;
-  align-items: center;
-  gap: .35rem;
-  background: #dc2626;
-  color: #fff;
-  font-size: .72rem;
-  font-weight: 700;
-  letter-spacing: .06em;
-  padding: .22rem .6rem;
-  border-radius: 4px;
-  flex-shrink: 0;
-}
-#live-badge.show { display: flex; }
-#live-badge .dot {
-  width: 6px; height: 6px;
-  background: #fff;
-  border-radius: 50%;
-  animation: blink 1.4s ease-in-out infinite;
-}
 @keyframes blink {
   0%,100% { opacity: 1; }
   50%      { opacity: .25; }
 }
+
+/* ── Unmute hint (after a muted autoplay) ── */
+#unmute-hint {
+  position: absolute;
+  top: 3.25rem;
+  left: 1rem;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  background: rgba(255,255,255,.92);
+  color: #111;
+  border: none;
+  border-radius: 8px;
+  font-size: .85rem;
+  font-weight: 600;
+  padding: .45rem .8rem;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0,0,0,.35);
+}
+#unmute-hint[hidden] { display: none; }
+#unmute-hint svg { width: 18px; height: 18px; fill: currentColor; }
 
 /* ── Center click zone ── */
 #center {
@@ -320,24 +322,24 @@ html, body {
   margin: 0 .2rem;
   font-variant-numeric: tabular-nums;
 }
-#time-disp .ldot {
-  display: inline-block;
+.spacer { flex: 1; }
+
+/* The one live indicator: a red dot at the live edge, grey once behind it,
+   when a click brings the viewer back. */
+#btn-live { gap: .35rem; padding: 0 .5rem; }
+#btn-live .ldot {
   width: 6px; height: 6px;
   background: #dc2626;
   border-radius: 50%;
-  margin-right: .3rem;
-  vertical-align: middle;
   animation: blink 1.4s ease-in-out infinite;
 }
-
-.spacer { flex: 1; }
-
-#btn-live { gap: .25rem; padding: 0 .5rem; }
 #btn-live .live-label {
   font-size: .72rem; font-weight: 700; letter-spacing: .06em;
-  color: #dc2626;
 }
-#btn-live svg { width: 14px; height: 14px; fill: #dc2626; }
+#btn-live.behind .ldot { background: rgba(255,255,255,.55); animation: none; }
+#btn-live.behind .live-label { color: rgba(255,255,255,.7); }
+#btn-live:not(.behind) { cursor: default; }
+#btn-live:not(.behind):hover { background: none; }
 
 /* Volume */
 #vol-wrap { display: flex; align-items: center; gap: .1rem; position: relative; }
@@ -373,6 +375,7 @@ html, body {
   font-weight: 700;
   min-width: 54px;
   letter-spacing: .02em;
+  white-space: nowrap;
 }
 #qual-btn[aria-expanded="true"] { background: rgba(255,255,255,.13); }
 #qual-menu {
@@ -442,13 +445,18 @@ html, body {
     <button id="btn-retry" hidden>重試</button>
   </div>
 
+  <!-- Shown after a muted autoplay; stays when the controls hide -->
+  <button id="unmute-hint" hidden>
+    <svg viewBox="0 0 24 24"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>
+    點擊開啟聲音
+  </button>
+
   <!-- Controls overlay -->
   <div id="overlay">
 
     <!-- Top bar -->
     <div id="top-bar">
       <span id="channel-title">載入中…</span>
-      <span id="live-badge"><span class="dot"></span>LIVE</span>
     </div>
 
     <!-- Center: click / double-click zone -->
@@ -469,7 +477,8 @@ html, body {
     <div id="bottom-bar">
 
       <!-- Progress -->
-      <div id="prog-wrap">
+      <div id="prog-wrap" role="slider" tabindex="0" aria-label="播放進度"
+           aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
         <div id="prog-track">
           <div id="prog-buf"></div>
           <div id="prog-fill"></div>
@@ -501,14 +510,14 @@ html, body {
           </svg>
         </button>
 
-        <!-- Time -->
-        <div id="time-disp">0:00</div>
-
-        <!-- Go Live -->
-        <button class="ibtn" id="btn-live" title="回到直播" style="display:none">
-          <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+        <!-- Live indicator; goes back to live when behind -->
+        <button class="ibtn" id="btn-live" title="直播中" style="display:none">
+          <span class="ldot"></span>
           <span class="live-label">LIVE</span>
         </button>
+
+        <!-- Time; for live, how far behind the edge -->
+        <div id="time-disp">0:00</div>
 
         <div class="spacer"></div>
 
@@ -522,7 +531,7 @@ html, body {
               <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>
             </svg>
           </button>
-          <input type="range" id="vol-slider" min="0" max="1" step="0.02" value="1">
+          <input type="range" id="vol-slider" min="0" max="1" step="0.02" value="1" aria-label="音量">
         </div>
 
         <!-- Quality -->
@@ -571,8 +580,8 @@ const overlay    = document.getElementById('overlay');
 const spinner    = document.getElementById('spinner');
 const errorBox   = document.getElementById('error-box');
 const errorMsg   = document.getElementById('error-msg');
+const unmuteHint = document.getElementById('unmute-hint');
 const btnRetry   = document.getElementById('btn-retry');
-const liveBadge  = document.getElementById('live-badge');
 const chanTitle  = document.getElementById('channel-title');
 const startOverlay = document.getElementById('start-overlay');
 const seekToast  = document.getElementById('seek-toast');
@@ -607,7 +616,7 @@ const center     = document.getElementById('center');
 let player         = null;
 let isLive         = false;
 let abrEnabled     = true;
-let pinnedHeight   = null;  // null = ABR; persists across reconnect/reload
+let pinnedHeight   = null;  // null = ABR; persists across reconnects, and visits via saveQuality
 let hideTimer      = null;
 let toastTimer     = null;
 let clickTimer     = null;
@@ -734,12 +743,11 @@ function hideError() {
 function applyModeConfig() {
   if (!player) return;
   if (isLive) {
-    liveBadge.classList.add('show');
+    btnLive.style.display = '';
     player.configure({ streaming: LIVE_STREAMING_CFG });
     startLiveProgressTicker();
     startAVResyncWatchdog();
   } else {
-    liveBadge.classList.remove('show');
     btnLive.style.display = 'none';
     player.configure({ streaming: VOD_STREAMING_CFG });
     stopLiveProgressTicker();
@@ -1150,6 +1158,8 @@ async function init() {
     return;
   }
 
+  restoreVolume();
+  refreshVolumeUI();
   player = new shaka.Player();
   await player.attach(video);
   const drmServers = await loadDRMServers();
@@ -1197,6 +1207,7 @@ async function init() {
     refreshPipButton();
     isLive = player.isLive();
     applyModeConfig();
+    restoreSavedQuality();
     restoreQualityPreference();
     buildQualityMenu();
     if (isLive) scheduleInitialResync();
@@ -1230,6 +1241,7 @@ function hideControls() {
   // An open menu or a mouse resting on a bar means the viewer is using the controls.
   if (qualMenu.classList.contains('open') || volWrap.classList.contains('popup')) return;
   if (mouseOnBar) return;
+  if (tabbedIntoControls && overlay.contains(document.activeElement)) return;
   overlay.classList.add('hidden');
   wrap.style.cursor = 'none';
 }
@@ -1251,6 +1263,15 @@ let tapRevealsControls = false;
 wrap.addEventListener('pointerdown', e => {
   tapRevealsControls = e.pointerType !== 'mouse' && overlay.classList.contains('hidden');
 });
+
+// Tabbing into hidden controls reveals them, and they stay while the keyboard
+// is on them. Not :focus-visible: Chrome grants it to a clicked button as soon
+// as any key is pressed, which would keep the controls up for good.
+let tabbedIntoControls = false;
+document.addEventListener('keydown', e => { if (e.key === 'Tab') tabbedIntoControls = true; }, true);
+document.addEventListener('pointerdown', () => { tabbedIntoControls = false; }, true);
+overlay.addEventListener('focusin', () => showControls(false));
+overlay.addEventListener('focusout', () => showControls(false));
 
 wrap.addEventListener('mousemove', () => showControls(false));
 wrap.addEventListener('mouseleave', () => { if (!video.paused) hideControls(); });
@@ -1369,7 +1390,8 @@ btnBack.addEventListener('click', () => seek(-10));
 btnFwd.addEventListener('click',  () => seek(+10));
 
 btnLive.addEventListener('click', () => {
-  if (!isLive || !player) return;
+  // At the live edge the button is only an indicator.
+  if (!isLive || !player || !btnLive.classList.contains('behind')) return;
   try {
     const sr = player.seekRange();
     video.currentTime = liveSeekTarget(sr.end);
@@ -1405,6 +1427,9 @@ function refreshProgress() {
   }
   progBuf.style.width = `${bufPct * 100}%`;
   refreshTimeDisplay(pos, total);
+  progWrap.setAttribute('aria-valuenow', String(Math.round(pct * 100)));
+  // At the live edge the time display is empty; the indicator says LIVE.
+  progWrap.setAttribute('aria-valuetext', timeDisp.textContent || 'LIVE');
 }
 
 function progressPoint(clientX) {
@@ -1420,7 +1445,7 @@ function progressLabelAt(pct) {
     const sr = player.seekRange();
     const target = sr.start + pct * (sr.end - sr.start);
     const behind = Math.max(0, sr.end - target);
-    return behind < 8 ? 'LIVE' : `-${fmt(Math.round(behind))}`;
+    return behind <= LIVE_BEHIND_THRESHOLD ? 'LIVE' : `-${fmt(Math.round(behind))}`;
   }
   const duration = Number.isFinite(video.duration) ? video.duration : 0;
   return fmt(pct * duration);
@@ -1467,13 +1492,14 @@ function refreshTimeDisplay(pos, total) {
     } catch (_) {
       return;
     }
-    timeDisp.innerHTML = behind < 8
-      ? `<span class="ldot"></span>LIVE`
-      : `-${fmt(Math.round(behind))}`;
-    btnLive.style.display = behind >= 8 ? '' : 'none';
+    // The same threshold decides whether liveSync may pull playback back to
+    // the edge, so "behind" on screen means liveSync has let go.
+    const atEdge = behind <= LIVE_BEHIND_THRESHOLD;
+    btnLive.classList.toggle('behind', !atEdge);
+    btnLive.title = atEdge ? '直播中' : '回到直播';
+    timeDisp.textContent = atEdge ? '' : `-${fmt(Math.round(behind))}`;
     return;
   }
-  btnLive.style.display = 'none';
   timeDisp.textContent = `${fmt(pos)} / ${fmt(total)}`;
 }
 
@@ -1587,12 +1613,48 @@ function refreshVolumeUI() {
   icoVol.style.display   = muted ? 'none' : '';
   icoMuted.style.display = muted ? '' : 'none';
   if (!video.muted) volSlider.value = video.volume;
+  if (!video.muted) setUnmuteHintVisible(false);
 }
 
-btnMute.addEventListener('click', () => { video.muted = !video.muted; });
+// The viewer's volume is remembered across visits. Only the viewer's own changes
+// are saved: the muted autoplay fallback mutes without asking, and must not
+// leave the next visit muted.
+const VOLUME_KEY = 'sluice.player.volume';
+
+function saveVolume() {
+  try {
+    localStorage.setItem(VOLUME_KEY, JSON.stringify({ volume: video.volume, muted: video.muted }));
+  } catch (_) {}
+}
+
+function restoreVolume() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(VOLUME_KEY));
+    if (!saved) return;
+    if (Number.isFinite(saved.volume)) video.volume = Math.max(0, Math.min(1, saved.volume));
+    video.muted = saved.muted === true;
+  } catch (_) {}
+}
+
+function setMuted(muted) {
+  video.muted = muted;
+  saveVolume();
+}
+
+// changeVolume is the keyboard's volume step; it shows where the volume landed.
+function changeVolume(delta) {
+  if (delta > 0) video.muted = false;
+  video.volume = Math.max(0, Math.min(1, video.volume + delta));
+  saveVolume();
+  showToast(video.muted || video.volume === 0 ? '靜音' : `音量 ${Math.round(video.volume * 100)}%`);
+}
+
+btnMute.addEventListener('click', () => setMuted(!video.muted));
+unmuteHint.addEventListener('click', () => setMuted(false));
 volSlider.addEventListener('input', () => {
   video.volume = parseFloat(volSlider.value);
   video.muted  = video.volume === 0;
+  saveVolume();
 });
 
 // Mobile: long-press mute button to reveal volume slider popup
@@ -1616,6 +1678,10 @@ document.addEventListener('click', e => {
   if (!volWrap.contains(e.target)) volWrap.classList.remove('popup');
 });
 
+function setUnmuteHintVisible(visible) {
+  unmuteHint.hidden = !visible;
+}
+
 async function attemptAutoplay(showHint) {
   try {
     await video.play();
@@ -1624,6 +1690,19 @@ async function attemptAutoplay(showHint) {
   } catch (err) {
     const blocked = err && err.name === 'NotAllowedError';
     clearWaitingState();
+    // Browsers that block autoplay with sound usually allow it muted. Start
+    // muted and offer the sound back rather than wait for a click to start.
+    if (blocked && showHint && !video.muted) {
+      video.muted = true;
+      try {
+        await video.play();
+        setStartOverlayVisible(false);
+        setUnmuteHintVisible(true);
+        return { ok: true, blocked: false, err: null };
+      } catch (_) {
+        video.muted = false;
+      }
+    }
     if (blocked && showHint) {
       showControls(true);
       setStartOverlayVisible(true);
@@ -1712,6 +1791,40 @@ function restoreQualityPreference() {
   refreshQualityActive();
 }
 
+// A pinned quality is remembered per channel, since channels offer different
+// heights. A saved height the channel no longer offers is dropped: pinning it
+// would turn ABR off with no track to select.
+const qualityKey = `sluice.player.quality.${channelID}`;
+
+function saveQuality() {
+  try {
+    if (pinnedHeight === null) localStorage.removeItem(qualityKey);
+    else localStorage.setItem(qualityKey, String(pinnedHeight));
+  } catch (_) {}
+}
+
+function restoreSavedQuality() {
+  let height;
+  try {
+    height = parseInt(localStorage.getItem(qualityKey), 10);
+  } catch (_) {
+    return;
+  }
+  if (!(height > 0)) return;
+  let tracks = [];
+  try {
+    tracks = player.getVariantTracks();
+  } catch (_) {
+    return;
+  }
+  if (!tracks.some(t => t.height === height)) {
+    saveQuality();
+    return;
+  }
+  abrEnabled = false;
+  pinnedHeight = height;
+}
+
 function handleTracksChanged() {
   restoreQualityPreference();
   buildQualityMenu();
@@ -1739,6 +1852,7 @@ function buildQualityMenu() {
   autoEl.addEventListener('click', () => {
     abrEnabled = true;
     pinnedHeight = null;
+    saveQuality();
     if (player && !reconnecting) {
       try {
         player.configure({ abr: { enabled: true } });
@@ -1758,6 +1872,7 @@ function buildQualityMenu() {
     el.addEventListener('click', () => {
       abrEnabled = false;
       pinnedHeight = t.height;
+      saveQuality();
       if (player && !reconnecting) {
         try {
           const currentTracks = player.getVariantTracks();
@@ -2042,16 +2157,11 @@ document.addEventListener('keydown', e => {
     case 'ArrowRight': case 'l': case 'L':
       e.preventDefault(); seek(+10); showControls(false); break;
     case 'ArrowUp':
-      e.preventDefault();
-      video.muted = false;
-      video.volume = Math.min(1, video.volume + 0.05);
-      showControls(false); break;
+      e.preventDefault(); changeVolume(+0.05); showControls(false); break;
     case 'ArrowDown':
-      e.preventDefault();
-      video.volume = Math.max(0, video.volume - 0.05);
-      showControls(false); break;
+      e.preventDefault(); changeVolume(-0.05); showControls(false); break;
     case 'm': case 'M':
-      video.muted = !video.muted; showControls(false); break;
+      setMuted(!video.muted); showControls(false); break;
     case 'f': case 'F':
       toggleFullscreen(); break;
     case 'i': case 'I':
