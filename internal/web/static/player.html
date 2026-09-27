@@ -302,7 +302,7 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 36px; min-height: 36px;
+  min-width: 40px; min-height: 40px;
   padding: 0 6px;
   border-radius: 6px;
   flex-shrink: 0;
@@ -310,8 +310,17 @@ html, body {
   -webkit-tap-highlight-color: transparent;
 }
 .ibtn:hover { background: rgba(255,255,255,.13); }
-.ibtn svg { width: 20px; height: 20px; fill: currentColor; pointer-events: none; }
-.ibtn.seek svg { width: 26px; height: 26px; }
+/* One icon size across the row. */
+.ibtn svg { width: 24px; height: 24px; fill: currentColor; pointer-events: none; }
+/* Line icons: the fill above would fill their arcs in. */
+.ibtn svg.line {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ibtn svg.line text { fill: currentColor; stroke: none; }
 
 
 /* Time display */
@@ -321,6 +330,11 @@ html, body {
   white-space: nowrap;
   margin: 0 .2rem;
   font-variant-numeric: tabular-nums;
+  /* The one item that shrinks on a narrow row, so a long behind-live time is
+     cut rather than pushing the buttons out. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .spacer { flex: 1; }
 
@@ -370,14 +384,24 @@ html, body {
 
 /* Quality */
 #qual-wrap { position: relative; }
-#qual-btn {
-  font-size: .75rem;
-  font-weight: 700;
-  min-width: 54px;
-  letter-spacing: .02em;
-  white-space: nowrap;
-}
+#qual-btn { position: relative; }
 #qual-btn[aria-expanded="true"] { background: rgba(255,255,255,.13); }
+/* The playing height on the gear: grey under ABR, white once pinned. */
+#qual-badge {
+  position: absolute;
+  top: 4px;
+  right: 0;
+  padding: 1px 3px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.2;
+  background: #3f3f46;
+  color: #f4f4f5;
+  pointer-events: none;
+}
+#qual-badge:empty { display: none; }
+#qual-btn.pinned #qual-badge { background: #fff; color: #111; }
 #qual-menu {
   position: absolute;
   bottom: calc(100% + 8px);
@@ -418,9 +442,18 @@ html, body {
 
 /* Mobile: bigger touch areas */
 @media (max-width: 600px) {
-  .ibtn { min-height: 44px; }
+  .ibtn { min-width: 44px; min-height: 44px; }
   #channel-title { font-size: .85rem; }
-  #qual-btn { min-width: 44px; }
+  #qual-badge { top: 6px; right: 1px; }
+}
+/* A phone has no room for ±10 s; double-tapping either side seeks instead. */
+@media (max-width: 500px) {
+  #btn-back, #btn-fwd { display: none; }
+}
+/* The smallest phones drop the PiP button too; the browser can still enter
+   PiP on a tab switch. */
+@media (max-width: 359px) {
+  #btn-pip { display: none !important; }
 }
 </style>
 <script src="/player-assets/vendor/shaka-player.5.2.12.compiled.js"></script>
@@ -497,16 +530,21 @@ html, body {
         </button>
 
         <!-- -10s / +10s -->
-        <button class="ibtn seek" id="btn-back" title="-10 秒 (← / J)">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/>
-            <text x="12" y="16.5" text-anchor="middle" font-size="6.5" font-family="sans-serif" font-weight="700">10</text>
+        <!-- A quarter arc over the top with the seconds under it; +10 mirrors the arc -->
+        <button class="ibtn" id="btn-back" title="-10 秒 (← / J)">
+          <svg class="line" viewBox="0 0 24 24">
+            <path d="M17.66 7.34A8 8 0 0 0 6.34 7.34"/>
+            <path d="M6.34 3.84L6.34 7.34L9.84 7.34"/>
+            <text x="12" y="19.5" text-anchor="middle" font-size="8.5" font-family="system-ui, sans-serif" font-weight="700">10</text>
           </svg>
         </button>
-        <button class="ibtn seek" id="btn-fwd"  title="+10 秒 (→ / L)">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path transform="scale(-1,1) translate(-24,0)" d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/>
-            <text x="12" y="16.5" text-anchor="middle" font-size="6.5" font-family="sans-serif" font-weight="700">10</text>
+        <button class="ibtn" id="btn-fwd"  title="+10 秒 (→ / L)">
+          <svg class="line" viewBox="0 0 24 24">
+            <g transform="matrix(-1 0 0 1 24 0)">
+              <path d="M17.66 7.34A8 8 0 0 0 6.34 7.34"/>
+              <path d="M6.34 3.84L6.34 7.34L9.84 7.34"/>
+            </g>
+            <text x="12" y="19.5" text-anchor="middle" font-size="8.5" font-family="system-ui, sans-serif" font-weight="700">10</text>
           </svg>
         </button>
 
@@ -536,7 +574,10 @@ html, body {
 
         <!-- Quality -->
         <div id="qual-wrap">
-          <button class="ibtn" id="qual-btn" title="畫質" aria-label="畫質選單" aria-haspopup="menu" aria-expanded="false">Auto</button>
+          <button class="ibtn" id="qual-btn" title="畫質" aria-label="畫質選單" aria-haspopup="menu" aria-expanded="false">
+            <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+            <span id="qual-badge"></span>
+          </button>
           <div id="qual-menu" role="menu" aria-label="畫質選單" aria-hidden="true"></div>
         </div>
 
@@ -603,6 +644,7 @@ const icoMuted   = document.getElementById('ico-muted');
 const volSlider  = document.getElementById('vol-slider');
 const volWrap    = document.getElementById('vol-wrap');
 const qualBtn    = document.getElementById('qual-btn');
+const qualBadge  = document.getElementById('qual-badge');
 const qualMenu   = document.getElementById('qual-menu');
 const btnFs      = document.getElementById('btn-fs');
 const btnPip     = document.getElementById('btn-pip');
@@ -1860,7 +1902,6 @@ function buildQualityMenu() {
         console.warn('[quality auto failed]', err);
       }
     }
-    qualBtn.textContent = 'Auto';
     refreshQualityActive();
     setQualityMenuOpen(false, { restoreFocus: true });
   });
@@ -1883,7 +1924,6 @@ function buildQualityMenu() {
           console.warn('[quality select failed]', err);
         }
       }
-      qualBtn.textContent = label;
       refreshQualityActive();
       setQualityMenuOpen(false, { restoreFocus: true });
     });
@@ -1914,11 +1954,18 @@ function refreshQualityActive() {
     console.warn('[quality active failed]', err);
     return;
   }
-  if (abrEnabled) {
-    qualBtn.textContent = active && active.height ? `Auto (${active.height}p)` : 'Auto';
-  } else if (pinnedHeight !== null) {
-    qualBtn.textContent = `${pinnedHeight}p`;
-  }
+  // The button is a gear with the playing height as a badge; the words for it
+  // live in its aria-label and on the menu's Auto item.
+  const activeHeight = active && active.height ? active.height : null;
+  const pinned = !abrEnabled && pinnedHeight !== null;
+  const badgeHeight = pinned ? pinnedHeight : activeHeight;
+  qualBadge.textContent = badgeHeight ? String(badgeHeight) : '';
+  qualBtn.classList.toggle('pinned', pinned);
+  qualBtn.setAttribute('aria-label', pinned
+    ? `畫質選單，已指定 ${pinnedHeight}p`
+    : activeHeight ? `畫質選單，自動，目前 ${activeHeight}p` : '畫質選單，自動');
+  const autoLabel = qualMenu.querySelector('.qi span');
+  if (autoLabel) autoLabel.textContent = activeHeight ? `Auto (${activeHeight}p)` : 'Auto';
   qualMenu.querySelectorAll('.qi').forEach((el, i) => {
     const selected = i === 0
       ? abrEnabled
