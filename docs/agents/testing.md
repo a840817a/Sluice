@@ -48,6 +48,23 @@ document.dispatchEvent(new Event('visibilitychange'));
 and wait about three seconds for the next poll. Check states through the DOM
 rather than screenshots, and find forms by id (`addForm`, `editForm`).
 
+## Looking at the player
+
+`player.html` has no JS tests. To check it by hand, serve a stub rather than a
+gateway: answer `/player/{id}` with `internal/web/static/player.html`,
+`/player-assets/*` from `internal/web/static/`, and
+`/v1/channels/{id}/health` with `{"manifest_url": ..., "drm": {"playready":
+false, "widevine": false}}` pointing at an HLS stream from ffmpeg (`-f lavfi
+-i testsrc2` plus `sine`; add `-re` and `-hls_flags delete_segments` for a
+live one). The player's functions are globals, so drive states from the page
+(`reconnect(...)`, `applyModeConfig()`).
+
+Picture-in-picture and fullscreen need a real user gesture: press the key or
+click the button through the browser tool, then script the rest. The built-in
+browser pane never enters fullscreen, and the PiP window's own ✕ is outside
+the page, so fake a close as `video.pause()` next to
+`document.exitPictureInPicture()`.
+
 ## Reproducing a race in channel Stop
 
 "Stop mid-ingest, then assert no segment file appears" passes even when Stop
