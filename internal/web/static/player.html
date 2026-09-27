@@ -664,6 +664,7 @@ let toastTimer     = null;
 let clickTimer     = null;
 let dragging       = false;
 let reconnecting   = false;
+let initializing   = false;
 let modeWatchTimer = null;
 let liveProgressTimer = null;
 let avResyncTimer  = null;
@@ -904,6 +905,9 @@ function scheduleRecovery(opts = {}, message = STALL_RECOVERY_MSG, immediate = f
   }
   recoveryTimer = setTimeout(async () => {
     recoveryTimer = null;
+    // Read the user's latest pause/play state before the first unload. Later
+    // attempts retain it because unload itself pauses the media element.
+    if (attempt === 1) opts = { ...opts, resumePlayback: shouldResumeAfterRecovery() };
     const ok = await reconnect(opts);
     if (!ok) scheduleRecovery(opts, message, false);
   }, delay);
@@ -961,6 +965,9 @@ async function reconnect(opts = {}) {
 }
 
 function handleShakaError(detail) {
+  // loadWithRetry owns errors during startup; a second load/unload loop would
+  // interrupt it. Once startup ends, runtime errors use recovery below.
+  if (initializing) return;
   const isCritical = !shaka.util.Error.Severity ||
     detail.severity === shaka.util.Error.Severity.CRITICAL;
   if (!isCritical) {
@@ -1243,6 +1250,7 @@ async function init() {
   video.addEventListener('leavepictureinpicture', handleLeavePip);
   registerAutoPip();
 
+  initializing = true;
   try {
     await loadWithRetry();
     pipReady = true;
@@ -1264,6 +1272,8 @@ async function init() {
     resetRecoveryState();
   } catch (e) {
     showError(`載入失敗: ${e.message || e}`);
+  } finally {
+    initializing = false;
   }
 }
 
@@ -1607,9 +1617,13 @@ function beginProgressDrag(pointerId, clientX) {
   seekFromPointer(clientX);
 }
 
-function endProgressDrag(pointerId) {
+function endProgressDrag(pointerId, clientX = null) {
   if (!dragging) return;
   if (pointerId !== null && activePointerId !== null && pointerId !== activePointerId) return;
+  // Commit the release position before releasing capture (which can dispatch
+  // lostpointercapture) or discarding the pending animation frame.
+  if (clientX !== null) seekFromPointer(clientX);
+  pendingSeekX = null;
   if (activePointerId !== null && typeof progWrap.releasePointerCapture === 'function') {
     try { progWrap.releasePointerCapture(activePointerId); } catch (_) {}
   }
@@ -1644,10 +1658,10 @@ progWrap.addEventListener('pointerleave', () => {
   progressHovering = false;
   if (!dragging) hideProgressTooltip();
 });
-progWrap.addEventListener('pointerup', e => endProgressDrag(e.pointerId));
+progWrap.addEventListener('pointerup', e => endProgressDrag(e.pointerId, e.clientX));
 progWrap.addEventListener('pointercancel', e => endProgressDrag(e.pointerId));
 progWrap.addEventListener('lostpointercapture', () => endProgressDrag(null));
-window.addEventListener('pointerup', e => endProgressDrag(e.pointerId));
+window.addEventListener('pointerup', e => endProgressDrag(e.pointerId, e.clientX));
 
 // ── Volume ────────────────────────────────────────────────────────────────
 function refreshVolumeUI() {

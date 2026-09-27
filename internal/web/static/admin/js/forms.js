@@ -137,13 +137,27 @@ function isOpen(id) {
   return document.getElementById(id).classList.contains('open');
 }
 
+// Each opening owns its completion effects, even when the same channel is
+// reopened before an earlier save returns. Pending requests still finish.
+let addSession = 0;
+let editSession = 0;
+let adding = false;
+let saving = false;
+
+function setSubmitting(form, pending) {
+  form.querySelector('button[type="submit"]').disabled = pending;
+  form.setAttribute('aria-busy', String(pending));
+}
+
 // ── add form ────────────────────────────────────────────────────────────────
 
 export function openAdd() {
+  addSession++;
   openDrawer('addOverlay');
 }
 
 export function closeAdd() {
+  addSession++;
   closeDrawer('addOverlay');
 }
 
@@ -159,6 +173,8 @@ function initAddForm() {
 
   form.addEventListener('submit', async e => {
     e.preventDefault();
+    if (adding) return;
+    const session = addSession;
     const body = formBody(form, { keepEmptyHeaders: false });
 
     const fetchHeaders = collectHeaders('addFetchHeaders');
@@ -166,16 +182,23 @@ function initAddForm() {
     const licenseHeaders = collectHeaders('addLicenseHeaders');
     if (licenseHeaders.length) body.license_headers = licenseHeaders;
 
+    adding = true;
+    setSubmitting(form, true);
     try {
       const d = await api.createChannel(body);
       showMsg(`頻道「${(d && (d.title || d.id)) || ''}」已建立`, 'ok');
-      form.reset();
-      clearHeaders('addFetchHeaders');
-      clearHeaders('addLicenseHeaders');
-      closeAdd();
+      if (session === addSession) {
+        form.reset();
+        clearHeaders('addFetchHeaders');
+        clearHeaders('addLicenseHeaders');
+        closeAdd();
+      }
       onChanged();
     } catch (err) {
       showMsg(err.message, 'err');
+    } finally {
+      adding = false;
+      setSubmitting(form, false);
     }
   });
 }
@@ -230,6 +253,7 @@ export function openEdit(id) {
     showMsg('找不到此 channel 的設定，請重新載入', 'err');
     return;
   }
+  editSession++;
   editingID = id;
   editingCfg = cfg;
 
@@ -253,6 +277,7 @@ export function openEdit(id) {
 }
 
 export function closeEdit() {
+  editSession++;
   editingID = null;
   editingCfg = null;
   document.getElementById('editRestartNote').classList.remove('on');
@@ -276,7 +301,9 @@ function initEditModal() {
 
   form.addEventListener('submit', async e => {
     e.preventDefault();
-    if (!editingID) return;
+    if (!editingID || saving) return;
+    const session = editSession;
+    const id = editingID;
 
     const body = formBody(form, { keepEmptyHeaders: true });
     // Sent even when empty: an omitted list would leave the old headers in place,
@@ -284,18 +311,23 @@ function initEditModal() {
     body.fetch_headers = collectHeaders('editFetchHeaders');
     body.license_headers = collectHeaders('editLicenseHeaders');
 
+    saving = true;
+    setSubmitting(form, true);
     try {
-      const d = await api.updateChannel(editingID, body);
+      const d = await api.updateChannel(id, body);
       // Report what the server actually did: most edits no longer interrupt the
       // channel, and claiming a restart that did not happen is misleading.
       const fields = ((d && d.restart_fields) || []).map(k => RESTART_FIELDS[k] || k);
       showMsg(d && d.restarted
         ? (fields.length ? `已更新並重啟（${fields.join('、')} 已變更）` : '已更新並重啟')
         : '已更新（即時套用，未中斷）', 'ok');
-      closeEdit();
+      if (session === editSession) closeEdit();
       onChanged();
     } catch (err) {
       showMsg(err.message, 'err');
+    } finally {
+      saving = false;
+      setSubmitting(form, false);
     }
   });
 }

@@ -8,6 +8,9 @@ import * as forms from './forms.js';
 /** How often the channel list is refreshed while the tab is visible. */
 const POLL_INTERVAL = 2000;
 
+/** Bound a stalled response, including a body that never finishes arriving. */
+const POLL_TIMEOUT = 10000;
+
 /** Delay after the first failed poll, before backoff starts widening it. */
 const POLL_ERROR_INTERVAL = 5000;
 
@@ -74,7 +77,7 @@ function schedule(delay) {
   pollTimer = setTimeout(poll, delay);
 }
 
-/** Retry delay after n consecutive failures: 5s, 10s, 20s, then 30s forever. */
+/** Retry delay after n consecutive failures: 5s, 10s, then 15s forever. */
 function retryDelay(n) {
   return Math.min(POLL_ERROR_INTERVAL * 2 ** (n - 1), POLL_ERROR_MAX);
 }
@@ -115,6 +118,11 @@ async function poll() {
   if (inFlight) inFlight.abort();
   const controller = new AbortController();
   inFlight = controller;
+  let timedOut = false;
+  const deadline = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, POLL_TIMEOUT);
 
   try {
     const data = await api.listChannels(controller.signal);
@@ -131,18 +139,20 @@ async function poll() {
     setGateway(true);
     schedule(POLL_INTERVAL);
   } catch (err) {
-    if (err.name === 'AbortError') return; // superseded by a newer poll
+    if (inFlight !== controller) return; // superseded by a newer poll
+    if (err.name === 'AbortError' && !timedOut) return;
     pollFailures++;
     // Announced once, on the transition from healthy to failing, and left on
     // screen until it recovers. Re-announcing every retry made the message
     // re-trigger every few seconds and never settle — the outage is one event,
     // not one per attempt.
     if (pollFailures === 1) {
-      showMsg(pollErrorText(err), 'err', { sticky: true });
+      showMsg(timedOut ? '取得 channel 狀態逾時，將持續重試…' : pollErrorText(err), 'err', { sticky: true });
     }
     setGateway(false);
     schedule(retryDelay(pollFailures));
   } finally {
+    clearTimeout(deadline);
     if (inFlight === controller) inFlight = null;
   }
 }
