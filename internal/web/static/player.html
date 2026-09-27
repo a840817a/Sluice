@@ -1216,9 +1216,30 @@ function showControls(lock) {
 function hideControls() {
   // In PiP the page shows no video, so the controls have nothing to get out of the way of.
   if (video.paused || inPip()) return;
+  // An open menu or a mouse resting on a bar means the viewer is using the controls.
+  if (qualMenu.classList.contains('open') || volWrap.classList.contains('popup')) return;
+  if (mouseOnBar) return;
   overlay.classList.add('hidden');
   wrap.style.cursor = 'none';
 }
+
+// Tracked by pointer events rather than :hover, which sticks after a tap.
+let mouseOnBar = false;
+for (const bar of [document.getElementById('top-bar'), document.getElementById('bottom-bar')]) {
+  bar.addEventListener('pointerenter', e => { if (e.pointerType === 'mouse') mouseOnBar = true; });
+  bar.addEventListener('pointerleave', e => {
+    if (e.pointerType !== 'mouse') return;
+    mouseOnBar = false;
+    showControls(false);
+  });
+}
+
+// A tap on a touch screen while the controls are hidden only reveals them;
+// set on pointerdown, before touchstart shows the controls.
+let tapRevealsControls = false;
+wrap.addEventListener('pointerdown', e => {
+  tapRevealsControls = e.pointerType !== 'mouse' && overlay.classList.contains('hidden');
+});
 
 wrap.addEventListener('mousemove', () => showControls(false));
 wrap.addEventListener('mouseleave', () => { if (!video.paused) hideControls(); });
@@ -1258,11 +1279,16 @@ function handleSurfaceClick(e) {
     volWrap.classList.remove('popup');
     return;
   }
+  const revealOnly = tapRevealsControls;
+  tapRevealsControls = false;
   if (clickTimer) {
     clearTimeout(clickTimer);
     clickTimer = null;
     // Double-click: seek based on which half
     seek(e.clientX < wrap.clientWidth / 2 ? -10 : 10);
+  } else if (revealOnly) {
+    // Still arm the timer so a double tap seeks.
+    clickTimer = setTimeout(() => { clickTimer = null; }, 250);
   } else {
     clickTimer = setTimeout(() => {
       clickTimer = null;
@@ -1790,7 +1816,10 @@ function activeQualityItem() {
 
 function setQualityMenuOpen(open, opts = {}) {
   const { focusActive = false, restoreFocus = false } = opts;
+  const wasOpen = qualMenu.classList.contains('open');
   qualMenu.classList.toggle('open', open);
+  // hideControls skipped the controls while the menu was open; start the timer over.
+  if (wasOpen && !open) showControls(false);
   qualBtn.setAttribute('aria-expanded', String(open));
   qualMenu.setAttribute('aria-hidden', String(!open));
   if (open && focusActive) {
@@ -1987,8 +2016,13 @@ btnPipReturn.addEventListener('click', () => {
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────
 document.addEventListener('keydown', e => {
+  // The quality menu handles its own arrow keys and prevents their default.
+  if (e.defaultPrevented) return;
   const target = e.target instanceof HTMLElement ? e.target : null;
-  if (target && (['INPUT','TEXTAREA','SELECT','BUTTON'].includes(target.tagName) || target.isContentEditable)) return;
+  if (target && (['INPUT','TEXTAREA','SELECT'].includes(target.tagName) || target.isContentEditable)) return;
+  // A focused button keeps Space and Enter; every other shortcut still works
+  // after a control is clicked.
+  if (target && target.tagName === 'BUTTON' && (e.key === ' ' || e.key === 'Enter')) return;
   switch (e.key) {
     case ' ': case 'k': case 'K':
       e.preventDefault(); togglePlay(); showControls(false); break;
@@ -2043,6 +2077,12 @@ window.addEventListener('pagehide', () => {
   clearInitialResync();
   clearRecoveryTimer();
   if (player) player.destroy().catch(() => {});
+});
+
+// pagehide also fires when the page enters the back/forward cache, so a page
+// restored from it has a destroyed player: load it again.
+window.addEventListener('pageshow', e => {
+  if (e.persisted) location.reload();
 });
 </script>
 </body>
