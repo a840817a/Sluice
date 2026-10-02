@@ -50,14 +50,29 @@ rather than screenshots, and find forms by id (`addForm`, `editForm`).
 
 ## Looking at the player
 
-`player.html` has no JS tests. To check it by hand, serve a stub rather than a
-gateway: answer `/player/{id}` with `internal/web/static/player.html`,
+`make verify` runs the Node front-end tests as well as the Go checks. For a
+focused run, use `node --test internal/web/player_test.cjs`. Playback tests
+import `static/player/playback.mjs` and exercise its complete lifecycle through
+`createPlayback`, with controllable media and clock adapters. They must not
+extract lifecycle functions from HTML or replace the recovery implementation.
+After adding a test, break the protected behavior, confirm it fails, and restore.
+
+To check the player by hand, serve a stub rather than a gateway: answer
+`/player/{id}` with `internal/web/static/player.html`,
 `/player-assets/*` from `internal/web/static/`, and
 `/v1/channels/{id}/health` with `{"manifest_url": ..., "drm": {"playready":
 false, "widevine": false}}` pointing at an HLS stream from ffmpeg (`-f lavfi
 -i testsrc2` plus `sine`; add `-re` and `-hls_flags delete_segments` for a
-live one). The player's functions are globals, so drive states from the page
-(`reconnect(...)`, `applyModeConfig()`).
+live one). The player imports its lifecycle module from
+`/player-assets/player/playback.mjs`; serve that path with a JavaScript MIME type.
+Use the controls to check pause/play, seek, Live position and quality selection.
+The page uses an ES module, so its lifecycle functions are not window globals.
+For recovery checks, the stub can insert a test-only button and capture the
+constructed Shaka Player before the page module runs; have the button dispatch a
+critical Shaka error. Use a VOD fixture with two qualities to verify that position,
+paused state and the selected quality survive the real unload/load path.
+For cleanup, navigate away during a pending load and check that no later load or
+retry appears. The deterministic tests cover disposal at each async stage.
 
 To time a start, poll until `video.currentTime` advances. `playing` is no
 measure: Shaka buffers by setting the playback rate to 0, so `playing` fires

@@ -16,6 +16,12 @@ _Avoid_: Upstream, CDN
 A channel's configured input: the origin URL of its manifest or playlist, and its protocol (DASH or HLS).
 _Avoid_: Upstream, feed
 
+## Playback
+
+**Playback**:
+One player's viewing of a channel. Its media position and play/pause intent belong to that player, independently of the channel's ingest lifecycle.
+_Avoid_: Channel mode (for a player's viewing state)
+
 ## Timeline
 
 **Period**:

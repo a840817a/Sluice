@@ -606,10 +606,11 @@ html, body {
   </div><!-- /overlay -->
 </div><!-- /wrap -->
 
-<script>
+<script type="module">
+import { createPlayback, LIVE_BEHIND_THRESHOLD } from "/player-assets/player/playback.mjs";
 const channelID   = location.pathname.split('/').filter(Boolean).pop();
 // Used only if the gateway does not tell us which URL to play (see
-// resolveManifestURL); DASH is the historical default.
+// playbackSource); DASH is the historical default.
 const fallbackManifestURL = `/v1/channels/${channelID}/manifest.mpd`;
 const prLicURL    = `/v1/channels/${channelID}/license/playready`;
 const wvLicURL    = `/v1/channels/${channelID}/license/widevine`;
@@ -663,36 +664,11 @@ let hideTimer      = null;
 let toastTimer     = null;
 let clickTimer     = null;
 let dragging       = false;
-let reconnecting   = false;
-let initializing   = false;
-let modeWatchTimer = null;
-let liveProgressTimer = null;
-let avResyncTimer  = null;
-let avResyncNudgeTimer = null;
-let avResyncPending = false;
-let stallWatchTimer = null;
-let waitingSince    = 0;
-let mediaWaiting    = false;
-let shakaBuffering  = false;
-let lastPlaybackTime = 0;
-let stallRecovering = false;
-let recoveryTimer   = null;
-let recoveryAttempts = 0;
 let activePointerId  = null;
-let initialResyncCleanup = null;
 let progressHoverX = null;
 let progressHovering = false;
 let pipReady = false;           // true once a manifest has loaded
 
-const STALL_RECOVERY_MSG   = '播放卡住，正在嘗試恢復…';
-const STALL_WAIT_MS        = 8000;
-const STALL_WATCH_MS       = 2000;
-const RECOVERY_BASE_DELAY_MS = 1000;
-const RECOVERY_MAX_DELAY_MS  = 30000;
-const RECOVERY_MAX_ATTEMPTS  = 6;
-const LIVE_PROGRESS_REFRESH_MS = 1000;
-const AV_RESYNC_INTERVAL_MS  = 5 * 60 * 1000;
-const AV_RESYNC_DEFER_MS     = 400;
 // Keep nearby buffered media when manually switching quality, but drop farther
 // future buffer so the new quality takes effect without a full rebuffer.
 const QUALITY_SWITCH_SAFE_MARGIN = 3;
@@ -714,67 +690,79 @@ const channelInfoPromise = fetch(`/v1/channels/${channelID}/health`)
     return channelInfo;
   });
 
-async function loadDRMServers() {
+// The health response selects the Source's output protocol and DRM endpoints.
+async function playbackSource() {
   const info = await channelInfoPromise;
   const drm = info.drm || {};
-  const servers = {};
-  if (drm.widevine !== false) servers['com.widevine.alpha'] = wvLicURL;
-  if (drm.playready !== false) servers['com.microsoft.playready'] = prLicURL;
-  return servers;
+  const drmServers = {};
+  if (drm.widevine !== false) drmServers['com.widevine.alpha'] = wvLicURL;
+  if (drm.playready !== false) drmServers['com.microsoft.playready'] = prLicURL;
+  return { manifestURL: info.manifest_url || fallbackManifestURL, drmServers };
 }
 
-// ── Shaka init ────────────────────────────────────────────────────────────
-const LIVE_BEHIND_THRESHOLD = 10;
-const LIVE_STREAMING_CFG = {
-  bufferingGoal:    90,
-  rebufferingGoal:  2,
-  bufferBehind:     90,
-  stallEnabled:     true,
-  stallThreshold:   1,
-  stallSkip:        0.1,
-  liveSync: {
-    enabled:                true,
-    targetLatency:          5,
-    targetLatencyTolerance: 1,
-    maxPlaybackRate:        1.1,
-    minPlaybackRate:        0.9,
-  },
-};
-const VOD_STREAMING_CFG = {
-  bufferingGoal:   30,
-  rebufferingGoal: 10,
-  liveSync:        { enabled: false },
-};
+let playback = null;
+let playbackState = { live: false, ready: false, phase: 'idle', busy: false };
 
-// resolveManifestURL asks the gateway which URL this channel serves. A channel
-// backed by an HLS source is published as master.m3u8 rather than manifest.mpd,
-// and Shaka plays either, so the protocol never has to be assumed here.
-let resolvedManifestURL = null;
-async function resolveManifestURL() {
-  if (resolvedManifestURL) return resolvedManifestURL;
-  const info = await channelInfoPromise;
-  resolvedManifestURL = info.manifest_url || fallbackManifestURL;
-  return resolvedManifestURL;
-}
-
-// startTime must go to load() itself: Shaka applies its own start time once
-// metadata arrives, and would overwrite a seek made after load() resolves —
-// a VOD recovery then restarts from 0. updateStartTime() called before load()
-// is discarded the same way.
-async function loadWithRetry(max = 5, startTime = null) {
-  const manifestURL = await resolveManifestURL();
-  const start = startTime !== null && isFinite(startTime) ? Math.max(0, startTime) : undefined;
-  let delay = 1000;
-  for (let i = 0; i < max; i++) {
-    try {
-      await player.load(manifestURL, start);
-      return;
-    } catch (e) {
-      if (i === max - 1) throw e;
-      console.warn(`[shaka load retry ${i + 1}/${max}]`, e.message || e);
-      await new Promise(r => setTimeout(r, delay));
-      delay = Math.min(delay * 2, 15000);
+// Playback owns media work; this is the one place that maps its events onto
+// controls. Quality preferences stay on the page and are restored after load.
+function renderPlaybackEvent(event) {
+  switch (event.type) {
+    case 'state': {
+      const previous = playbackState;
+      playbackState = event.state;
+      isLive = playbackState.live;
+      if (pipReady !== playbackState.ready) {
+        pipReady = playbackState.ready;
+        refreshPipButton();
+      }
+      if (previous.live !== isLive || previous.ready !== playbackState.ready) {
+        btnLive.style.display = isLive ? '' : 'none';
+        refreshMediaSessionActions();
+      }
+      spinner.classList.toggle('show', playbackState.busy);
+      break;
     }
+    case 'loaded':
+      if (event.initial) restoreSavedQuality();
+      restoreQualityPreference();
+      buildQualityMenu();
+      hideError();
+      break;
+    case 'recovering':
+      hideError();
+      setQualityMenuOpen(false);
+      volWrap.classList.remove('popup');
+      break;
+    case 'progress':
+      refreshProgress();
+      refreshProgressTooltip();
+      break;
+    case 'play':
+      refreshPlayIcon();
+      break;
+    case 'pause':
+      spinner.classList.remove('show');
+      refreshPlayIcon();
+      showControls(true);
+      break;
+    case 'autoplay':
+      if (event.started) {
+        setStartOverlayVisible(false);
+        if (event.muted) setUnmuteHintVisible(true);
+      } else {
+        if (event.blocked) {
+          showControls(true);
+          setStartOverlayVisible(true);
+        }
+        refreshPlayIcon();
+      }
+      break;
+    case 'toast':
+      showToast(event.message, event.duration);
+      break;
+    case 'error':
+      showError(event.message);
+      break;
   }
 }
 
@@ -783,498 +771,28 @@ function hideError() {
   errorMsg.textContent = '';
 }
 
-function applyModeConfig() {
-  if (!player) return;
-  if (isLive) {
-    btnLive.style.display = '';
-    player.configure({ streaming: LIVE_STREAMING_CFG });
-    startLiveProgressTicker();
-    startAVResyncWatchdog();
-  } else {
-    btnLive.style.display = 'none';
-    player.configure({ streaming: VOD_STREAMING_CFG });
-    stopLiveProgressTicker();
-    stopAVResyncWatchdog();
-  }
-  refreshMediaSessionActions();
-}
-
-// Toggle liveSync rate adjustment so the user can pause at a past time
-// without Shaka silently speeding playback to drag them back to live.
-function applyLiveSyncRate(active) {
-  if (!player || !isLive) return;
-  player.configure({
-    streaming: {
-      liveSync: active
-        ? { maxPlaybackRate: 1.1, minPlaybackRate: 0.9 }
-        : { maxPlaybackRate: 1.0, minPlaybackRate: 1.0 },
-    },
-  });
-}
-
-function syncLiveRateToPosition() {
-  if (!isLive || !player) return;
-  try {
-    const sr = player.seekRange();
-    const behind = sr.end - video.currentTime;
-    applyLiveSyncRate(behind <= LIVE_BEHIND_THRESHOLD);
-  } catch (_) {}
-}
-
-function shouldResumeAfterRecovery() {
-  return !video.paused && !video.ended;
-}
-
-function playerIsLive() {
-  if (player && typeof player.isLive === 'function') {
-    try {
-      return player.isLive();
-    } catch (_) {}
-  }
-  return isLive;
-}
-
-function liveRecoveryOptions() {
-  const base = { showAutoplayHint: true, resumePlayback: shouldResumeAfterRecovery() };
-  if (!player) return { ...base, seekToLiveEdge: true };
-  try {
-    const sr = player.seekRange();
-    const behind = sr.end - video.currentTime;
-    const inWindow = video.currentTime >= sr.start && video.currentTime <= sr.end;
-    if (inWindow && behind > LIVE_BEHIND_THRESHOLD) {
-      return { ...base, preserveTime: video.currentTime };
-    }
-  } catch (_) {}
-  return { ...base, seekToLiveEdge: true };
-}
-
-function currentRecoveryOptions() {
-  return playerIsLive()
-    ? liveRecoveryOptions()
-    : {
-        preserveTime: video.currentTime,
-        showAutoplayHint: true,
-        resumePlayback: shouldResumeAfterRecovery(),
-      };
-}
-
-function clearRecoveryTimer() {
-  if (recoveryTimer) {
-    clearTimeout(recoveryTimer);
-    recoveryTimer = null;
-  }
-}
-
-function resetRecoveryState() {
-  clearRecoveryTimer();
-  recoveryAttempts = 0;
-}
-
-function recoveryDelay(attempt, immediate) {
-  if (immediate && attempt === 1) return 0;
-  return Math.min(RECOVERY_BASE_DELAY_MS * 2 ** (attempt - 1), RECOVERY_MAX_DELAY_MS);
-}
-
-function restorePlaybackPosition(preserveTime) {
-  if (preserveTime === null || !isFinite(preserveTime)) return;
-  try {
-    if (isLive) {
-      video.currentTime = liveSeekTarget(preserveTime);
-      syncLiveRateToPosition();
-    } else {
-      const duration = Number.isFinite(video.duration) ? video.duration : preserveTime;
-      video.currentTime = Math.max(0, Math.min(duration, preserveTime));
-    }
-  } catch (err) {
-    console.warn('[restore position failed]', err);
-  }
-}
-
-function scheduleRecovery(opts = {}, message = STALL_RECOVERY_MSG, immediate = false) {
-  if (!player || reconnecting || recoveryTimer) return;
-  const attempt = recoveryAttempts + 1;
-  if (attempt > RECOVERY_MAX_ATTEMPTS) {
-    showError('播放器多次恢復失敗，請稍後重新整理頁面。');
-    return;
-  }
-  recoveryAttempts = attempt;
-  const delay = recoveryDelay(attempt, immediate);
-  if (message) {
-    const toast = delay > 0 ? `${message} ${Math.ceil(delay / 1000)} 秒後重試…` : message;
-    showToast(toast, Math.max(1600, Math.min(delay, 2800)));
-  }
-  recoveryTimer = setTimeout(async () => {
-    recoveryTimer = null;
-    // Read the user's latest pause/play state before the first unload. Later
-    // attempts retain it because unload itself pauses the media element.
-    if (attempt === 1) opts = { ...opts, resumePlayback: shouldResumeAfterRecovery() };
-    const ok = await reconnect(opts);
-    if (!ok) scheduleRecovery(opts, message, false);
-  }, delay);
-}
-
-async function reconnect(opts = {}) {
-  if (reconnecting || !player) return;
-  const {
-    preserveTime = null,
-    seekToLiveEdge = false,
-    showAutoplayHint = false,
-    resumePlayback = true,
-  } = opts;
-  reconnecting = true;
-  try {
-    hideError();
-    setQualityMenuOpen(false);
-    volWrap.classList.remove('popup');
-    try { await player.unload(); } catch (_) {}
-    await loadWithRetry(5, preserveTime);
-    isLive = player.isLive();
-    applyModeConfig();
-    restoreQualityPreference();
-    buildQualityMenu();
-    if (isLive && seekToLiveEdge) {
-      if (typeof player.goToLive === 'function') {
-        player.goToLive();
-      } else {
-        video.currentTime = liveSeekTarget(player.seekRange().end);
-      }
-      syncLiveRateToPosition();
-    } else {
-      restorePlaybackPosition(preserveTime);
-    }
-    if (isLive) scheduleInitialResync();
-    clearWaitingState();
-    if (resumePlayback) {
-      const autoplay = await attemptAutoplay(showAutoplayHint);
-      if (!autoplay.ok && !autoplay.blocked) {
-        return false;
-      }
-    } else {
-      spinner.classList.remove('show');
-      refreshPlayIcon();
-      showControls(true);
-    }
-    resetRecoveryState();
-    return true;
-  } catch (e) {
-    console.error('[reconnect failed]', e);
-    return false;
-  } finally {
-    reconnecting = false;
-  }
-}
-
-function handleShakaError(detail) {
-  // loadWithRetry owns errors during startup; a second load/unload loop would
-  // interrupt it. Once startup ends, runtime errors use recovery below.
-  if (initializing) return;
-  const isCritical = !shaka.util.Error.Severity ||
-    detail.severity === shaka.util.Error.Severity.CRITICAL;
-  if (!isCritical) {
-    console.warn('[shaka recoverable]', detail);
-    return;
-  }
-  console.error('[shaka critical]', detail);
-  scheduleRecovery(currentRecoveryOptions(), '播放發生錯誤，正在重試…', false);
-}
-
-function startModeWatcher() {
-  stopModeWatcher();
-  modeWatchTimer = setInterval(() => {
-    if (!player) return;
-    const nowLive = player.isLive();
-    if (nowLive !== isLive) {
-      isLive = nowLive;
-      applyModeConfig();
-    }
-  }, 5000);
-}
-function stopModeWatcher() {
-  if (modeWatchTimer) { clearInterval(modeWatchTimer); modeWatchTimer = null; }
-}
-
-function startLiveProgressTicker() {
-  stopLiveProgressTicker();
-  liveProgressTimer = setInterval(() => {
-    if (!isLive) return;
-    refreshProgress();
-    refreshProgressTooltip();
-  }, LIVE_PROGRESS_REFRESH_MS);
-}
-
-function stopLiveProgressTicker() {
-  if (liveProgressTimer) {
-    clearInterval(liveProgressTimer);
-    liveProgressTimer = null;
-  }
-}
-
-function startAVResyncWatchdog() {
-  stopAVResyncWatchdog();
-  avResyncTimer = setInterval(() => {
-    avResyncPending = true;
-    if (videoHidden()) scheduleAVResyncNudge(0);
-  }, AV_RESYNC_INTERVAL_MS);
-}
-function stopAVResyncWatchdog() {
-  if (avResyncTimer) { clearInterval(avResyncTimer); avResyncTimer = null; }
-  clearPendingAVResync();
-}
-
-function clearPendingAVResync() {
-  avResyncPending = false;
-  if (avResyncNudgeTimer) {
-    clearTimeout(avResyncNudgeTimer);
-    avResyncNudgeTimer = null;
-  }
-}
-
-function scheduleAVResyncNudge(delay = AV_RESYNC_DEFER_MS, force = false) {
-  if (!force && !avResyncPending) return;
-  if (avResyncNudgeTimer) clearTimeout(avResyncNudgeTimer);
-  avResyncNudgeTimer = setTimeout(() => {
-    avResyncNudgeTimer = null;
-    if (!force && !avResyncPending) return;
-    if (nudgePlaybackForResync()) avResyncPending = false;
-  }, delay);
-}
-
-function handlePlaybackReady() {
-  clearPlaybackBusyState();
-  scheduleAVResyncNudge();
-}
-
-function nudgePlaybackForResync() {
-  if (!isLive || !player || video.paused || video.seeking) return false;
-  if (dragging || reconnecting || stallRecovering || waitingSince) return false;
-  if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) return false;
-  try {
-    const sr = player.seekRange();
-    if (video.currentTime < sr.start || video.currentTime > sr.end) return false;
-    const safeEnd = Math.max(sr.start, sr.end - 0.1);
-    const target = Math.max(sr.start, Math.min(safeEnd, video.currentTime + 0.001));
-    if (target <= video.currentTime) return false;
-    video.currentTime = target;
-    return true;
-  } catch (err) {
-    console.warn('[av resync nudge failed]', err);
-    return false;
-  }
-}
-
-function clearInitialResync() {
-  if (!initialResyncCleanup) return;
-  initialResyncCleanup();
-  initialResyncCleanup = null;
-}
-
-// Force a one-shot micro-seek on the first `playing` event after a load.
-// After that, periodic resyncs are deferred until a natural playback-ready point
-// or background tab so smooth playback is not interrupted every 5 minutes.
-function scheduleInitialResync() {
-  clearInitialResync();
-  let timeoutId = null;
-  const onPlaying = () => {
-    timeoutId = setTimeout(() => {
-      initialResyncCleanup = null;
-      scheduleAVResyncNudge(0, true);
-    }, AV_RESYNC_DEFER_MS);
-    initialResyncCleanup = () => {
-      if (timeoutId !== null) clearTimeout(timeoutId);
-    };
-  };
-  video.addEventListener('playing', onPlaying, { once: true });
-  initialResyncCleanup = () => {
-    video.removeEventListener('playing', onPlaying);
-  };
-}
-
-function clearWaitingState() {
-  waitingSince = 0;
-  mediaWaiting = false;
-  refreshSpinner();
-}
-
-function clearPlaybackBusyState() {
-  shakaBuffering = false;
-  clearWaitingState();
-}
-
-function markWaiting() {
-  if (video.paused || dragging || reconnecting || stallRecovering) {
-    refreshSpinner();
-    return;
-  }
-  if (!waitingSince) waitingSince = Date.now();
-  refreshSpinner();
-}
-
-function refreshSpinner() {
-  const busy = mediaWaiting || shakaBuffering || waitingSince;
-  const visible = !!busy && !video.paused && !video.ended && !dragging && !errorBox.classList.contains('show');
-  spinner.classList.toggle('show', visible);
-}
-
-function setMediaWaiting(active) {
-  mediaWaiting = active;
-  if (active) {
-    markWaiting();
-  } else {
-    clearWaitingState();
-  }
-}
-
-function setShakaBuffering(active) {
-  shakaBuffering = active;
-  if (active) {
-    markWaiting();
-  } else {
-    if (!mediaWaiting) waitingSince = 0;
-    refreshSpinner();
-  }
-}
-
-function handleShakaBuffering(e) {
-  setShakaBuffering(!!(e.buffering ?? e.detail?.buffering));
-}
-
-function handleTimeUpdate() {
-  if (!video.paused && !video.seeking && video.currentTime > lastPlaybackTime + 0.05) {
-    clearPlaybackBusyState();
-  }
-  lastPlaybackTime = video.currentTime;
-  refreshProgress();
-}
-
-function startStallWatchdog() {
-  stopStallWatchdog();
-  stallWatchTimer = setInterval(() => {
-    if (!waitingSince || !player || reconnecting || stallRecovering) return;
-    if (video.paused || video.seeking || dragging) return;
-    if (Date.now() - waitingSince < STALL_WAIT_MS) return;
-    recoverPlaybackStall();
-  }, STALL_WATCH_MS);
-}
-
-function stopStallWatchdog() {
-  if (stallWatchTimer) {
-    clearInterval(stallWatchTimer);
-    stallWatchTimer = null;
-  }
-  clearWaitingState();
-  stallRecovering = false;
-}
-
-async function recoverPlaybackStall() {
-  if (stallRecovering || reconnecting || !player) return;
-  stallRecovering = true;
-  try {
-    isLive = playerIsLive();
-    if (isLive) {
-      const opts = liveRecoveryOptions();
-      if (opts.seekToLiveEdge) {
-        let target;
-        try {
-          target = liveSeekTarget(player.seekRange().end);
-        } catch (err) {
-          console.warn('[stall live edge lookup failed]', err);
-          scheduleRecovery(opts, STALL_RECOVERY_MSG, true);
-          return;
-        }
-        if (Math.abs(video.currentTime - target) > 0.25) {
-          video.currentTime = target;
-          syncLiveRateToPosition();
-          waitingSince = Date.now();
-        } else {
-          scheduleRecovery(opts, STALL_RECOVERY_MSG, true);
-        }
-      } else {
-        clearWaitingState();
-        scheduleRecovery(opts, STALL_RECOVERY_MSG, true);
-      }
-    } else {
-      scheduleRecovery(currentRecoveryOptions(), STALL_RECOVERY_MSG, true);
-    }
-  } finally {
-    stallRecovering = false;
-  }
-}
-
 async function init() {
   shaka.polyfill.installAll();
   if (!shaka.Player.isBrowserSupported()) {
     showError('此瀏覽器不支援 Shaka Player，請改用 Chrome 或 Edge。', false);
     return;
   }
-
   restoreVolume();
   refreshVolumeUI();
   player = new shaka.Player();
-  await player.attach(video);
-  const drmServers = await loadDRMServers();
-  player.configure({
-    drm: {
-      servers: drmServers,
-    },
-    streaming: { bufferingGoal: 30, rebufferingGoal: 10 },
+  playback = createPlayback({
+    player, video, source: playbackSource, onEvent: renderPlaybackEvent,
+    context: { dragging: () => dragging, hidden: videoHidden },
   });
-
-  player.addEventListener('error',         e => handleShakaError(e.detail));
-  player.addEventListener('trackschanged',  handleTracksChanged);
-  player.addEventListener('adaptation',     refreshQualityActive);
+  player.addEventListener('trackschanged', handleTracksChanged);
+  player.addEventListener('adaptation', refreshQualityActive);
   player.addEventListener('variantchanged', refreshQualityActive);
-  player.addEventListener('buffering',      handleShakaBuffering);
-  // Only the manifest says whether a channel is live. Apply the matching
-  // streaming config before any media loads: under VOD's rebufferingGoal a live
-  // start waits for 10 s of buffer, seconds longer than it needs to.
-  player.addEventListener('manifestparsed', () => {
-    player.configure({ streaming: player.isLive() ? LIVE_STREAMING_CFG : VOD_STREAMING_CFG });
-  });
-
-  video.addEventListener('waiting',     () => {
-    setMediaWaiting(true);
-  });
-  video.addEventListener('stalled',     () => setMediaWaiting(true));
-  video.addEventListener('playing',     handlePlaybackReady);
-  video.addEventListener('canplay',     handlePlaybackReady);
-  video.addEventListener('play',        refreshPlayIcon);
-  video.addEventListener('pause',       () => { clearPlaybackBusyState(); refreshPlayIcon(); showControls(true); });
-  video.addEventListener('timeupdate',  handleTimeUpdate);
-  video.addEventListener('seeked',      handlePlaybackReady);
-  video.addEventListener('ended',       clearPlaybackBusyState);
   video.addEventListener('volumechange', refreshVolumeUI);
-  document.addEventListener('visibilitychange', () => {
-    if (videoHidden()) scheduleAVResyncNudge(0);
-  });
+  document.addEventListener('visibilitychange', () => playback.visibilityChanged());
   video.addEventListener('enterpictureinpicture', handleEnterPip);
   video.addEventListener('leavepictureinpicture', handleLeavePip);
   registerAutoPip();
-
-  initializing = true;
-  try {
-    await loadWithRetry();
-    pipReady = true;
-    refreshPipButton();
-    isLive = player.isLive();
-    applyModeConfig();
-    restoreSavedQuality();
-    restoreQualityPreference();
-    buildQualityMenu();
-    if (isLive) scheduleInitialResync();
-    hideError();
-    startModeWatcher();
-    startStallWatchdog();
-    const autoplay = await attemptAutoplay(true);
-    if (!autoplay.ok && !autoplay.blocked) {
-      scheduleRecovery(currentRecoveryOptions(), '播放啟動失敗，正在重試…', false);
-      return;
-    }
-    resetRecoveryState();
-  } catch (e) {
-    showError(`載入失敗: ${e.message || e}`);
-  } finally {
-    initializing = false;
-  }
+  await playback.start();
 }
 
 // ── Auto-hide controls + cursor ───────────────────────────────────────────
@@ -1332,7 +850,8 @@ wrap.addEventListener('touchstart', () => showControls(false), { passive: true }
 // ── Play / Pause ──────────────────────────────────────────────────────────
 async function togglePlay() {
   if (video.paused) {
-    const result = await attemptAutoplay(true);
+    if (!playback) return;
+    const result = await playback.play(true);
     if (result.ok) showCenterIcon('play');
   } else {
     video.pause();
@@ -1385,24 +904,10 @@ function handleSurfaceClick(e) {
 wrap.addEventListener('click', handleSurfaceClick);
 
 // ── Seek ──────────────────────────────────────────────────────────────────
-function liveSeekTarget(target) {
-  const sr = player.seekRange();
-  const edgeGuard = Math.min(0.5, Math.max(0.1, sr.end - sr.start));
-  const liveEnd = Math.max(sr.start, sr.end - edgeGuard);
-  return Math.max(sr.start, Math.min(liveEnd, target));
-}
-
 function seek(delta) {
+  if (!playback) return;
   try {
-    clearWaitingState();
-    if (isLive) {
-      if (!player) return;
-      video.currentTime = liveSeekTarget(video.currentTime + delta);
-    } else {
-      const duration = Number.isFinite(video.duration) ? video.duration : 0;
-      video.currentTime = Math.max(0, Math.min(duration, video.currentTime + delta));
-    }
-    syncLiveRateToPosition();
+    playback.seek(video.currentTime + delta);
     showToast(delta < 0 ? `◀ ${Math.abs(delta)}s` : `${delta}s ▶`);
   } catch (err) {
     console.warn('[seek failed]', err);
@@ -1446,8 +951,7 @@ btnLive.addEventListener('click', () => {
   if (!isLive || !player || !btnLive.classList.contains('behind')) return;
   try {
     const sr = player.seekRange();
-    video.currentTime = liveSeekTarget(sr.end);
-    syncLiveRateToPosition();
+    playback.seek(sr.end);
     showControls(false);
   } catch (_) {}
 });
@@ -1569,25 +1073,24 @@ function fmt(s) {
 function seekFromPointer(clientX) {
   const point = progressPoint(clientX);
   if (!point) return;
-  clearWaitingState();
+  if (!playback) return;
   const { pct } = point;
   if (isLive) {
     if (!player) return;
     try {
       const sr = player.seekRange();
-      video.currentTime = liveSeekTarget(sr.start + pct * (sr.end - sr.start));
+      playback.seek(sr.start + pct * (sr.end - sr.start));
     } catch (err) {
       console.warn('[progress seek failed]', err);
       return;
     }
   } else {
     const duration = Number.isFinite(video.duration) ? video.duration : 0;
-    video.currentTime = pct * duration;
+    playback.seek(pct * duration);
   }
   progFill.style.width = `${pct * 100}%`;
   progThumb.style.left = `${pct * 100}%`;
   updateProgressTooltip(clientX);
-  syncLiveRateToPosition();
 }
 
 // rAF-throttled seek during drag to avoid setting currentTime per mousemove
@@ -1607,7 +1110,6 @@ function scheduleSeek(x) {
 
 function beginProgressDrag(pointerId, clientX) {
   dragging = true;
-  clearWaitingState();
   activePointerId = pointerId;
   progWrap.classList.add('dragging');
   updateProgressTooltip(clientX);
@@ -1736,37 +1238,6 @@ document.addEventListener('click', e => {
 
 function setUnmuteHintVisible(visible) {
   unmuteHint.hidden = !visible;
-}
-
-async function attemptAutoplay(showHint) {
-  try {
-    await video.play();
-    setStartOverlayVisible(false);
-    return { ok: true, blocked: false, err: null };
-  } catch (err) {
-    const blocked = err && err.name === 'NotAllowedError';
-    clearWaitingState();
-    // Browsers that block autoplay with sound usually allow it muted. Start
-    // muted and offer the sound back rather than wait for a click to start.
-    if (blocked && showHint && !video.muted) {
-      video.muted = true;
-      try {
-        await video.play();
-        setStartOverlayVisible(false);
-        setUnmuteHintVisible(true);
-        return { ok: true, blocked: false, err: null };
-      } catch (_) {
-        video.muted = false;
-      }
-    }
-    if (blocked && showHint) {
-      showControls(true);
-      setStartOverlayVisible(true);
-    }
-    console.warn('[autoplay failed]', err);
-    refreshPlayIcon();
-    return { ok: false, blocked, err };
-  }
 }
 
 function listKey(value) {
@@ -1909,7 +1380,7 @@ function buildQualityMenu() {
     abrEnabled = true;
     pinnedHeight = null;
     saveQuality();
-    if (player && !reconnecting) {
+    if (player && playbackState.phase !== 'recovering') {
       try {
         player.configure({ abr: { enabled: true } });
       } catch (err) {
@@ -1928,7 +1399,7 @@ function buildQualityMenu() {
       abrEnabled = false;
       pinnedHeight = t.height;
       saveQuality();
-      if (player && !reconnecting) {
+      if (player && playbackState.phase !== 'recovering') {
         try {
           const currentTracks = player.getVariantTracks();
           const target = bestTrackForHeight(currentTracks, t.height) || t;
@@ -2166,7 +1637,7 @@ function handleLeavePip() {
   wrap.classList.remove('pip');
   refreshPipButton();
   showControls(false);
-  if (document.hidden) scheduleAVResyncNudge(0);
+  if (document.hidden && playback) playback.visibilityChanged();
 }
 
 // Media Session actions show up as buttons in the PiP window. Seeking only
@@ -2231,7 +1702,7 @@ document.addEventListener('keydown', e => {
       setQualityMenuOpen(false); break;
     default:
       if (!isLive && e.key >= '0' && e.key <= '9') {
-        video.currentTime = (video.duration || 0) * (parseInt(e.key) / 10);
+        if (playback) playback.seek((video.duration || 0) * (parseInt(e.key) / 10));
         showControls(false);
       }
   }
@@ -2243,11 +1714,7 @@ function showError(msg, retry = true) {
   errorMsg.textContent = msg;
   btnRetry.hidden = !retry;
   errorBox.classList.add('show');
-  shakaBuffering = false;
   setStartOverlayVisible(false);
-  clearWaitingState();
-  resetRecoveryState();
-  stallRecovering = false;
 }
 
 // A reload starts over from init: every error shown here either stopped init
@@ -2258,13 +1725,7 @@ document.addEventListener('DOMContentLoaded', init);
 
 // ── Cleanup on page unload (mobile-Safari friendly) ──────────────────────
 window.addEventListener('pagehide', () => {
-  stopModeWatcher();
-  stopLiveProgressTicker();
-  stopAVResyncWatchdog();
-  stopStallWatchdog();
-  clearInitialResync();
-  clearRecoveryTimer();
-  if (player) player.destroy().catch(() => {});
+  if (playback) playback.dispose();
 });
 
 // pagehide also fires when the page enters the back/forward cache, so a page

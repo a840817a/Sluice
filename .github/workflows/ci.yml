@@ -32,7 +32,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # The same target developers run. Two copies of these four commands would
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      # The same target developers run. Two copies of these commands would
       # drift, and the copy that drifts is always the one nobody runs locally.
       - name: make verify
         run: make verify

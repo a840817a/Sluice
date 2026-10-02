@@ -34,11 +34,13 @@ build:
 	go build ./...
 
 test:
+	node --test internal/web/*_test.cjs
 	go test -race ./...
 
-# The four-check pass. gofmt is checked, not applied: a target that rewrites
-# files cannot also be the thing CI fails on.
+# The Go checks and front-end regressions. gofmt is checked, not applied: a
+# target that rewrites files cannot also be the thing CI fails on.
 verify:
+	node --test internal/web/*_test.cjs
 	go build ./...
 	go vet ./...
 	@out=`gofmt -l .`; \
