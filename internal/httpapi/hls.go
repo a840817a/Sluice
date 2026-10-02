@@ -148,32 +148,23 @@ func windowSegments(depthSec float64, targetDur int, keepAll bool) int {
 // in timeline order (Serving.OrderPeriods). Merging them into one list would
 // let two periods' identical segment numbers collide (ADR-0005).
 func (s *Server) periodSegmentsForRep(sv ch.Serving, channelID, repID string) []hlsout.PeriodSegments {
-	byPeriod := map[string]*hlsout.PeriodSegments{}
-	var ids []string
-	sv.Index.ForEachRep(func(ref index.RepRef, rep *index.RepresentationState) {
-		if ref.RepID != repID {
-			return
-		}
-		p, ok := byPeriod[ref.PeriodID]
-		if !ok {
-			p = &hlsout.PeriodSegments{PeriodID: ref.PeriodID}
-			byPeriod[ref.PeriodID] = p
-			ids = append(ids, ref.PeriodID)
-		}
-		p.Segments = append(p.Segments, rep.Published()...)
-		if first, last, ok := rep.SegNoRange(); ok {
-			p.First, p.Last, p.RangeKnown = first, last, true
-		}
-		p.Discontinuities = append(p.Discontinuities, rep.Discontinuities()...)
-	})
-
-	out := make([]hlsout.PeriodSegments, 0, len(ids))
+	reads := sv.Index.RepresentationPeriods(repID)
+	byPeriod := make(map[string]index.PeriodRead, len(reads))
+	ids := make([]string, 0, len(reads))
+	for _, p := range reads {
+		byPeriod[p.PeriodID] = p
+		ids = append(ids, p.PeriodID)
+	}
+	out := make([]hlsout.PeriodSegments, 0, len(reads))
 	for _, id := range sv.OrderPeriods(ids) {
-		p := *byPeriod[id]
-		// fMP4 representations need their initialization section advertised
-		// via EXT-X-MAP; a non-empty init path is exactly the fMP4 signal, and
-		// is empty for self-contained TS/WebVTT segments regardless of source.
-		if publishedInitPath(sv.Index, id, repID) != "" {
+		r := byPeriod[id]
+		p := hlsout.PeriodSegments{
+			PeriodID: id, Segments: r.Segments,
+			First: r.First, Last: r.Last, RangeKnown: r.RangeKnown,
+			Discontinuities: r.Discontinuities,
+		}
+		// A non-empty init path identifies fMP4; TS/WebVTT are self-contained.
+		if r.InitPath != "" {
 			p.InitURI = gwurl.InitURL(s.cfg.Server.BaseURL, channelID, id, repID)
 		}
 		out = append(out, p)

@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/a840817a/sluice/internal/index"
 	"github.com/a840817a/sluice/internal/pathseg"
 	"github.com/a840817a/sluice/internal/store"
 	"github.com/go-chi/chi/v5"
@@ -43,7 +42,7 @@ func (s *Server) handleSegment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Look up Published path in the index (VOD mode uses full-history index).
-	if path := publishedSegPath(rt.ActiveIndex(), periodID, repID, segNo); path != "" {
+	if path := rt.ActiveIndex().PublishedSegmentPath(periodID, repID, segNo); path != "" {
 		serveFile(w, r, path, segmentContentType(path))
 		return
 	}
@@ -69,7 +68,7 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if path := publishedInitPath(rt.ActiveIndex(), periodID, repID); path != "" {
+	if path := rt.ActiveIndex().InitPath(periodID, repID); path != "" {
 		serveFile(w, r, path, "video/mp4")
 		return
 	}
@@ -114,54 +113,4 @@ func segmentContentType(path string) string {
 	default:
 		return "video/mp4"
 	}
-}
-
-// publishedSegPath returns the on-disk path of the Published segment segNo of
-// repID in periodID, or "" if there is none. The period is part of the key:
-// after an origin reset two periods can hold the same representation and
-// segment number (ADR-0005).
-func publishedSegPath(ci *index.ChannelIndex, periodID, repID string, segNo uint64) string {
-	var path string
-	ci.ForEachRepUntil(func(ref index.RepRef, rep *index.RepresentationState) bool {
-		if ref.PeriodID != periodID || ref.RepID != repID {
-			return true
-		}
-		for _, seg := range rep.Published() {
-			if seg.SegNo == segNo {
-				path = seg.Path
-				return false
-			}
-		}
-		return true
-	})
-	return path
-}
-
-// publishedInitPath returns the InitPath from any Published segment of repID in
-// periodID. Falls back to Committed if no Published segment exists yet (covers
-// init-only requests). An origin reset may change the init section, so the
-// period is part of the key here too.
-func publishedInitPath(ci *index.ChannelIndex, periodID, repID string) string {
-	var published, committed string
-	ci.ForEachRepUntil(func(ref index.RepRef, rep *index.RepresentationState) bool {
-		if ref.PeriodID != periodID || ref.RepID != repID {
-			return true
-		}
-		for _, seg := range rep.Published() {
-			if seg.InitPath != "" {
-				published = seg.InitPath
-				return false
-			}
-		}
-		for _, seg := range rep.Committed() {
-			if seg.InitPath != "" {
-				committed = seg.InitPath
-			}
-		}
-		return true
-	})
-	if published != "" {
-		return published
-	}
-	return committed
 }

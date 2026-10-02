@@ -5,24 +5,14 @@ import (
 	"time"
 )
 
-// Snapshot is an immutable read model of one channel index, captured in a
-// single traversal.
+// Snapshot is a detached read model of one channel index, captured in a single
+// traversal. Each representation's published segments are copied under its own
+// lock; publication and expiry can proceed in other representations during the
+// traversal, so this is not a channel-wide single instant.
 //
-// It exists because manifest generation reads many representations and has to
-// describe one coherent presentation. Reading them one at a time from the live
-// index — each call taking its own lock — lets two representations in the same
-// manifest come from two different moments, which surfaces as timelines that do
-// not line up. Taking everything at once removes the question.
-//
-// It holds published segments only, which is all the output side reads: a
-// committed-but-unpublished segment has not passed the A/V barrier and must not
-// be advertised. The slices are the ones RingBuffer.Snapshot already allocates
-// per call, so a Snapshot owns its data and nothing aliases live state.
-//
-// Segments come out sorted ascending by SegNo. Ingest fetches the live edge
-// first, so ring-buffer order is roughly reversed, and every consumer had to
-// re-sort. Sorting once here means consumers share one slice without each
-// mutating it under the others.
+// It contains published segments only, sorted ascending by SegNo. A committed
+// segment has not passed the A/V barrier and must not be advertised. The snapshot
+// owns its segment slices and IV bytes; nothing aliases live state.
 type Snapshot struct {
 	reps map[repKey]snapRep
 	// keys is sorted, so iteration order is stable across snapshots of the same
@@ -46,10 +36,7 @@ type snapRep struct {
 }
 
 // Snapshot copies every representation's published segments in one walk.
-//
-// It is built on ForEachRep, which holds the channel lock for the whole
-// traversal, so the result is a genuine single instant rather than a sequence
-// of independent reads.
+// ForEachRep keeps the structure stable; read locks each representation's data.
 func (ci *ChannelIndex) Snapshot() Snapshot {
 	s := Snapshot{
 		reps:    make(map[repKey]snapRep),
@@ -59,10 +46,7 @@ func (ci *ChannelIndex) Snapshot() Snapshot {
 
 	ci.ForEachRep(func(ref RepRef, rep *RepresentationState) {
 		k := repKey{periodID: ref.PeriodID, asID: ref.ASID, repID: ref.RepID}
-		published := rep.Published()
-		sort.Slice(published, func(i, j int) bool {
-			return published[i].SegNo < published[j].SegNo
-		})
+		published := rep.read().published
 		s.reps[k] = snapRep{ref: ref, published: published}
 		s.keys = append(s.keys, k)
 		periods[ref.PeriodID] = struct{}{}
