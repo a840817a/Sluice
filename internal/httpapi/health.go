@@ -51,13 +51,10 @@ func (s *Server) handleChannelHealth(w http.ResponseWriter, r *http.Request) {
 		Periods        map[string]*periodHealth `json:"periods,omitempty"`
 	}
 
-	mpdURL := gwurl.ManifestPath(channelID)
-	m3u8URL := gwurl.MasterPath(channelID)
-
 	resp := healthResp{
 		ChannelID:   channelID,
 		SourceType:  ch.SourceDASH,
-		ManifestURL: mpdURL,
+		ManifestURL: gwurl.ManifestPath(channelID),
 		DRM:         drmHealth{PlayReady: true, Widevine: true},
 	}
 
@@ -69,19 +66,9 @@ func (s *Server) handleChannelHealth(w http.ResponseWriter, r *http.Request) {
 		resp.Title = chCfg.Title
 		if chCfg.IsHLS() {
 			resp.SourceType = ch.SourceHLS
-			resp.ManifestURL = m3u8URL
-			// An fMP4 HLS channel additionally serves a DASH manifest.
-			//
-			// Both predicates are needed here. ServesDASH alone is true for a
-			// DASH runtime too, and this branch is entered on the *config*
-			// saying HLS, which does not by itself guarantee an HLS runtime.
-			if sv.IsHLSSource && sv.Tracks.ServesDASH {
-				resp.AltManifestURL = mpdURL
-			}
-		} else if sv.Tracks.ServesHLS && sv.Tracks.Ready {
-			// A clear DASH channel additionally serves HLS.
-			resp.AltManifestURL = m3u8URL
 		}
+		where := s.presentations.Offerings(sv.Channel)
+		resp.ManifestURL, resp.AltManifestURL = where.Native, where.Alt
 		resp.DRM = drmHealth{
 			PlayReady: chCfg.PlayReadyEnabled(),
 			Widevine:  chCfg.WidevineEnabled(),

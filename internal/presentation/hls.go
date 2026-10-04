@@ -10,11 +10,8 @@ import (
 
 // Master renders ch's HLS multivariant playlist.
 func (g *Generator) Master(ch Channel) ([]byte, error) {
-	if !ch.Tracks.ServesHLS {
-		return nil, notServed("channel cannot be served as HLS (encrypted or unsupported)")
-	}
-	if !ch.Tracks.Ready {
-		return nil, notReady("playlist not yet available")
+	if err := servesMaster(ch); err != nil {
+		return nil, err
 	}
 	return hlsout.Master(ch.Tracks.Variants, hlsout.MasterOptions{
 		GatewayBaseURL:      g.baseURL,

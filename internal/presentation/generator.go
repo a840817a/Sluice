@@ -75,8 +75,8 @@ func (g *Generator) DASHNow(ch Channel) ([]byte, error) {
 // fMP4 HLS source has one only once a segment is published, because its MPD is
 // synthesized from the discovered variants and the index (ADR-0002).
 func (g *Generator) DASH(ch Channel, snap index.Snapshot) ([]byte, error) {
-	if !ch.Tracks.ServesDASH {
-		return nil, notServed("channel has an MPEG-TS HLS source; use master.m3u8")
+	if err := servesDASH(ch); err != nil {
+		return nil, err
 	}
 	windowDepth := g.windowDepth
 	if ch.KeepAll {
