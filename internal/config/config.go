@@ -90,7 +90,9 @@ const (
 )
 
 type StoreConfig struct {
-	// segment 儲存根目錄，結構：{data_dir}/{channel}/periods/{period}/{type}/{segNo}.m4s
+	// DataDir is the root of stored media and channel state. A segment lives at
+	// {data_dir}/{channel}/periods/{period}/{type}_{as}/{rep}/{segNo}{ext}
+	// (store.RepLocation).
 	DataDir string      `yaml:"data_dir"`
 	Cleanup CleanupMode `yaml:"cleanup"` // default: "disabled"
 	// KeepAllSegments is per-channel only; populated by the channel manager from

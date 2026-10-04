@@ -50,7 +50,7 @@ func (m *Manager) checkpointVODMedia(rt *Runtime) []string {
 			}
 		})
 	}
-	base := filepath.Join(m.vodArtifactDir(rt.ID), "periods")
+	base := store.PeriodsDir(m.gwCfg.Store.DataDir, rt.ID)
 	if _, err := os.Stat(base); err != nil {
 		if os.IsNotExist(err) {
 			return nil // no media was ever stored for this channel

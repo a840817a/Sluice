@@ -6,9 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
-	"github.com/a840817a/sluice/internal/pathseg"
 	"github.com/a840817a/sluice/internal/store"
 	"github.com/a840817a/sluice/internal/validate"
 )
@@ -24,17 +22,8 @@ const rebuildRingCapacity = 120
 // SegmentState entries for every .m4s file found, then runs the A/V barrier
 // so that only properly time-aligned segments are published.
 //
-// Expected layout (matching store/layout.go):
-//
-//	{dataDir}/{channelID}/periods/{periodDir}/{mediaType}_{asID}/{repDir}/{segNo}.m4s
-//	{dataDir}/{channelID}/periods/{periodDir}/{mediaType}_{asID}/{repDir}/init.mp4
-//
-// The {mediaType}_{asID} directory name encodes both the media type and the
-// AdaptationSet positional ID with a single underscore separator, e.g. "video_0",
-// "audio_1", "audio_2".  strings.LastIndex is used to split on the separator so
-// that media type names that cannot contain underscores ("video", "audio", "text")
-// are always handled correctly. {periodDir} and {repDir} are the period and
-// representation IDs as the store encodes them (ADR-0006).
+// The directories come from store.ScanChannel, which reads back the layout
+// store.RepLocation writes, IDs and all (ADR-0006).
 //
 // Each .m4s file is opened (seek-based, not fully loaded) to read
 // BaseMediaDecodeTime from the tfdt box.  EndPTS is derived from the next
@@ -66,57 +55,21 @@ func RebuildFromDiskWithCapacity(ci *ChannelIndex, dataDir, channelID string, ca
 }
 
 func rebuildFromDisk(ci *ChannelIndex, dataDir, channelID string, capacity int) error {
-	base := filepath.Join(dataDir, channelID, "periods")
-	periodEntries, err := os.ReadDir(base)
+	periods, err := store.ScanChannel(dataDir, channelID)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return err
 	}
 
-	for _, periodEntry := range periodEntries {
-		if !periodEntry.IsDir() {
-			continue
-		}
-		periodID := idFromDir(periodEntry.Name())
-		ps := ci.Period(periodID)
-
-		// Scan {mediaType}_{asID} directories.
-		periodPath := filepath.Join(base, periodEntry.Name())
-		asEntries, err := os.ReadDir(periodPath)
-		if err != nil {
-			continue
-		}
-		for _, asEntry := range asEntries {
-			if !asEntry.IsDir() {
-				continue
-			}
-			// Split "video_0" → mediaType="video", asID="0"
-			asDirName := asEntry.Name()
-			sep := strings.LastIndex(asDirName, "_")
-			if sep < 0 {
-				continue // unexpected directory name, skip
-			}
-			mediaType := asDirName[:sep]
-			asID := asDirName[sep+1:]
-
-			as := ps.AS(asID)
-			as.SetMediaType(mediaType)
-
-			asPath := filepath.Join(periodPath, asDirName)
-			repEntries, err := os.ReadDir(asPath)
-			if err != nil {
-				continue
-			}
-			for _, repEntry := range repEntries {
-				if !repEntry.IsDir() {
-					continue
-				}
-				repID := idFromDir(repEntry.Name())
+	for _, pd := range periods {
+		ps := ci.Period(pd.ID)
+		for _, ad := range pd.AdaptationSets {
+			as := ps.AS(ad.ID)
+			as.SetMediaType(ad.MediaType)
+			for _, loc := range ad.Reps {
+				repID := loc.RepID
 				rep := as.Rep(repID, capacity)
-				repPath := filepath.Join(asPath, repEntry.Name())
-				initPath := filepath.Join(repPath, store.InitFileName)
+				repPath := loc.Dir()
+				initPath := loc.InitPath()
 
 				// Read timescale from the init segment (best-effort).
 				timescale, _ := validate.ReadInitTimescale(initPath)
@@ -124,8 +77,7 @@ func rebuildFromDisk(ci *ChannelIndex, dataDir, channelID string, capacity int) 
 				// MPEG-TS segments carry no tfdt box, so their timing is not
 				// recoverable from the files. It comes from the sidecar the
 				// processor writes on commit.
-				sidecar, err := store.ReadSegmentMeta(
-					filepath.Join(repPath, store.SidecarFileName))
+				sidecar, err := store.ReadSegmentMeta(loc.SidecarPath())
 				if err != nil {
 					slog.Warn("segment metadata read failed", "rep", repID, "err", err)
 				}
@@ -267,15 +219,4 @@ func rebuildFromDisk(ci *ChannelIndex, dataDir, channelID string, capacity int) 
 		ci.publishCommitted(ps)
 	}
 	return nil
-}
-
-// idFromDir returns the period or representation ID a directory stands for.
-// A name the store's encoding never produces is one written before the
-// encoding existed (ADR-0006), when the raw ID was the directory name; it is
-// read back as that ID so a channel stored then still rebuilds.
-func idFromDir(name string) string {
-	if id, ok := pathseg.Decode(name); ok {
-		return id
-	}
-	return name
 }
