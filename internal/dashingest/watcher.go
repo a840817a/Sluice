@@ -42,7 +42,12 @@ type Watcher struct {
 	lastMPDBytes []byte // raw XML bytes of the most recently fetched MPD
 	// lastKnown tracks the highest seen segment number per representation key.
 	lastKnown map[string]uint64
-	client    *http.Client
+	// generations maps an origin period ID to the restart generation of the
+	// gateway period its segments currently go to (ADR-0007).
+	generations map[string]int
+	// lastAST is the availabilityStartTime of the last dynamic MPD processed.
+	lastAST time.Time
+	client  *http.Client
 }
 
 // SetProgress attaches the channel's progress counters. Must be called before Run.
@@ -60,13 +65,14 @@ func NewWatcher(cfg config.Config, channelID string, headers fetch.Headers, ci *
 	lk, _ := snapshotTrackedSegments(channelID, ci)
 
 	return &Watcher{
-		cfg:       cfg,
-		ci:        ci,
-		broker:    broker,
-		channelID: channelID,
-		headers:   headers,
-		lastKnown: lk,
-		client:    &http.Client{Timeout: 10 * time.Second},
+		cfg:         cfg,
+		ci:          ci,
+		broker:      broker,
+		channelID:   channelID,
+		headers:     headers,
+		lastKnown:   lk,
+		generations: make(map[string]int),
+		client:      &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
@@ -183,6 +189,9 @@ func (w *Watcher) ParsedMPDBytes() []byte {
 // even though the watcher never runs.
 func (w *Watcher) SetParsedMPD(p *imdp.ParsedMPD, raw []byte) {
 	w.mu.Lock()
+	for _, period := range p.Periods {
+		period.ID = index.RestartPeriodID(period.ID, w.generation(period.ID))
+	}
 	w.lastMPD = p
 	w.lastMPDBytes = raw
 	w.mu.Unlock()
@@ -220,6 +229,7 @@ func (w *Watcher) processMPD(ctx context.Context, p *imdp.ParsedMPD) {
 	presentMax, knownSegs := snapshotTrackedSegments(w.channelID, w.ci)
 
 	w.mu.Lock()
+	w.adoptPeriods(p, presentMax)
 	w.lastMPD = p
 	snapshot := make(map[string]uint64, len(w.lastKnown))
 	for k, v := range w.lastKnown {
@@ -286,6 +296,113 @@ func (w *Watcher) processMPD(ctx context.Context, p *imdp.ParsedMPD) {
 	for _, period := range p.Periods {
 		w.ci.Period(period.ID)
 	}
+}
+
+// adoptPeriods renames p's periods to the gateway periods their segments go
+// to, starting a new one for each period the origin has restarted (ADR-0007).
+//
+// A gateway period's identity is the origin's Period ID only until the origin
+// restarts its numbering inside that Period. Left under the same ID, the
+// restarted stream's segments land in the period that holds the old ones:
+// lower numbers are taken for holes and backfilled into it, higher ones are
+// appended after it with timestamps that run backwards, and its playlists
+// splice the two streams together.
+//
+// A dynamic origin period has restarted when any of its representations
+// lists a highest segment number below one the gateway already holds or has
+// queued for it — a live edge never moves backwards — or when the MPD's
+// availabilityStartTime changed since the last MPD this watcher processed.
+// The second catches a restart that kept its numbering, but only while the
+// gateway runs: the previous value is not persisted.
+//
+// Caller holds w.mu.
+func (w *Watcher) adoptPeriods(p *imdp.ParsedMPD, presentMax map[string]uint64) {
+	dynamic := p.Type == imdp.PresentationDynamic
+	astChanged := dynamic && !w.lastAST.IsZero() && !p.AvailabilityStartTime.Equal(w.lastAST)
+	if dynamic {
+		w.lastAST = p.AvailabilityStartTime
+	}
+	for _, period := range p.Periods {
+		origin := period.ID
+		gen := w.generation(origin)
+		id := index.RestartPeriodID(origin, gen)
+		if dynamic && w.restarted(p, period, id, presentMax, astChanged) {
+			gen++
+			w.generations[origin] = gen
+			id = index.RestartPeriodID(origin, gen)
+			slog.Info("origin restarted its numbering; starting a new period",
+				"channel", w.channelID, "origin_period", origin, "period", id)
+		}
+		period.ID = id
+	}
+}
+
+// generation returns the restart generation origin's segments currently go
+// to. The first time an origin period is seen it is the latest generation the
+// index already holds, so a gateway restart resumes the period it left off in
+// rather than writing a restarted stream back into the old one.
+//
+// Caller holds w.mu.
+func (w *Watcher) generation(origin string) int {
+	if gen, ok := w.generations[origin]; ok {
+		return gen
+	}
+	gen := 0
+	if w.ci != nil {
+		for _, id := range w.ci.PeriodIDs() {
+			if g, ok := index.RestartGeneration(id, origin); ok && g > gen {
+				gen = g
+			}
+		}
+	}
+	if w.generations == nil {
+		w.generations = make(map[string]int)
+	}
+	w.generations[origin] = gen
+	return gen
+}
+
+// restarted reports whether the origin has restarted period since the
+// gateway started gateway period periodID for it: the gateway holds or has
+// queued segments there, and either the MPD's availabilityStartTime changed
+// or a representation lists a highest segment number below the highest the
+// gateway holds or has queued for it.
+func (w *Watcher) restarted(p *imdp.ParsedMPD, period *imdp.ParsedPeriod, periodID string, presentMax map[string]uint64, astChanged bool) bool {
+	holds, movedBack := false, false
+	for _, as := range period.AdaptationSets {
+		for _, rep := range as.Representations {
+			k := repKey(w.channelID, periodID, as.ID, rep.ID)
+			held := max(presentMax[k], w.lastKnown[k])
+			if held == 0 {
+				continue
+			}
+			holds = true
+			if listed, ok := highestListed(p, period, as, rep); ok && listed < held {
+				movedBack = true
+			}
+		}
+	}
+	return holds && (astChanged || movedBack)
+}
+
+// highestListed returns the highest segment number the MPD lists for rep, for
+// the addressing schemes that number their segments.
+func highestListed(p *imdp.ParsedMPD, period *imdp.ParsedPeriod, as *imdp.ParsedAdaptationSet, rep *imdp.ParsedRepresentation) (uint64, bool) {
+	if tmpl := rep.EffectiveTemplate(as); tmpl != nil {
+		segs, _ := segmentNumbers(p, period, tmpl)
+		if len(segs) == 0 {
+			return 0, false
+		}
+		top := segs[0].segNo
+		for _, s := range segs[1:] {
+			top = max(top, s.segNo)
+		}
+		return top, true
+	}
+	if sl := rep.EffectiveSegmentList(as); sl != nil && len(sl.Segments) > 0 {
+		return sl.StartNumber + uint64(len(sl.Segments)) - 1, true
+	}
+	return 0, false
 }
 
 // discoverSegmentBaseTasks fetches sidx boxes for all SegmentBase representations
