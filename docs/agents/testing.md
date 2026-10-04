@@ -23,6 +23,16 @@ go test ./... -count=1 -json | grep '"Action":"pass"' \
 filter: package-level events have no test name and carry a timestamp, so
 without it every run reports phantom lost tests.
 
+To show a refactor leaves HTTP responses unchanged, tap the handlers rather
+than `NewRouter`: most httpapi tests build their own chi router, so a router
+hook sees a fraction of the requests. Insert a body-recording
+`ResponseWriter` at the top of each handler in an old worktree
+(`git worktree add`) and in the new tree, run the httpapi tests twice in each,
+normalise timestamps, origin ports and `/key/` IDs, and compare the union of
+each side's runs. Polling tests capture ingest mid-way, so two runs of the
+same code differ by about ten records; only a difference outside that noise
+counts.
+
 A regex rename also rewrites alias declarations and embedded-field selectors,
 and a blind `ingest.` → `dashingest.` replace turns `hlsingest.` into
 `hlsdashingest.`. Let `go build` list the fallout, and run gofmt: renames leave
