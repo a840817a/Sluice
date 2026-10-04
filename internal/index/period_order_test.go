@@ -17,12 +17,38 @@ func TestSnapshotOrdersNumericPeriodsNumerically(t *testing.T) {
 	}
 }
 
-// A DASH source's periods follow its MPD; any the MPD does not list follow,
-// numbers numerically.
+// A DASH source's periods follow its MPD. One the MPD no longer lists has
+// rolled off it, so it is older than every period listed and comes first;
+// rolled-off periods order among themselves numbers numerically.
 func TestOrderPeriodIDsFollowsTheDocument(t *testing.T) {
 	got := OrderPeriodIDs([]string{"late", "10", "early", "2", "orphan"}, []string{"early", "late"})
-	if want := []string{"early", "late", "2", "10", "orphan"}; !slices.Equal(got, want) {
+	if want := []string{"2", "10", "orphan", "early", "late"}; !slices.Equal(got, want) {
 		t.Errorf("OrderPeriodIDs = %v, want %v", got, want)
+	}
+}
+
+// A period an origin restart started follows the period it restarted, and a
+// later restart follows an earlier one, whether or not the MPD lists them.
+func TestOrderPeriodIDsPlacesRestartsAfterTheirPeriod(t *testing.T) {
+	ids := []string{"b", "a.r2", "a", "a.r1", "old.r1", "old", "a.r10"}
+	got := OrderPeriodIDs(ids, []string{"a", "b"})
+	if want := []string{"old", "old.r1", "a", "a.r1", "a.r2", "a.r10", "b"}; !slices.Equal(got, want) {
+		t.Errorf("OrderPeriodIDs = %v, want %v", got, want)
+	}
+	// Not restart IDs: no number, a zero, a padded number.
+	for _, id := range []string{"a.r", "a.r0", "a.r01", "a.rx"} {
+		if base, gen := splitRestartPeriodID(id); base != id || gen != 0 {
+			t.Errorf("splitRestartPeriodID(%q) = %q, %d; want itself, 0", id, base, gen)
+		}
+	}
+	if id := RestartPeriodID("a", 3); id != "a.r3" {
+		t.Errorf("RestartPeriodID = %q", id)
+	}
+	if gen, ok := RestartGeneration("a.r3", "a"); !ok || gen != 3 {
+		t.Errorf("RestartGeneration(a.r3, a) = %d, %v", gen, ok)
+	}
+	if _, ok := RestartGeneration("b.r1", "a"); ok {
+		t.Error("b.r1 counted as a restart of a")
 	}
 }
 
