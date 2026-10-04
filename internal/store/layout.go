@@ -62,11 +62,46 @@ func ParseSegmentFile(name string) (segNo uint64, ext string, ok bool) {
 	return segNo, ext, true
 }
 
+// periodsDirName is the directory under a channel's that holds its periods.
+const periodsDirName = "periods"
+
+// PeriodsDir is the directory that holds every period of a channel's stored
+// media.
+func PeriodsDir(dataDir, channelID string) string {
+	return filepath.Join(dataDir, channelID, periodsDirName)
+}
+
 // asDirName returns the directory name that combines mediaType and asID,
-// e.g. "video_0", "audio_1", "audio_2".  Using a compound name avoids
+// e.g. "video_0", "audio_1", "audio_2". Using a compound name avoids
 // ambiguity between asID ("0") and repID ("720p") when rebuilding from disk.
+//
+// The AdaptationSet ID is pathseg-encoded like the period and representation
+// IDs. Today's IDs are positional numbers, which the encoding leaves as they
+// are; encoding them anyway means the directory never depends on that.
 func asDirName(mediaType, asID string) string {
-	return mediaType + "_" + asID
+	return mediaType + "_" + pathseg.Encode(asID)
+}
+
+// parseASDirName splits an AdaptationSet directory name back into its media
+// type and ID. It splits at the first "_": a media type (video, audio, text)
+// never contains one, while an encoded ID can.
+func parseASDirName(name string) (mediaType, asID string, ok bool) {
+	mediaType, enc, ok := strings.Cut(name, "_")
+	if !ok {
+		return "", "", false
+	}
+	return mediaType, idFromDir(enc), true
+}
+
+// idFromDir returns the ID a directory name stands for. A name the encoding
+// never produces is one written before the encoding existed (ADR-0006), when
+// the raw ID was the directory name; it is read back as that ID so a channel
+// stored then still rebuilds.
+func idFromDir(name string) string {
+	if id, ok := pathseg.Decode(name); ok {
+		return id
+	}
+	return name
 }
 
 // RepLocation places one representation's files under the data directory: its
@@ -78,8 +113,8 @@ func asDirName(mediaType, asID string) string {
 // as a pathseg-encoded directory name (ADR-0006): an ID with no id attribute
 // behind it is empty and would otherwise vanish from the path, and one
 // containing "/" or ".." would otherwise place files outside the data
-// directory. IDs made of letters, digits, ".", "_" and "-" are unchanged, and
-// pathseg.Decode reads a name back.
+// directory. IDs made of letters, digits, ".", "_" and "-" are unchanged.
+// ScanChannel reads the locations back.
 type RepLocation struct {
 	DataDir, ChannelID, PeriodID, MediaType, ASID, RepID string
 }
@@ -87,9 +122,7 @@ type RepLocation struct {
 // Dir is the representation's directory.
 func (l RepLocation) Dir() string {
 	return filepath.Join(
-		l.DataDir,
-		l.ChannelID,
-		"periods",
+		PeriodsDir(l.DataDir, l.ChannelID),
 		pathseg.Encode(l.PeriodID),
 		asDirName(l.MediaType, l.ASID),
 		pathseg.Encode(l.RepID),
@@ -107,3 +140,76 @@ func (l RepLocation) InitPath() string { return filepath.Join(l.Dir(), InitFileN
 
 // SidecarPath is the path of the representation's segment metadata file.
 func (l RepLocation) SidecarPath() string { return filepath.Join(l.Dir(), SidecarFileName) }
+
+// PeriodDir is one stored period of a channel, as ScanChannel finds it.
+type PeriodDir struct {
+	ID             string
+	AdaptationSets []ASDir
+}
+
+// ASDir is one stored AdaptationSet of a period, as ScanChannel finds it.
+type ASDir struct {
+	ID, MediaType string
+	Reps          []RepLocation
+}
+
+// ScanChannel reads back the locations RepLocation placed under the data
+// directory: every period, AdaptationSet and representation directory of
+// channelID, with the IDs they were written under. A period or AdaptationSet
+// directory with nothing below it is still reported.
+//
+// A channel with no stored media has no periods directory, and gets nil. A
+// subdirectory that cannot be read, a plain file, and an AdaptationSet
+// directory whose name the layout never produces are skipped, so one damaged
+// directory does not hide the rest of the channel. Entries come in directory
+// name order.
+func ScanChannel(dataDir, channelID string) ([]PeriodDir, error) {
+	base := PeriodsDir(dataDir, channelID)
+	periodEntries, err := os.ReadDir(base)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var periods []PeriodDir
+	for _, pe := range periodEntries {
+		if !pe.IsDir() {
+			continue
+		}
+		period := PeriodDir{ID: idFromDir(pe.Name())}
+		periodPath := filepath.Join(base, pe.Name())
+		asEntries, err := os.ReadDir(periodPath)
+		if err != nil {
+			periods = append(periods, period)
+			continue
+		}
+		for _, ae := range asEntries {
+			if !ae.IsDir() {
+				continue
+			}
+			mediaType, asID, ok := parseASDirName(ae.Name())
+			if !ok {
+				continue
+			}
+			as := ASDir{ID: asID, MediaType: mediaType}
+			asPath := filepath.Join(periodPath, ae.Name())
+			repEntries, err := os.ReadDir(asPath)
+			if err == nil {
+				for _, re := range repEntries {
+					if !re.IsDir() {
+						continue
+					}
+					as.Reps = append(as.Reps, RepLocation{
+						DataDir: dataDir, ChannelID: channelID,
+						PeriodID: period.ID, MediaType: mediaType, ASID: asID,
+						RepID: idFromDir(re.Name()),
+					})
+				}
+			}
+			period.AdaptationSets = append(period.AdaptationSets, as)
+		}
+		periods = append(periods, period)
+	}
+	return periods, nil
+}
