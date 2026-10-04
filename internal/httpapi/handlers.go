@@ -53,7 +53,7 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 	// An HLS source is only serveable as DASH when its segments are fMP4;
 	// MPEG-TS would require remuxing, which this gateway deliberately does not
 	// do. Such channels are served through master.m3u8 instead.
-	if !sv.Presentation.ServesDASH {
+	if !sv.Tracks.ServesDASH {
 		http.Error(w, "channel has an MPEG-TS HLS source; use master.m3u8", http.StatusNotFound)
 		return
 	}

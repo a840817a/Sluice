@@ -51,9 +51,7 @@ func (m *Manager) captureVODArtifacts(rt *Runtime, candidate *index.ChannelIndex
 	if candidate == nil {
 		return vodArtifacts{}, errors.New("missing VOD index")
 	}
-	sv := rt.Serving()
-	sv.Mode = ModeVOD
-	sv.Index = candidate
+	sv := rt.servingAs(ModeVOD, candidate)
 
 	a := vodArtifacts{
 		id:       rt.ID,
@@ -64,7 +62,7 @@ func (m *Manager) captureVODArtifacts(rt *Runtime, candidate *index.ChannelIndex
 		rawMPD:   append([]byte(nil), rt.ParsedMPDBytes()...),
 	}
 	if sv.IsHLSSource {
-		a.variants = sv.Presentation.Variants
+		a.variants = sv.Tracks.Variants
 	}
 	return a, nil
 }

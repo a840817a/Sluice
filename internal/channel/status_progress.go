@@ -7,6 +7,7 @@ import (
 	"github.com/a840817a/sluice/internal/hlsdesc"
 	"github.com/a840817a/sluice/internal/index"
 	imdp "github.com/a840817a/sluice/internal/mpd"
+	"github.com/a840817a/sluice/internal/presentation"
 	"github.com/a840817a/sluice/internal/progress"
 )
 
@@ -145,7 +146,7 @@ func buildTracks(sv Serving, ci *index.ChannelIndex) []TrackStats {
 	}
 
 	if sv.IsHLSSource {
-		decorateHLSTracks(sv.Presentation, tracks)
+		decorateHLSTracks(sv.Tracks, tracks)
 	} else if sv.ParsedMPD != nil {
 		decorateDASHTracks(sv.ParsedMPD, tracks)
 	}
@@ -157,7 +158,7 @@ func buildTracks(sv Serving, ci *index.ChannelIndex) []TrackStats {
 // decorateHLSTracks fills in codec, resolution and language from the discovered
 // HLS source description. RepIDs are unique per channel across variants and
 // renditions, so a single pass over each kind is enough.
-func decorateHLSTracks(p Presentation, tracks []TrackStats) {
+func decorateHLSTracks(p presentation.Tracks, tracks []TrackStats) {
 	variants := make(map[string]hlsdesc.Variant)
 	for _, v := range p.Variants {
 		variants[v.RepID] = v

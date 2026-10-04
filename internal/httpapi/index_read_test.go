@@ -13,6 +13,7 @@ import (
 	"github.com/a840817a/sluice/internal/gwurl"
 	"github.com/a840817a/sluice/internal/index"
 	imdp "github.com/a840817a/sluice/internal/mpd"
+	"github.com/a840817a/sluice/internal/presentation"
 )
 
 func TestMediaHandlersHonorIndexPublicationRules(t *testing.T) {
@@ -67,7 +68,7 @@ func TestHLSReadPreservesDocumentOrderAndInitURLs(t *testing.T) {
 	}
 	cfg := config.Config{Server: config.ServerConfig{BaseURL: "http://gw"}}
 	srv := NewServer(cfg, newTestManager(t, cfg))
-	sv := ch.Serving{Index: ci, ParsedMPD: &imdp.ParsedMPD{Periods: []*imdp.ParsedPeriod{{ID: "10"}, {ID: "2"}}}}
+	sv := ch.Serving{Channel: presentation.Channel{Index: ci, ParsedMPD: &imdp.ParsedMPD{Periods: []*imdp.ParsedPeriod{{ID: "10"}, {ID: "2"}}}}}
 	got := srv.periodSegmentsForRep(sv, "c", "v")
 	if len(got) != 2 || got[0].PeriodID != "10" || got[1].PeriodID != "2" {
 		t.Fatalf("DASH document order: %+v", got)

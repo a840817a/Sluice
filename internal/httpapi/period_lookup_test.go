@@ -22,6 +22,7 @@ import (
 	"github.com/a840817a/sluice/internal/gwurl"
 	"github.com/a840817a/sluice/internal/hlsout"
 	"github.com/a840817a/sluice/internal/index"
+	"github.com/a840817a/sluice/internal/presentation"
 	"github.com/a840817a/sluice/internal/store"
 )
 
@@ -270,7 +271,7 @@ func TestPeriodSegmentsCarryLifetimeRangeInOrder(t *testing.T) {
 		}
 	}
 	srv := NewServer(config.Config{}, newTestManager(t, config.Config{}))
-	got := srv.periodSegmentsForRep(ch.Serving{Index: ci}, "c", "v0")
+	got := srv.periodSegmentsForRep(ch.Serving{Channel: presentation.Channel{Index: ci}}, "c", "v0")
 	if len(got) != 2 || got[0].PeriodID != "2" || got[1].PeriodID != "10" {
 		t.Fatalf("periods = %+v, want 2 then 10", got)
 	}
@@ -308,7 +309,7 @@ func TestUnpublishedSegmentAtAPeriodEdgeKeepsBothPeriods(t *testing.T) {
 	commit("1", 1, 3, 3)
 
 	srv := NewServer(config.Config{}, newTestManager(t, config.Config{}))
-	periods := srv.periodSegmentsForRep(ch.Serving{Index: ci}, "c", "v0")
+	periods := srv.periodSegmentsForRep(ch.Serving{Channel: presentation.Channel{Index: ci}}, "c", "v0")
 	want := []string{"0/v0/1", "0/v0/2", "0/v0/3", "0/v0/4", "1/v0/1", "1/v0/2", "1/v0/3"}
 	for _, vod := range []bool{true, false} {
 		out := string(hlsout.Media(periods, hlsout.MediaOptions{GatewayBaseURL: "http://gw", ChannelID: "c", RepID: "v0", VOD: vod, TargetDuration: 1}))

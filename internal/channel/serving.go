@@ -1,10 +1,8 @@
 package channel
 
 import (
-	"time"
-
 	"github.com/a840817a/sluice/internal/index"
-	imdp "github.com/a840817a/sluice/internal/mpd"
+	"github.com/a840817a/sluice/internal/presentation"
 )
 
 // Serving is what a channel is offering to clients at one instant: the mode it
@@ -30,27 +28,11 @@ import (
 type Serving struct {
 	// Mode is the channel's lifecycle state at the moment of the read.
 	Mode ChannelMode
-	// Index is the index that describes what the channel can serve: the
-	// full-history VOD index once a transition has completed, the live index
-	// otherwise. Callers must not reapply that rule — resolving it here is the
-	// reason this field exists.
-	Index *index.ChannelIndex
 	// Config is the channel's configuration, copied by value.
 	Config Config
-	// IsHLSSource reports whether the channel ingests HLS. It reflects the
-	// runtime that was built, not the configuration that asked for it.
-	IsHLSSource bool
-	// Presentation is what the channel offers to players: its tracks, and
-	// whether it can be served as HLS and as DASH.
-	Presentation Presentation
-	// FinalDuration is the mediaPresentationDuration the origin announced in
-	// its final MPD, or 0 if it announced none.
-	FinalDuration time.Duration
-	// StaticIngestStart is when a static origin was first detected, or the
-	// zero time if that has not happened.
-	StaticIngestStart time.Time
-	// ParsedMPD is the most recently fetched origin MPD, nil for HLS channels.
-	ParsedMPD *imdp.ParsedMPD
+	// Channel is what output generation reads, derived from the fields above
+	// and the runtime in the same read.
+	presentation.Channel
 }
 
 // IsVOD reports whether the channel has completed its transition to VOD.
@@ -61,19 +43,6 @@ func (s Serving) IsVOD() bool { return s.Mode == ModeVOD }
 // deliberately still served from the live index.
 func (s Serving) IsStaticIngesting() bool { return s.Mode == ModeStaticIngesting }
 
-// OrderPeriods returns period IDs in timeline order: a DASH source's periods in
-// the order its MPD lists them, an HLS source's periods numerically
-// (index.OrderPeriodIDs).
-func (s Serving) OrderPeriods(ids []string) []string {
-	var docOrder []string
-	if s.ParsedMPD != nil {
-		for _, p := range s.ParsedMPD.Periods {
-			docOrder = append(docOrder, p.ID)
-		}
-	}
-	return index.OrderPeriodIDs(ids, docOrder)
-}
-
 // Serving returns what the channel is offering right now.
 //
 // It reads each underlying atomic exactly once. Callers that need several of
@@ -82,7 +51,7 @@ func (s Serving) OrderPeriods(ids []string) []string {
 // with one another.
 //
 // It does no I/O and takes no index snapshot, so that no caller has a reason
-// to reach past it. It does build the Presentation, which copies the channel's
+// to reach past it. It does build the Tracks, which copies the channel's
 // track lists; a caller that needs only the config reads Runtime.Config.
 func (rt *Runtime) Serving() Serving {
 	mode := rt.Mode()
@@ -97,15 +66,30 @@ func (rt *Runtime) Serving() Serving {
 		}
 	}
 
+	return rt.servingAs(mode, ci)
+}
+
+// servingAs reads the channel as Serving does, but in the given mode and
+// serving from ci.
+func (rt *Runtime) servingAs(mode ChannelMode, ci *index.ChannelIndex) Serving {
+	cfg := rt.Config()
 	parsed := rt.ParsedMPD()
 	return Serving{
-		Mode:              mode,
-		Index:             ci,
-		Config:            rt.Config(),
-		IsHLSSource:       rt.IsHLSSource(),
-		Presentation:      rt.presentation(parsed),
-		FinalDuration:     rt.FinalDuration(),
-		StaticIngestStart: rt.StaticIngestStartTime(),
-		ParsedMPD:         parsed,
+		Mode:   mode,
+		Config: cfg,
+		Channel: presentation.Channel{
+			Index:             ci,
+			Tracks:            rt.tracks(parsed),
+			ParsedMPD:         parsed,
+			IsHLSSource:       rt.IsHLSSource(),
+			ConfigIsHLS:       cfg.IsHLS(),
+			VOD:               mode == ModeVOD,
+			StaticIngesting:   mode == ModeStaticIngesting,
+			KeepAll:           cfg.KeepsAllSegments(),
+			PlayReady:         cfg.PlayReadyEnabled(),
+			Widevine:          cfg.WidevineEnabled(),
+			FinalDuration:     rt.FinalDuration(),
+			StaticIngestStart: rt.StaticIngestStartTime(),
+		},
 	}
 }

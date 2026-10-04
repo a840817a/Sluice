@@ -98,7 +98,7 @@ func TestServingCapabilities(t *testing.T) {
 		if sv.IsHLSSource {
 			t.Error("IsHLSSource = true for a channel with no HLS watcher")
 		}
-		if !sv.Presentation.ServesDASH {
+		if !sv.Tracks.ServesDASH {
 			t.Error("ServesDASH = false for a DASH channel")
 		}
 		if _, err := rt.ResolveKey(context.Background(), "k"); !errors.Is(err, ErrNoKeyProxy) {
@@ -115,7 +115,7 @@ func TestServingCapabilities(t *testing.T) {
 		if !sv.IsHLSSource {
 			t.Error("IsHLSSource = false with an HLS watcher attached")
 		}
-		if sv.Presentation.ServesDASH {
+		if sv.Tracks.ServesDASH {
 			t.Error("ServesDASH = true for an MPEG-TS HLS channel")
 		}
 		if _, err := rt.ResolveKey(context.Background(), "k"); !errors.Is(err, ErrNoKeyProxy) {

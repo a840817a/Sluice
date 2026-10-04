@@ -29,7 +29,7 @@ type Runtime struct {
 	hls *hlsingest.Watcher
 	// keys caches AES-128 content keys for HLS channels; nil for DASH channels.
 	// Other packages reach what these three know through Source, Serving's
-	// Presentation and ResolveKey, never directly.
+	// Tracks and ResolveKey, never directly.
 	keys *hlskey.Cache
 	// Source is whichever of the two is actually driving ingestion.
 	Source Source

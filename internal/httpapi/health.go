@@ -75,10 +75,10 @@ func (s *Server) handleChannelHealth(w http.ResponseWriter, r *http.Request) {
 			// Both predicates are needed here. ServesDASH alone is true for a
 			// DASH runtime too, and this branch is entered on the *config*
 			// saying HLS, which does not by itself guarantee an HLS runtime.
-			if sv.IsHLSSource && sv.Presentation.ServesDASH {
+			if sv.IsHLSSource && sv.Tracks.ServesDASH {
 				resp.AltManifestURL = mpdURL
 			}
-		} else if sv.Presentation.ServesHLS && sv.Presentation.Ready {
+		} else if sv.Tracks.ServesHLS && sv.Tracks.Ready {
 			// A clear DASH channel additionally serves HLS.
 			resp.AltManifestURL = m3u8URL
 		}

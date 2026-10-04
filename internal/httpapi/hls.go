@@ -31,7 +31,7 @@ func (s *Server) handleMasterPlaylist(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "channel not found or not running", http.StatusNotFound)
 		return
 	}
-	pr := rt.Serving().Presentation
+	pr := rt.Serving().Tracks
 	if !pr.ServesHLS {
 		http.Error(w, "channel cannot be served as HLS (encrypted or unsupported)", http.StatusNotFound)
 		return
@@ -69,11 +69,11 @@ func (s *Server) handleMediaPlaylist(w http.ResponseWriter, r *http.Request) {
 	// One read of the channel for the whole response: the index the segments
 	// come from and the VOD flag that describes them have to agree.
 	sv := rt.Serving()
-	if !sv.Presentation.ServesHLS {
+	if !sv.Tracks.ServesHLS {
 		http.Error(w, "channel cannot be served as HLS", http.StatusNotFound)
 		return
 	}
-	if !sv.Presentation.KnownRep(repID) {
+	if !sv.Tracks.KnownRep(repID) {
 		http.NotFound(w, r)
 		return
 	}
@@ -116,11 +116,11 @@ func (s *Server) handleMediaPlaylist(w http.ResponseWriter, r *http.Request) {
 // Demuxed audio renditions become a separate audio AdaptationSet, so the DASH
 // output carries audio too (not just the video track).
 func (s *Server) synthesizeHLSManifest(sv ch.Serving, snap index.Snapshot, isVOD bool, windowDepth time.Duration) *imdp.ParsedMPD {
-	return manifest.SynthesizeHLSMPD(sv.Presentation.Variants, snap, manifest.HLSSynthOptions{
+	return manifest.SynthesizeHLSMPD(sv.Tracks.Variants, snap, manifest.HLSSynthOptions{
 		ASID:      hlsingest.VideoASID,
 		MediaType: imdp.MediaVideo,
 		MimeType:  "video/mp4",
-		Audio:     sv.Presentation.Renditions,
+		Audio:     sv.Tracks.Renditions,
 		AudioASID: hlsingest.AudioASID,
 		VOD:       isVOD,
 		// A stable anchor for the live edge; unused for VOD.
