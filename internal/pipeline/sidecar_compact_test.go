@@ -20,7 +20,7 @@ func TestSidecarCompactionKeepsSegmentsStillOnDisk(t *testing.T) {
 	} {
 		t.Run(tc.ext, func(t *testing.T) {
 			dir := t.TempDir()
-			p := NewProcessor(config.Config{Store: config.StoreConfig{DataDir: dir}}, "ch", index.NewChannelIndex(index.PublishAVBarrier), nil)
+			p := NewIntake(config.Config{Store: config.StoreConfig{DataDir: dir}}, "ch", index.NewChannelIndex(index.PublishAVBarrier))
 			task := &queue.SegmentTask{ChannelID: "ch", PeriodID: "0", MediaType: tc.mediaType, ASID: "0", RepID: "r0"}
 			if err := store.Write(store.RepLocation{DataDir: dir, ChannelID: "ch", PeriodID: "0", MediaType: tc.mediaType, ASID: "0", RepID: "r0"}.SegmentPath(0, tc.ext), []byte("x")); err != nil {
 				t.Fatal(err)

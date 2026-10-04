@@ -23,12 +23,12 @@ func TestExpireOldSegments_UsesLiveEdgeWindow(t *testing.T) {
 	rep.RestorePublished(index.SegmentState{SegNo: 2, StartPTS: 100, EndPTS: 200, Timescale: 10})
 	rep.RestorePublished(index.SegmentState{SegNo: 3, StartPTS: 200, EndPTS: 300, Timescale: 10})
 
-	p := NewProcessor(config.Config{
+	p := NewIntake(config.Config{
 		Window: config.WindowConfig{
 			Depth:          12 * time.Second,
 			SafeEdgeBuffer: 3 * time.Second,
 		},
-	}, "ch1", ci, nil)
+	}, "ch1", ci)
 
 	// live edge = 30s, cutoff = 30 - (12+3) = 15s
 	// => seg#1 expires (EndSec=10), seg#2/#3 stay published.
@@ -58,12 +58,12 @@ func TestExpireOldSegments_NoPublished_NoChange(t *testing.T) {
 
 	ci.Commit(index.RepRef{PeriodID: "p0", ASID: "v0", RepID: "r0"}, 8, index.SegmentState{SegNo: 1, StartPTS: 0, EndPTS: 100, Timescale: 10})
 
-	p := NewProcessor(config.Config{
+	p := NewIntake(config.Config{
 		Window: config.WindowConfig{
 			Depth:          10 * time.Second,
 			SafeEdgeBuffer: 2 * time.Second,
 		},
-	}, "ch1", ci, nil)
+	}, "ch1", ci)
 
 	p.expireOldSegments(ps)
 
@@ -110,10 +110,10 @@ func exists(t *testing.T, path string) bool {
 func TestExpireOldSegments_OnExpireDeletesOnlyWhatLeftTheWindow(t *testing.T) {
 	ci, ps, paths := expiryFixture(t)
 
-	p := NewProcessor(config.Config{
+	p := NewIntake(config.Config{
 		Window: config.WindowConfig{Depth: 12 * time.Second, SafeEdgeBuffer: 3 * time.Second},
 		Store:  config.StoreConfig{Cleanup: config.CleanupOnExpire},
-	}, "ch1", ci, nil)
+	}, "ch1", ci)
 
 	p.expireOldSegments(ps)
 
@@ -134,10 +134,10 @@ func TestExpireOldSegments_DisabledNeverDeletes(t *testing.T) {
 		t.Run(string(mode), func(t *testing.T) {
 			ci, ps, paths := expiryFixture(t)
 
-			p := NewProcessor(config.Config{
+			p := NewIntake(config.Config{
 				Window: config.WindowConfig{Depth: 12 * time.Second, SafeEdgeBuffer: 3 * time.Second},
 				Store:  config.StoreConfig{Cleanup: mode},
-			}, "ch1", ci, nil)
+			}, "ch1", ci)
 
 			p.expireOldSegments(ps)
 
@@ -160,13 +160,13 @@ func TestExpireOldSegments_DisabledNeverDeletes(t *testing.T) {
 func TestExpireOldSegments_KeepAllSegmentsOutranksCleanup(t *testing.T) {
 	ci, ps, paths := expiryFixture(t)
 
-	p := NewProcessor(config.Config{
+	p := NewIntake(config.Config{
 		Window: config.WindowConfig{Depth: 12 * time.Second, SafeEdgeBuffer: 3 * time.Second},
 		Store: config.StoreConfig{
 			Cleanup:         config.CleanupOnExpire,
 			KeepAllSegments: true,
 		},
-	}, "ch1", ci, nil)
+	}, "ch1", ci)
 
 	p.expireOldSegments(ps)
 
@@ -189,10 +189,10 @@ func TestExpireOldSegments_MissingFileIsNotFatal(t *testing.T) {
 		t.Fatalf("pre-remove: %v", err)
 	}
 
-	p := NewProcessor(config.Config{
+	p := NewIntake(config.Config{
 		Window: config.WindowConfig{Depth: 12 * time.Second, SafeEdgeBuffer: 3 * time.Second},
 		Store:  config.StoreConfig{Cleanup: config.CleanupOnExpire},
-	}, "ch1", ci, nil)
+	}, "ch1", ci)
 
 	p.expireOldSegments(ps) // must not panic or block
 

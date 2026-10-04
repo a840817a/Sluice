@@ -2,25 +2,17 @@ package pipeline
 
 import (
 	"context"
-	"encoding/hex"
-	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/a840817a/sluice/internal/config"
 	"github.com/a840817a/sluice/internal/fetch"
-	"github.com/a840817a/sluice/internal/hlskey"
 	"github.com/a840817a/sluice/internal/index"
 	"github.com/a840817a/sluice/internal/metrics"
 	"github.com/a840817a/sluice/internal/progress"
 	"github.com/a840817a/sluice/internal/queue"
-	"github.com/a840817a/sluice/internal/store"
-	"github.com/a840817a/sluice/internal/validate"
 )
 
 const ringCapacity = 120
@@ -58,17 +50,15 @@ type KeyFetcher interface {
 	Get(ctx context.Context, uri string) ([]byte, error)
 }
 
-// Processor drains fetch results, validates, writes to disk, and commits to index.
+// Processor drains fetch results: it retries failed fetches, hands fetched
+// segments to its Intake, and records what became of them.
 type Processor struct {
-	cfg           config.Config
-	ci            *index.ChannelIndex
-	broker        *queue.Broker
-	channelID     string
-	repTimescales map[string]uint32 // repKey → actual track timescale from mdhd
-	keys          KeyFetcher
-	// sidecarAppends counts metadata records written per representation since
-	// that representation's file was last compacted.
-	sidecarAppends map[string]int
+	cfg       config.Config
+	ci        *index.ChannelIndex
+	broker    *queue.Broker
+	channelID string
+	intake    *Intake
+	keys      KeyFetcher
 	// warmedKeys tracks key server URIs already fetched into the key cache, so
 	// a passthrough channel captures each key on disk exactly once while the
 	// key server is still alive. Guarded by warmedMu because the reset-on-failure
@@ -94,20 +84,22 @@ func (p *Processor) SetProgress(c *progress.Counters) { p.prog = c }
 // NewProcessor creates a Processor.
 func NewProcessor(cfg config.Config, channelID string, ci *index.ChannelIndex, broker *queue.Broker) *Processor {
 	return &Processor{
-		cfg:            cfg,
-		ci:             ci,
-		broker:         broker,
-		channelID:      channelID,
-		repTimescales:  make(map[string]uint32),
-		sidecarAppends: make(map[string]int),
-		warmedKeys:     make(map[string]bool),
-		keyCtx:         context.Background(),
+		cfg:        cfg,
+		ci:         ci,
+		broker:     broker,
+		channelID:  channelID,
+		intake:     NewIntake(cfg, channelID, ci),
+		warmedKeys: make(map[string]bool),
+		keyCtx:     context.Background(),
 	}
 }
 
 // SetKeyFetcher attaches the key source used for decrypt-on-ingest channels.
 // Must be called before Run.
-func (p *Processor) SetKeyFetcher(k KeyFetcher) { p.keys = k }
+func (p *Processor) SetKeyFetcher(k KeyFetcher) {
+	p.keys = k
+	p.intake.SetKeyFetcher(k)
+}
 
 // Run starts consuming Results from pool until ctx is cancelled.
 //
@@ -166,330 +158,35 @@ func (p *Processor) handle(res fetch.Result) {
 		return
 	}
 
-	// Decrypt before anything inspects the bytes, so that structural validation
-	// runs on real media rather than ciphertext. Only decrypt-on-ingest channels
-	// take this path; passthrough keeps the ciphertext all the way to disk.
-	data := res.Data
-	if task.Encrypted && task.DecryptOnIngest {
-		plain, err := p.decrypt(task, data)
-		if err != nil {
-			slog.Warn("segment decryption failed",
-				"rep", task.RepID,
-				"seg", task.SegNo,
-				"err", err,
-			)
-			metrics.SegmentsFetched.WithLabelValues(p.channelID, "decrypt_error").Inc()
-			p.prog.RecordSegmentError("decrypt", err.Error(), task.RepID, task.SegNo)
-			return
-		}
-		data = plain
-	} else if task.Encrypted {
-		// Passthrough: the ciphertext is stored as-is, but the key is captured
-		// into the (disk-backed) cache now, while the key server is reachable, so
-		// the channel can still serve the key after the key server goes away.
+	// Passthrough stores the ciphertext as-is, but the key is captured into
+	// the (disk-backed) cache now, while the key server is reachable, so the
+	// channel can still serve the key after the key server goes away.
+	if task.Encrypted && !task.DecryptOnIngest {
 		p.warmKey(task.KeyURI)
 	}
 
-	// Validate the media segment and establish its start time.
-	//
-	// fMP4 carries authoritative timing in its tfdt box. MPEG-TS has no such
-	// box, so the start time is computed by the source from the playlist's
-	// EXTINF durations and arrives on the task.
-	var startPTS int64
-	switch task.Format {
-	case queue.FormatTS:
-		// Ciphertext must never be sync-byte checked — every valid encrypted
-		// segment would be rejected. Only its length is verifiable.
-		validateTS := validate.ValidateTS
-		if task.Encrypted && !task.DecryptOnIngest {
-			validateTS = validate.ValidateTSEncrypted
+	out := p.intake.Store(p.keyCtx, task, res.Data, res.InitData)
+	if !out.Stored {
+		switch out.Stage {
+		case StageDecrypt:
+			metrics.SegmentsFetched.WithLabelValues(p.channelID, "decrypt_error").Inc()
+		case StageWrite:
+			metrics.SegmentsFetched.WithLabelValues(p.channelID, "write_error").Inc()
 		}
-		if err := validateTS(data); err != nil {
-			slog.Warn("TS segment validation failed",
-				"rep", task.RepID,
-				"seg", task.SegNo,
-				"err", err,
-			)
-			p.prog.RecordSegmentError("validate", err.Error(), task.RepID, task.SegNo)
-			return
+		p.prog.RecordSegmentError(out.Stage, out.Err.Error(), task.RepID, task.SegNo)
+		if out.Retry {
+			p.broker.Requeue(task, p.cfg.Worker.MaxRetriesStatic, time.Second)
 		}
-		startPTS = task.StartPTS
-	case queue.FormatWebVTT:
-		// Subtitle segments are text, not a media container: their timing comes
-		// from the playlist EXTINF (like TS), and validation only confirms the
-		// WebVTT signature so an origin error page is not stored as a cue.
-		if err := validate.ValidateWebVTT(data); err != nil {
-			slog.Warn("WebVTT segment validation failed",
-				"rep", task.RepID, "seg", task.SegNo, "err", err)
-			p.prog.RecordSegmentError("validate", err.Error(), task.RepID, task.SegNo)
-			return
-		}
-		startPTS = task.StartPTS
-	default:
-		segInfo, err := validate.ValidateSegment(data)
-		if err != nil {
-			slog.Warn("segment validation failed",
-				"rep", task.RepID,
-				"seg", task.SegNo,
-				"err", err,
-			)
-			p.prog.RecordSegmentError("validate", err.Error(), task.RepID, task.SegNo)
-			return
-		}
-		startPTS = int64(segInfo.BaseMediaDecodeTime)
-	}
-
-	// Write init segment atomically to disk (first time only).
-	if res.InitData != nil {
-		if err := validate.ValidateInit(res.InitData); err != nil {
-			slog.Warn("init validation failed", "rep", task.RepID, "err", err)
-		} else {
-			initPath := p.location(task).InitPath()
-			if err := store.Write(initPath, res.InitData); err != nil {
-				slog.Error("init write failed", "path", initPath, "err", err)
-			} else {
-				// Cache the actual track timescale from the init segment's mdhd box.
-				// The SegmentTemplate timescale (task.Timescale) is for computing
-				// segment boundaries in presentation time, but the BaseMediaDecodeTime
-				// in tfdt uses the track's own timescale. Using the correct timescale
-				// ensures A/V barrier PTS comparisons are in the same unit (seconds).
-				if ts, err := validate.TimescaleFromInitBytes(res.InitData); err == nil && ts > 0 {
-					p.repTimescales[task.RepKey()] = ts
-				}
-			}
-		}
-	}
-
-	// Write media segment atomically to disk (timed for metrics).
-	// Non-fMP4 segments keep their native extension so they are served untouched.
-	segExt := store.ExtFMP4
-	switch task.Format {
-	case queue.FormatTS:
-		segExt = store.ExtTS
-	case queue.FormatWebVTT:
-		segExt = store.ExtVTT
-	}
-	segPath := p.location(task).SegmentPath(task.SegNo, segExt)
-	writeStart := time.Now()
-	if err := store.Write(segPath, data); err != nil {
-		slog.Warn("segment write failed, requeueing", "path", segPath, "err", err)
-		metrics.SegmentsFetched.WithLabelValues(p.channelID, "write_error").Inc()
-		p.prog.RecordSegmentError("write", err.Error(), task.RepID, task.SegNo)
-		p.broker.Requeue(task, p.cfg.Worker.MaxRetriesStatic, time.Second)
 		return
 	}
-	metrics.SegmentWriteDuration.Observe(time.Since(writeStart).Seconds())
 	metrics.SegmentsFetched.WithLabelValues(p.channelID, "ok").Inc()
-
-	// Determine the actual track timescale. Prefer the cached value from the init
-	// segment's mdhd box; fall back to task.Timescale (SegmentTemplate value).
-	// This matters when the SegmentTemplate omits timescale (defaulting to 1 per
-	// spec) but the track's BaseMediaDecodeTime is in a different timescale (e.g.
-	// 48000 for audio, 90000 for video), which would cause A/V barrier to fail.
-	trackTS := task.Timescale
-	if ts, ok := p.repTimescales[task.RepKey()]; ok {
-		trackTS = ts
+	// Count the segment only if this number was not already tracked, so a
+	// download bar cannot climb past its own total.
+	if out.New {
+		p.prog.AddStored(1, uint64(out.Bytes))
 	}
-
-	// Compute EndPTS: convert the SegmentTemplate duration (in SegmentTemplate
-	// timescale units) to the track timescale so StartSec/EndSec are in seconds.
-	endPTS := int64(0)
-	if task.Duration > 0 && task.Timescale > 0 && trackTS > 0 {
-		segSec := float64(task.Duration) / float64(task.Timescale)
-		endPTS = startPTS + int64(segSec*float64(trackTS))
-	}
-
-	// MPEG-TS and WebVTT segments are self-contained: there is no initialization
-	// segment, so the path stays empty and the init endpoint correctly 404s.
-	initPath := ""
-	if task.Format == queue.FormatFMP4 {
-		initPath = p.location(task).InitPath()
-	}
-	seg := index.SegmentState{
-		SegNo:         task.SegNo,
-		StartPTS:      startPTS,
-		EndPTS:        endPTS,
-		Timescale:     trackTS,
-		Path:          segPath,
-		InitPath:      initPath,
-		Discontinuity: task.Discontinuity,
-	}
-	// Key material is recorded only when the bytes on disk are still encrypted,
-	// so the outbound playlist can re-advertise EXT-X-KEY. A segment decrypted
-	// during ingest is cleartext and must carry none.
-	if task.Encrypted && !task.DecryptOnIngest {
-		seg.KeyURI = task.KeyURI
-		seg.IV = task.IV
-	}
-	// Persist what the segment file itself cannot tell us, so the channel's DVR
-	// window survives a restart. HLS opts in for every segment: MPEG-TS needs
-	// its whole timing recorded, and even fMP4 (whose timing is in the tfdt box)
-	// needs its discontinuity flag and key material preserved.
-	if task.PersistMeta {
-		p.persistSegmentMeta(task, seg)
-	}
-
-	// Then commit it to the channel index, which publishes what its policy
-	// allows, so the record is appended before the segment is visible. Use
-	// ASID as the AS key so multiple ASes of the same MediaType are distinct.
-	committed := p.ci.Commit(index.RepRef{
-		PeriodID: task.PeriodID, ASID: task.ASID, RepID: task.RepID, MediaType: task.MediaType,
-	}, segmentCapacity(p.cfg), seg)
-	// Count the segment only if this number was not already tracked. The HLS
-	// backfill path legitimately re-fetches a segment that is still in flight, so
-	// counting every commit would let a download bar climb past its own total.
-	if committed.New {
-		p.prog.AddStored(1, uint64(len(data)))
-	}
-	if committed.Published > 0 {
-		metrics.SegmentsPublished.WithLabelValues(p.channelID, task.MediaType).Add(float64(committed.Published))
-	}
-
-	// Expire segments older than the sliding window.
-	p.expireOldSegments(p.ci.Period(task.PeriodID))
-}
-
-// expiryCutoff returns the media-time boundary below which published segments
-// have left the window, and whether any expiry should happen at all.
-//
-// It is separated from the walk because it is the whole of the decision: given
-// a live edge, everything about which segments age out is arithmetic on the
-// configuration, with no index and no filesystem involved.
-//
-// The cutoff is media time, not wall clock. A segment's EndSec comes from
-// tfdt/timescale — presentation time — so the window has to be measured from
-// the period's own live edge or a channel whose origin's clock differs from
-// ours expires the wrong segments.
-func expiryCutoff(cfg config.Config, liveEdgeSec float64) (float64, bool) {
-	// Keeping every segment outranks the cleanup mode: a channel that will
-	// finish as VOD must not shed the history it is about to serve.
-	if cfg.Store.KeepAllSegments {
-		return 0, false
-	}
-	depth := cfg.Window.Depth
-	if depth <= 0 {
-		return 0, false
-	}
-	if liveEdgeSec <= 0 {
-		return 0, false
-	}
-	cutoff := liveEdgeSec - (depth + cfg.Window.SafeEdgeBuffer).Seconds()
-	if cutoff <= 0 {
-		return 0, false
-	}
-	return cutoff, true
-}
-
-func (p *Processor) expireOldSegments(ps *index.PeriodState) {
-	cutoff, ok := expiryCutoff(p.cfg, periodLiveEdgeSec(ps))
-	if !ok {
-		return
-	}
-
-	// The walk holds the period and AdaptationSet read locks, so it collects
-	// what to delete and does not delete it: os.Remove is a syscall that can
-	// block on a slow or failing filesystem, and blocking here stalls every
-	// reader of this period — including the handlers serving the manifest.
-	var toDelete []string
-	ps.ForEachRep(func(_, _ string, rep *index.RepresentationState) {
-		switch p.cfg.Store.Cleanup {
-		case config.CleanupOnExpire:
-			// Collecting paths and expiring under the representation's own lock
-			// keeps the two atomic, so no segment is expired without its path
-			// being handed back exactly once.
-			toDelete = append(toDelete, rep.ExpireAndCollectPaths(cutoff)...)
-		default:
-			// "disabled" (and any unrecognized mode): only update the index,
-			// never delete from disk.
-			rep.ExpireOlderThan(cutoff)
-		}
-	})
-
-	for _, path := range toDelete {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			slog.Warn("cleanup: failed to remove expired segment",
-				"path", path, "err", err)
-		}
-	}
-}
-
-// periodLiveEdgeSec returns the maximum EndSec among published segments in a
-// period. 0 means no published segments yet.
-func periodLiveEdgeSec(ps *index.PeriodState) float64 {
-	liveEdge := 0.0
-	ps.ForEachRep(func(_, _ string, rep *index.RepresentationState) {
-		for _, seg := range rep.Published() {
-			if end := seg.EndSec(); end > liveEdge {
-				liveEdge = end
-			}
-		}
-	})
-	return liveEdge
-}
-
-// decrypt resolves the segment's content key and decrypts it in place.
-func (p *Processor) decrypt(task *queue.SegmentTask, data []byte) ([]byte, error) {
-	if p.keys == nil {
-		return nil, errors.New("no key fetcher configured for an encrypted channel")
-	}
-	if task.KeyURI == "" {
-		return nil, errors.New("encrypted segment has no key URI")
-	}
-	// The fetch is bounded so a hung key server cannot stall a worker forever,
-	// and rooted at the channel's context so stopping the channel does not have
-	// to wait out that bound.
-	ctx, cancel := context.WithTimeout(p.keyCtx, keyFetchTimeout)
-	defer cancel()
-
-	key, err := p.keys.Get(ctx, task.KeyURI)
-	if err != nil {
-		return nil, fmt.Errorf("fetch key: %w", err)
-	}
-	return hlskey.Decrypt(data, key, task.IV)
-}
-
-// persistSegmentMeta appends this segment's metadata to its representation's
-// sidecar, and occasionally compacts the file.
-func (p *Processor) persistSegmentMeta(task *queue.SegmentTask, seg index.SegmentState) {
-	path := p.location(task).SidecarPath()
-
-	m := store.SegmentMeta{
-		SegNo:         seg.SegNo,
-		StartPTS:      seg.StartPTS,
-		EndPTS:        seg.EndPTS,
-		Timescale:     seg.Timescale,
-		Discontinuity: seg.Discontinuity,
-		KeyURI:        seg.KeyURI,
-	}
-	if len(seg.IV) > 0 {
-		m.IV = hex.EncodeToString(seg.IV)
-	}
-
-	if err := store.AppendSegmentMeta(path, m); err != nil {
-		// Not fatal: the segment is already on disk and serving. Only restart
-		// recovery degrades.
-		slog.Warn("segment metadata append failed",
-			"path", path, "seg", seg.SegNo, "err", err)
-		return
-	}
-
-	// The sidecar grows by one record per segment forever, so compact it
-	// periodically. Records whose segment file has been expired off disk are
-	// dropped, which keeps the file proportional to what is actually retained.
-	key := task.RepKey()
-	p.sidecarAppends[key]++
-	if p.sidecarAppends[key] < sidecarCompactEvery {
-		return
-	}
-	p.sidecarAppends[key] = 0
-
-	dir := filepath.Dir(path)
-	// Keep a record only while its segment is still on disk, in whatever
-	// format this representation stores.
-	if err := store.CompactSegmentMeta(path, func(segNo uint64) bool {
-		return store.SegmentOnDisk(dir, segNo)
-	}); err != nil {
-		slog.Warn("segment metadata compaction failed", "path", path, "err", err)
+	if out.Published > 0 {
+		metrics.SegmentsPublished.WithLabelValues(p.channelID, task.MediaType).Add(float64(out.Published))
 	}
 }
 
@@ -522,12 +219,4 @@ func (p *Processor) warmKey(uri string) {
 			p.warmedMu.Unlock()
 		}
 	}()
-}
-
-// location places task's representation under the gateway's data directory.
-func (p *Processor) location(task *queue.SegmentTask) store.RepLocation {
-	return store.RepLocation{
-		DataDir: p.cfg.Store.DataDir, ChannelID: p.channelID,
-		PeriodID: task.PeriodID, MediaType: task.MediaType, ASID: task.ASID, RepID: task.RepID,
-	}
 }
