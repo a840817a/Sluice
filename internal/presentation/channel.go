@@ -19,6 +19,8 @@ import (
 // channel mode means for output, and the configuration is reduced to the
 // switches output reads.
 type Channel struct {
+	// ID is the channel's id, which every URL in its output names.
+	ID string
 	// Index is the index that describes what the channel can serve: the
 	// full-history VOD index once a transition has completed, the live index
 	// otherwise. Callers must not reapply that rule — resolving it here is the

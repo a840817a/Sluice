@@ -15,6 +15,7 @@ import (
 	"github.com/a840817a/sluice/internal/hlskey"
 	"github.com/a840817a/sluice/internal/index"
 	imdp "github.com/a840817a/sluice/internal/mpd"
+	"github.com/a840817a/sluice/internal/presentation"
 	"github.com/a840817a/sluice/internal/progress"
 	"github.com/a840817a/sluice/internal/queue"
 )
@@ -185,6 +186,7 @@ type Manager struct {
 	operationLocksMu sync.Mutex
 	operationLocks   map[string]*channelOperationLock
 	gwCfg            gocfg.Config // gateway-level config (data dir, worker counts, etc.)
+	presentations    *presentation.Generator
 	runtimes         map[string]*Runtime
 	// store is where every channel's configuration lives. The manager is the
 	// only writer, and a channel runs only while it is in the store.
@@ -201,6 +203,7 @@ type Manager struct {
 func NewManager(gwCfg gocfg.Config, store *Store) *Manager {
 	return &Manager{
 		gwCfg:          gwCfg,
+		presentations:  presentation.NewGenerator(gwCfg),
 		store:          store,
 		runtimes:       make(map[string]*Runtime),
 		suppressVOD:    make(map[string]bool),

@@ -78,6 +78,7 @@ func (rt *Runtime) servingAs(mode ChannelMode, ci *index.ChannelIndex) Serving {
 		Mode:   mode,
 		Config: cfg,
 		Channel: presentation.Channel{
+			ID:                rt.ID,
 			Index:             ci,
 			Tracks:            rt.tracks(parsed),
 			ParsedMPD:         parsed,

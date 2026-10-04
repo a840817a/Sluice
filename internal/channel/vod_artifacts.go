@@ -15,12 +15,12 @@ import (
 	"sort"
 	"time"
 
-	"github.com/a840817a/sluice/internal/gwurl"
 	"github.com/a840817a/sluice/internal/hlsdesc"
 	"github.com/a840817a/sluice/internal/hlsout"
 	"github.com/a840817a/sluice/internal/index"
 	"github.com/a840817a/sluice/internal/manifest"
 	imdp "github.com/a840817a/sluice/internal/mpd"
+	"github.com/a840817a/sluice/internal/presentation"
 	"github.com/a840817a/sluice/internal/store"
 )
 
@@ -35,7 +35,7 @@ const (
 type vodArtifacts struct {
 	id       string
 	dir      string
-	baseURL  string
+	render   *presentation.Generator
 	serving  Serving
 	snapshot index.Snapshot
 	rawMPD   []byte
@@ -56,7 +56,7 @@ func (m *Manager) captureVODArtifacts(rt *Runtime, candidate *index.ChannelIndex
 	a := vodArtifacts{
 		id:       rt.ID,
 		dir:      m.vodArtifactDir(rt.ID),
-		baseURL:  m.gwCfg.Server.BaseURL,
+		render:   m.presentations,
 		serving:  sv,
 		snapshot: candidate.Snapshot(),
 		rawMPD:   append([]byte(nil), rt.ParsedMPDBytes()...),
@@ -137,24 +137,7 @@ func (a vodArtifacts) writeOptional() {
 }
 
 func generateServedVODManifest(a vodArtifacts) ([]byte, error) {
-	cfg := manifest.GeneratorConfig{
-		GatewayBaseURL:     a.baseURL,
-		ChannelID:          a.id,
-		LicenseURL:         vodLicenseURL(a.baseURL, a.id, "playready", a.serving.Config.PlayReadyEnabled()),
-		WidevineLicenseURL: vodLicenseURL(a.baseURL, a.id, "widevine", a.serving.Config.WidevineEnabled()),
-		DisablePlayReady:   !a.serving.Config.PlayReadyEnabled(),
-		DisableWidevine:    !a.serving.Config.WidevineEnabled(),
-		VODMode:            true,
-		FinalDuration:      a.serving.FinalDuration,
-	}
-	return manifest.Generate(a.serving.ParsedMPD, a.snapshot, cfg)
-}
-
-func vodLicenseURL(baseURL, channelID, drmType string, enabled bool) string {
-	if !enabled {
-		return ""
-	}
-	return gwurl.LicenseURL(baseURL, channelID, drmType)
+	return a.render.DASH(a.serving.Channel, a.snapshot)
 }
 
 func (a vodArtifacts) writeLocalManifest() {

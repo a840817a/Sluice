@@ -1,16 +1,14 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
-	"time"
 
 	ch "github.com/a840817a/sluice/internal/channel"
 	"github.com/a840817a/sluice/internal/config"
-	"github.com/a840817a/sluice/internal/gwurl"
 	"github.com/a840817a/sluice/internal/hlsout"
 	"github.com/a840817a/sluice/internal/license"
-	"github.com/a840817a/sluice/internal/manifest"
-	imdp "github.com/a840817a/sluice/internal/mpd"
+	"github.com/a840817a/sluice/internal/presentation"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -22,6 +20,7 @@ type Server struct {
 	// EXT-X-TARGETDURATION monotonically non-decreasing across reloads. Keys are
 	// "{channelID}/{repID}".
 	stickyTargetDuration hlsout.StickyTargetDuration
+	presentations        *presentation.Generator
 }
 
 // NewServer creates a Server.
@@ -29,7 +28,7 @@ type Server struct {
 // It deliberately has no side effects: VOD persistence belongs to the channel
 // manager, not to having built an HTTP server.
 func NewServer(cfg config.Config, manager *ch.Manager) *Server {
-	return &Server{cfg: cfg, manager: manager}
+	return &Server{cfg: cfg, manager: manager, presentations: presentation.NewGenerator(cfg)}
 }
 
 // handleManifest serves the rewritten MPD for a channel.
@@ -45,72 +44,22 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// One read of the channel for the whole response. Mode, index and the
-	// timing anchors below have to describe the same instant: read one at a
-	// time, a channel finishing into VOD mid-handler yields a manifest that
-	// declares itself live while its segments come from the full-history index.
+	// timing anchors have to describe the same instant: read one at a time, a
+	// channel finishing into VOD mid-handler yields a manifest that declares
+	// itself live while its segments come from the full-history index.
 	sv := rt.Serving()
 
-	// An HLS source is only serveable as DASH when its segments are fMP4;
-	// MPEG-TS would require remuxing, which this gateway deliberately does not
-	// do. Such channels are served through master.m3u8 instead.
-	if !sv.Tracks.ServesDASH {
-		http.Error(w, "channel has an MPEG-TS HLS source; use master.m3u8", http.StatusNotFound)
-		return
-	}
-
-	isVOD := sv.IsVOD()
-	// Synthesis decides which representations exist and at what timescale, and
-	// generation builds their timelines; reading the index twice let those two
-	// answers come from two different instants while ingest kept committing in
-	// between.
-	snap := sv.Index.Snapshot()
-
-	baseURL := s.cfg.Server.BaseURL
-	chCfg := sv.Config
-	windowDepth := s.cfg.Window.Depth
-	if chCfg.KeepsAllSegments() {
-		windowDepth = 24 * time.Hour
-	}
-
-	// An fMP4 HLS channel has no origin MPD; synthesize one from the
-	// discovered variants and the segment index so the DASH output is generated
-	// from the very same files the HLS output serves. DASH channels use the
-	// real origin MPD.
-	var p *imdp.ParsedMPD
-	if sv.IsHLSSource {
-		p = s.synthesizeHLSManifest(sv, snap, isVOD, windowDepth)
-	} else {
-		p = sv.ParsedMPD
-		if p == nil && isVOD {
-			if path := s.manager.SavedVODManifestPath(channelID); path != "" {
-				serveFile(w, r, path, "application/dash+xml")
-				return
-			}
+	out, err := s.presentations.DASHNow(sv.Channel)
+	if errors.Is(err, presentation.ErrNotReady) && !sv.IsHLSSource && sv.IsVOD() {
+		// A VOD record saved before its origin MPD could be restored has no
+		// parsed MPD to render from, only the manifest the transition saved.
+		if path := s.manager.SavedVODManifestPath(channelID); path != "" {
+			serveFile(w, r, path, "application/dash+xml")
+			return
 		}
 	}
-	if p == nil {
-		http.Error(w, "manifest not yet available", http.StatusServiceUnavailable)
-		return
-	}
-	cfg := manifest.GeneratorConfig{
-		GatewayBaseURL:              baseURL,
-		ChannelID:                   channelID,
-		LicenseURL:                  licenseProxyURL(baseURL, channelID, "playready", chCfg.PlayReadyEnabled()),
-		WidevineLicenseURL:          licenseProxyURL(baseURL, channelID, "widevine", chCfg.WidevineEnabled()),
-		DisablePlayReady:            !chCfg.PlayReadyEnabled(),
-		DisableWidevine:             !chCfg.WidevineEnabled(),
-		WindowDepth:                 windowDepth,
-		SafeEdgeBuffer:              s.cfg.Window.SafeEdgeBuffer,
-		FallbackMinimumUpdatePeriod: s.cfg.Upstream.PollInterval,
-		VODMode:                     isVOD,
-		FinalDuration:               sv.FinalDuration,
-		StaticIngesting:             sv.IsStaticIngesting(),
-		StaticIngestStart:           sv.StaticIngestStart,
-	}
-
-	out, err := manifest.Generate(p, snap, cfg)
 	if err != nil {
-		http.Error(w, "manifest generation failed", http.StatusInternalServerError)
+		writeRenderError(w, err, "manifest generation failed")
 		return
 	}
 
@@ -119,13 +68,18 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 	w.Write(out)
 }
 
-// licenseProxyURL returns the URL of a channel's DRM license proxy, or "" when
-// that DRM system is disabled for the channel.
-func licenseProxyURL(baseURL, channelID, drmType string, enabled bool) string {
-	if !enabled {
-		return ""
+// writeRenderError answers a failed render: 404 for an output the channel
+// cannot produce, 503 for one it has nothing to put in yet, and 500 with
+// failure as the text for anything else.
+func writeRenderError(w http.ResponseWriter, err error, failure string) {
+	switch {
+	case errors.Is(err, presentation.ErrNotServed):
+		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.Is(err, presentation.ErrNotReady):
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	default:
+		http.Error(w, failure, http.StatusInternalServerError)
 	}
-	return gwurl.LicenseURL(baseURL, channelID, drmType)
 }
 
 // handleLicense returns a handler that proxies DRM license requests to the
