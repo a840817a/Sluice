@@ -22,6 +22,10 @@ _Avoid_: Upstream, feed
 One player's viewing of a channel. Its media position and play/pause intent belong to that player, independently of the channel's ingest lifecycle.
 _Avoid_: Channel mode (for a player's viewing state)
 
+**Presentation**:
+What a channel offers to players: its tracks, the protocols it can be served as, and the DASH manifest or HLS playlists rendered from them.
+_Avoid_: Output, manifest (for both protocols)
+
 ## Timeline
 
 **Period**:
