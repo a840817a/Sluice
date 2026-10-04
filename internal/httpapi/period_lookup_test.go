@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -20,9 +19,6 @@ import (
 	ch "github.com/a840817a/sluice/internal/channel"
 	"github.com/a840817a/sluice/internal/config"
 	"github.com/a840817a/sluice/internal/gwurl"
-	"github.com/a840817a/sluice/internal/hlsout"
-	"github.com/a840817a/sluice/internal/index"
-	"github.com/a840817a/sluice/internal/presentation"
 	"github.com/a840817a/sluice/internal/store"
 )
 
@@ -253,72 +249,6 @@ func TestUnusualPeriodIDReachesItsSegment(t *testing.T) {
 		uri := strings.TrimPrefix(gwurl.SegmentURL(cfg.Server.BaseURL, id, period, "v0", 5, ".m4s"), cfg.Server.BaseURL)
 		if code, body := get(t, h, uri); code != http.StatusOK || !bytes.Equal(body, want[period]) {
 			t.Errorf("period %q via %s: status %d, right file %v", period, uri, code, bytes.Equal(body, want[period]))
-		}
-	}
-}
-
-// The playlist numbers a later period after an earlier one's lifetime range,
-// so the handler must pass that range on rather than let it be recomputed
-// from whatever the ring still holds, and must order periods numerically. The
-// same holds for the lifetime record of origin discontinuities, which
-// EXT-X-DISCONTINUITY-SEQUENCE counts.
-func TestPeriodSegmentsCarryLifetimeRangeInOrder(t *testing.T) {
-	ci := index.NewChannelIndex(index.PublishAVBarrier)
-	for _, period := range []string{"10", "2"} {
-		rep := ci.Period(period).AS("0").Rep("v0", 2) // holds 2; 5 published
-		for n := uint64(100); n <= 104; n++ {
-			rep.RestorePublished(index.SegmentState{SegNo: n, EndPTS: 1, Timescale: 1, Discontinuity: n == 101})
-		}
-	}
-	srv := NewServer(config.Config{}, newTestManager(t, config.Config{}))
-	got := srv.periodSegmentsForRep(ch.Serving{Channel: presentation.Channel{Index: ci}}, "c", "v0")
-	if len(got) != 2 || got[0].PeriodID != "2" || got[1].PeriodID != "10" {
-		t.Fatalf("periods = %+v, want 2 then 10", got)
-	}
-	for _, p := range got {
-		if !p.RangeKnown || p.First != 100 || p.Last != 104 {
-			t.Errorf("period %s range = %d..%d (known %v), want the lifetime 100..104", p.PeriodID, p.First, p.Last, p.RangeKnown)
-		}
-		if !slices.Equal(p.Discontinuities, []uint64{101}) {
-			t.Errorf("period %s discontinuities = %v, want the evicted 101", p.PeriodID, p.Discontinuities)
-		}
-	}
-}
-
-// A segment the index committed but never published — a video segment whose
-// audio never arrived before an origin reset, say — is not part of what the
-// playlist can list. It must not open a gap in the media sequence at a period
-// boundary, or the playlist cuts at the gap and loses whole periods.
-//
-// The index is built the way ingest builds it, through Commit under the A/V
-// barrier, because that is where the committed-only segment comes from: once
-// an audio AdaptationSet is known but has no segment, the barrier holds every
-// later video segment back.
-func TestUnpublishedSegmentAtAPeriodEdgeKeepsBothPeriods(t *testing.T) {
-	ci := index.NewChannelIndex(index.PublishAVBarrier)
-	commit := func(period string, first, last, publishedTo uint64) {
-		for n := first; n <= last; n++ {
-			if n == publishedTo+1 {
-				ci.Period(period).AS("1").SetMediaType(index.MediaAudio)
-			}
-			ci.Commit(index.RepRef{PeriodID: period, ASID: "0", RepID: "v0", MediaType: index.MediaVideo}, 100,
-				index.SegmentState{SegNo: n, StartPTS: int64(n) * 90000, EndPTS: int64(n+1) * 90000, Timescale: 90000, Path: "/x/" + period})
-		}
-	}
-	commit("0", 1, 5, 4) // segment 5 committed, never published
-	commit("1", 1, 3, 3)
-
-	srv := NewServer(config.Config{}, newTestManager(t, config.Config{}))
-	periods := srv.periodSegmentsForRep(ch.Serving{Channel: presentation.Channel{Index: ci}}, "c", "v0")
-	want := []string{"0/v0/1", "0/v0/2", "0/v0/3", "0/v0/4", "1/v0/1", "1/v0/2", "1/v0/3"}
-	for _, vod := range []bool{true, false} {
-		out := string(hlsout.Media(periods, hlsout.MediaOptions{GatewayBaseURL: "http://gw", ChannelID: "c", RepID: "v0", VOD: vod, TargetDuration: 1}))
-		var got []string
-		for _, m := range regexp.MustCompile(`/segments/(\S+)\.m4s`).FindAllStringSubmatch(out, -1) {
-			got = append(got, m[1])
-		}
-		if strings.Join(got, " ") != strings.Join(want, " ") {
-			t.Errorf("VOD=%v lists %v, want both periods' published segments %v\n%s", vod, got, want, out)
 		}
 	}
 }

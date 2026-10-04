@@ -10,10 +10,7 @@ import (
 
 	ch "github.com/a840817a/sluice/internal/channel"
 	"github.com/a840817a/sluice/internal/config"
-	"github.com/a840817a/sluice/internal/gwurl"
 	"github.com/a840817a/sluice/internal/index"
-	imdp "github.com/a840817a/sluice/internal/mpd"
-	"github.com/a840817a/sluice/internal/presentation"
 )
 
 func TestMediaHandlersHonorIndexPublicationRules(t *testing.T) {
@@ -56,26 +53,5 @@ func TestMediaHandlersHonorIndexPublicationRules(t *testing.T) {
 	rep.ExpireOlderThan(11)
 	if code, _ := get(t, h, "/v1/channels/c/segments/0/v/2.ts"); code != http.StatusNotFound {
 		t.Fatalf("expired media status=%d", code)
-	}
-}
-
-func TestHLSReadPreservesDocumentOrderAndInitURLs(t *testing.T) {
-	ci := index.NewChannelIndex(index.PublishAVBarrier)
-	for _, id := range []string{"2", "10"} {
-		ci.Period(id).AS("1").SetMediaType(index.MediaAudio)
-		ci.Commit(index.RepRef{PeriodID: id, ASID: "0", RepID: "v", MediaType: index.MediaVideo}, 0, index.SegmentState{SegNo: 2, InitPath: "pending"})
-		ci.FindRep(id, "0", "v").RestorePublished(index.SegmentState{SegNo: 1, InitPath: "published", EndPTS: 1, Timescale: 1})
-	}
-	cfg := config.Config{Server: config.ServerConfig{BaseURL: "http://gw"}}
-	srv := NewServer(cfg, newTestManager(t, cfg))
-	sv := ch.Serving{Channel: presentation.Channel{Index: ci, ParsedMPD: &imdp.ParsedMPD{Periods: []*imdp.ParsedPeriod{{ID: "10"}, {ID: "2"}}}}}
-	got := srv.periodSegmentsForRep(sv, "c", "v")
-	if len(got) != 2 || got[0].PeriodID != "10" || got[1].PeriodID != "2" {
-		t.Fatalf("DASH document order: %+v", got)
-	}
-	for _, p := range got {
-		if p.InitURI != gwurl.InitURL("http://gw", "c", p.PeriodID, "v") || len(p.Segments) != 1 || p.Segments[0].SegNo != 1 || !p.RangeKnown || p.First != 1 || p.Last != 1 {
-			t.Fatalf("HLS read: %+v", p)
-		}
 	}
 }

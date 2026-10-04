@@ -7,6 +7,7 @@ import (
 	"github.com/a840817a/sluice/internal/config"
 	"github.com/a840817a/sluice/internal/gwurl"
 	"github.com/a840817a/sluice/internal/hlsingest"
+	"github.com/a840817a/sluice/internal/hlsout"
 	"github.com/a840817a/sluice/internal/index"
 	"github.com/a840817a/sluice/internal/manifest"
 	imdp "github.com/a840817a/sluice/internal/mpd"
@@ -35,12 +36,16 @@ func notServed(reason string) error { return &unavailable{ErrNotServed, reason} 
 func notReady(reason string) error  { return &unavailable{ErrNotReady, reason} }
 
 // Generator renders channels' DASH manifests and HLS playlists under one
-// gateway configuration.
+// gateway configuration. It is safe for concurrent use.
 type Generator struct {
 	baseURL        string
 	windowDepth    time.Duration
 	safeEdgeBuffer time.Duration
 	pollInterval   time.Duration
+	// targetDuration keeps each HLS representation's advertised
+	// EXT-X-TARGETDURATION monotonically non-decreasing across reloads. Keys
+	// are "{channelID}/{repID}".
+	targetDuration hlsout.StickyTargetDuration
 }
 
 // NewGenerator returns a Generator for the gateway configured by cfg.

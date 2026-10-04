@@ -6,7 +6,6 @@ import (
 
 	ch "github.com/a840817a/sluice/internal/channel"
 	"github.com/a840817a/sluice/internal/config"
-	"github.com/a840817a/sluice/internal/hlsout"
 	"github.com/a840817a/sluice/internal/license"
 	"github.com/a840817a/sluice/internal/presentation"
 	"github.com/go-chi/chi/v5"
@@ -14,13 +13,9 @@ import (
 
 // Server holds shared dependencies for HTTP handlers.
 type Server struct {
-	cfg     config.Config
-	manager *ch.Manager
-	// stickyTargetDuration keeps each HLS representation's advertised
-	// EXT-X-TARGETDURATION monotonically non-decreasing across reloads. Keys are
-	// "{channelID}/{repID}".
-	stickyTargetDuration hlsout.StickyTargetDuration
-	presentations        *presentation.Generator
+	cfg           config.Config
+	manager       *ch.Manager
+	presentations *presentation.Generator
 }
 
 // NewServer creates a Server.

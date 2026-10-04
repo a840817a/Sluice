@@ -3,18 +3,10 @@ package httpapi
 import (
 	"errors"
 	"log/slog"
-	"math"
 	"net/http"
 	"strconv"
-	"time"
 
 	ch "github.com/a840817a/sluice/internal/channel"
-	"github.com/a840817a/sluice/internal/gwurl"
-	"github.com/a840817a/sluice/internal/hlsingest"
-	"github.com/a840817a/sluice/internal/hlsout"
-	"github.com/a840817a/sluice/internal/index"
-	"github.com/a840817a/sluice/internal/manifest"
-	imdp "github.com/a840817a/sluice/internal/mpd"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -31,23 +23,11 @@ func (s *Server) handleMasterPlaylist(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "channel not found or not running", http.StatusNotFound)
 		return
 	}
-	pr := rt.Serving().Tracks
-	if !pr.ServesHLS {
-		http.Error(w, "channel cannot be served as HLS (encrypted or unsupported)", http.StatusNotFound)
+	out, err := s.presentations.Master(rt.Serving().Channel)
+	if err != nil {
+		writeRenderError(w, err, "playlist generation failed")
 		return
 	}
-	if !pr.Ready {
-		http.Error(w, "playlist not yet available", http.StatusServiceUnavailable)
-		return
-	}
-
-	out := hlsout.Master(pr.Variants, hlsout.MasterOptions{
-		GatewayBaseURL:      s.cfg.Server.BaseURL,
-		ChannelID:           channelID,
-		IndependentSegments: pr.IndependentSegments,
-		Renditions:          pr.Renditions,
-		Subtitles:           pr.Subtitles,
-	})
 
 	w.Header().Set("Content-Type", playlistContentType)
 	w.Header().Set("Cache-Control", "no-cache")
@@ -68,116 +48,15 @@ func (s *Server) handleMediaPlaylist(w http.ResponseWriter, r *http.Request) {
 	}
 	// One read of the channel for the whole response: the index the segments
 	// come from and the VOD flag that describes them have to agree.
-	sv := rt.Serving()
-	if !sv.Tracks.ServesHLS {
-		http.Error(w, "channel cannot be served as HLS", http.StatusNotFound)
+	out, err := s.presentations.Media(rt.Serving().Channel, repID)
+	if err != nil {
+		writeRenderError(w, err, "playlist generation failed")
 		return
 	}
-	if !sv.Tracks.KnownRep(repID) {
-		http.NotFound(w, r)
-		return
-	}
-
-	periods := s.periodSegmentsForRep(sv, channelID, repID)
-	var segs []index.SegmentState
-	for _, p := range periods {
-		segs = append(segs, p.Segments...)
-	}
-
-	// The advertised target duration must never shrink between reloads, so it
-	// is tracked per channel+representation rather than recomputed per request.
-	targetDur := s.stickyTargetDuration.Get(channelID+"/"+repID, segs)
-
-	isVOD := sv.IsVOD()
-	opts := hlsout.MediaOptions{
-		GatewayBaseURL: s.cfg.Server.BaseURL,
-		ChannelID:      channelID,
-		RepID:          repID,
-		VOD:            isVOD,
-		TargetDuration: targetDur,
-		WindowSegments: windowSegments(s.cfg.Window.Depth.Seconds(), targetDur, sv.Config.KeepsAllSegments() || isVOD),
-	}
-	// Segments kept encrypted on disk are advertised with a key URI pointing at
-	// this gateway's proxy. Decrypt-on-ingest channels store cleartext and carry
-	// no key material, so nothing is emitted for them.
-	opts.KeyProxyBase = keyProxyURL(s.cfg.Server.BaseURL, channelID)
-
-	out := hlsout.Media(periods, opts)
 
 	w.Header().Set("Content-Type", playlistContentType)
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Write(out)
-}
-
-// synthesizeHLSManifest builds the stand-in DASH MPD for an fMP4 HLS channel,
-// or nil when nothing is published yet. HLS carries no MPD, so the structure
-// comes from the discovered variants and the timeline from the segment index.
-//
-// Demuxed audio renditions become a separate audio AdaptationSet, so the DASH
-// output carries audio too (not just the video track).
-func (s *Server) synthesizeHLSManifest(sv ch.Serving, snap index.Snapshot, isVOD bool, windowDepth time.Duration) *imdp.ParsedMPD {
-	return manifest.SynthesizeHLSMPD(sv.Tracks.Variants, snap, manifest.HLSSynthOptions{
-		ASID:      hlsingest.VideoASID,
-		MediaType: imdp.MediaVideo,
-		MimeType:  "video/mp4",
-		Audio:     sv.Tracks.Renditions,
-		AudioASID: hlsingest.AudioASID,
-		VOD:       isVOD,
-		// A stable anchor for the live edge; unused for VOD.
-		AvailabilityStartTime: sv.StaticIngestStart,
-		MinimumUpdatePeriod:   s.cfg.Upstream.PollInterval,
-		TimeShiftBufferDepth:  windowDepth,
-	})
-}
-
-// windowSegments converts the configured sliding-window depth into a segment
-// count. Returns 0 (no cap) when the channel keeps its full history.
-func windowSegments(depthSec float64, targetDur int, keepAll bool) int {
-	if keepAll || depthSec <= 0 || targetDur <= 0 {
-		return 0
-	}
-	n := int(math.Ceil(depthSec / float64(targetDur)))
-	// RFC 8216 §6.2.2 requires a live playlist to hold at least three segments.
-	if n < 3 {
-		n = 3
-	}
-	return n
-}
-
-// periodSegmentsForRep collects repID's Published segments period by period,
-// in timeline order (Serving.OrderPeriods). Merging them into one list would
-// let two periods' identical segment numbers collide (ADR-0005).
-func (s *Server) periodSegmentsForRep(sv ch.Serving, channelID, repID string) []hlsout.PeriodSegments {
-	reads := sv.Index.RepresentationPeriods(repID)
-	byPeriod := make(map[string]index.PeriodRead, len(reads))
-	ids := make([]string, 0, len(reads))
-	for _, p := range reads {
-		byPeriod[p.PeriodID] = p
-		ids = append(ids, p.PeriodID)
-	}
-	out := make([]hlsout.PeriodSegments, 0, len(reads))
-	for _, id := range sv.OrderPeriods(ids) {
-		r := byPeriod[id]
-		p := hlsout.PeriodSegments{
-			PeriodID: id, Segments: r.Segments,
-			First: r.First, Last: r.Last, RangeKnown: r.RangeKnown,
-			Discontinuities: r.Discontinuities,
-		}
-		// A non-empty init path identifies fMP4; TS/WebVTT are self-contained.
-		if r.InitPath != "" {
-			p.InitURI = gwurl.InitURL(s.cfg.Server.BaseURL, channelID, id, repID)
-		}
-		out = append(out, p)
-	}
-	return out
-}
-
-// keyProxyURL returns the base URL of a channel's AES-128 key proxy.
-//
-// A thin wrapper over gwurl so that urls_test.go's byte-exact cases — including
-// the trailing-slash ones — keep guarding the shape from this side.
-func keyProxyURL(baseURL, channelID string) string {
-	return gwurl.KeyProxyBaseURL(baseURL, channelID)
 }
 
 // handleKeyProxy serves an AES-128 content key to players on behalf of the
