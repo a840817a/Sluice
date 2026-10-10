@@ -19,7 +19,7 @@ func TestRebuildReadsIDsBackFromDirectoryNames(t *testing.T) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, store.InitFileName), minimalFMP4(0), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, store.InitFileName), minimalInit(90000), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(dir, "1.m4s"), minimalFMP4(0), 0o644); err != nil {
@@ -40,7 +40,7 @@ func TestRebuildReadsIDsBackFromDirectoryNames(t *testing.T) {
 		t.Fatalf("RebuildFromDisk: %v", err)
 	}
 	for _, want := range []struct{ period, rep string }{{"", "v0"}, {"..", "a/b"}, {"p 1", "r:1"}, {"~YQ", "v0"}} {
-		if ci.FindRep(want.period, "0", want.rep) == nil {
+		if rep := ci.FindRep(want.period, "0", want.rep); rep == nil || len(rep.Published()) != 1 {
 			t.Errorf("representation %q of period %q not rebuilt; periods: %q", want.rep, want.period, ci.PeriodIDs())
 		}
 	}

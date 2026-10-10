@@ -28,7 +28,7 @@ func (e *httpError) Error() string {
 type Result struct {
 	Task       *queue.SegmentTask
 	Data       []byte // nil on error
-	InitData   []byte // non-nil only on first fetch of this rep's init segment
+	InitData   []byte // non-nil when an init download was requested
 	Err        error
 	StatusCode int // origin HTTP status when Err != nil; 0 for non-HTTP errors
 }
@@ -90,25 +90,32 @@ func (f *Fetcher) Fetch(ctx context.Context, task *queue.SegmentTask, needInit b
 		return r
 	}
 
-	// Fetch init segment if needed
 	if needInit && task.InitURL != "" {
-		var initData []byte
-		if task.InitRangeEnd > 0 {
-			initData, err = f.getRange(ctx, task.InitURL, task.InitRangeStart, task.InitRangeEnd)
-		} else {
-			initData, err = f.get(ctx, task.InitURL)
-		}
-		if err != nil {
-			var he *httpError
-			if errors.As(err, &he) {
-				r.StatusCode = he.statusCode
-			}
-			r.Err = fmt.Errorf("init %s: %w", task.InitURL, err)
-			return r
-		}
-		r.InitData = initData
+		init := f.fetchInit(ctx, task)
+		r.InitData, r.Err, r.StatusCode = init.InitData, init.Err, init.StatusCode
 	}
+	return r
+}
 
+// fetchInit only downloads bytes; validation and readiness belong to ingest.
+func (f *Fetcher) fetchInit(ctx context.Context, task *queue.SegmentTask) Result {
+	r := Result{Task: task}
+	if task.InitURL == "" {
+		r.Err = errors.New("fMP4 representation has no init URL")
+		return r
+	}
+	if task.InitRangeEnd > 0 {
+		r.InitData, r.Err = f.getRange(ctx, task.InitURL, task.InitRangeStart, task.InitRangeEnd)
+	} else {
+		r.InitData, r.Err = f.get(ctx, task.InitURL)
+	}
+	if r.Err != nil {
+		var he *httpError
+		if errors.As(r.Err, &he) {
+			r.StatusCode = he.statusCode
+		}
+		r.Err = fmt.Errorf("init %s: %w", task.InitURL, r.Err)
+	}
 	return r
 }
 
@@ -189,22 +196,16 @@ type Pool struct {
 	broker     *queue.Broker
 	numWorkers int
 	results    chan Result
-	// initSeen tracks which rep init segments have been fetched: repKey → true
-	initSeen map[string]bool
-	initMu   chan struct{} // 1-buffered mutex
 }
 
 // NewPool creates a worker pool but does not start it yet.
 func NewPool(fetcher *Fetcher, broker *queue.Broker, workers int) *Pool {
-	mu := make(chan struct{}, 1)
-	mu <- struct{}{}
+	workers = max(1, workers)
 	return &Pool{
 		fetcher:    fetcher,
 		broker:     broker,
 		numWorkers: workers,
 		results:    make(chan Result, workers*4),
-		initSeen:   make(map[string]bool),
-		initMu:     mu,
 	}
 }
 
@@ -254,40 +255,20 @@ func (p *Pool) worker(ctx context.Context) {
 			continue
 		}
 
-		needInit := p.markInitIfNeeded(task)
-		result := p.fetcher.Fetch(ctx, task, needInit)
-		if needInit && result.Err != nil {
-			p.unmarkInit(task)
-		}
+		result := p.fetcher.Fetch(ctx, task, false)
 
 		select {
 		case p.results <- result:
 		case <-ctx.Done():
+			p.broker.Release()
 			return
 		}
 	}
 }
 
-// markInitIfNeeded returns true if the init segment for this rep hasn't been
-// fetched yet, and marks it as in-progress atomically.
-func (p *Pool) markInitIfNeeded(task *queue.SegmentTask) bool {
-	key := initKey(task)
-	<-p.initMu
-	defer func() { p.initMu <- struct{}{} }()
-	if p.initSeen[key] {
-		return false
-	}
-	p.initSeen[key] = true
-	return true
-}
-
-func (p *Pool) unmarkInit(task *queue.SegmentTask) {
-	key := initKey(task)
-	<-p.initMu
-	defer func() { p.initMu <- struct{}{} }()
-	delete(p.initSeen, key)
-}
-
-func initKey(task *queue.SegmentTask) string {
-	return task.ChannelID + "/" + task.PeriodID + "/" + task.ASID + "/" + task.RepID
+// FetchInit downloads an init independently of the media workers and their
+// bounded result channel. Ingest owns deduplication, retries and persistence,
+// so media backpressure cannot prevent its prerequisite from completing.
+func (p *Pool) FetchInit(ctx context.Context, task *queue.SegmentTask) Result {
+	return p.fetcher.fetchInit(ctx, task)
 }

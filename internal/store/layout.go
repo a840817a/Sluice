@@ -117,10 +117,16 @@ func idFromDir(name string) string {
 // ScanChannel reads the locations back.
 type RepLocation struct {
 	DataDir, ChannelID, PeriodID, MediaType, ASID, RepID string
+	// scannedDir preserves a legacy, unencoded location found on disk. New
+	// writes still use the encoded layout; a scan must read the actual path.
+	scannedDir string
 }
 
 // Dir is the representation's directory.
 func (l RepLocation) Dir() string {
+	if l.scannedDir != "" {
+		return l.scannedDir
+	}
 	return filepath.Join(
 		PeriodsDir(l.DataDir, l.ChannelID),
 		pathseg.Encode(l.PeriodID),
@@ -200,11 +206,15 @@ func ScanChannel(dataDir, channelID string) ([]PeriodDir, error) {
 					if !re.IsDir() {
 						continue
 					}
-					as.Reps = append(as.Reps, RepLocation{
+					loc := RepLocation{
 						DataDir: dataDir, ChannelID: channelID,
 						PeriodID: period.ID, MediaType: mediaType, ASID: asID,
 						RepID: idFromDir(re.Name()),
-					})
+					}
+					if actual := filepath.Join(asPath, re.Name()); actual != loc.Dir() {
+						loc.scannedDir = actual
+					}
+					as.Reps = append(as.Reps, loc)
 				}
 			}
 			period.AdaptationSets = append(period.AdaptationSets, as)

@@ -47,7 +47,7 @@ func TestRebuildDoesNotStretchAcrossSegmentGap(t *testing.T) {
 	if err := os.MkdirAll(repDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(repDir, "init.mp4"), minimalFMP4(0), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repDir, "init.mp4"), minimalInit(48000), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

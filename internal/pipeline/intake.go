@@ -22,6 +22,7 @@ import (
 // Stages at which Intake.Store can give up on a segment. They are the stage
 // names progress records errors under.
 const (
+	StageInit     = "init"
 	StageDecrypt  = "decrypt"
 	StageValidate = "validate"
 	StageWrite    = "write"
@@ -67,8 +68,8 @@ type Intake struct {
 	channelID string
 	ci        *index.ChannelIndex
 	keys      KeyFetcher
-	// repTimescales caches each representation's track timescale, read from
-	// the mdhd box of its init segment. Keyed by queue.SegmentTask.RepKey.
+	// repTimescales holds only validated, persisted init timescales, keyed by
+	// init path (including the period and representation).
 	repTimescales map[string]uint32
 	// sidecarAppends counts metadata records written per representation since
 	// that representation's file was last compacted.
@@ -156,24 +157,20 @@ func (in *Intake) Store(ctx context.Context, task *queue.SegmentTask, data, init
 		startPTS = int64(segInfo.BaseMediaDecodeTime)
 	}
 
-	// Write init segment atomically to disk (first time only).
-	if initData != nil {
-		if err := validate.ValidateInit(initData); err != nil {
-			slog.Warn("init validation failed", "rep", task.RepID, "err", err)
-		} else {
-			initPath := in.location(task).InitPath()
-			if err := store.Write(initPath, initData); err != nil {
-				slog.Error("init write failed", "path", initPath, "err", err)
-			} else {
-				// Cache the actual track timescale from the init segment's mdhd box.
-				// The SegmentTemplate timescale (task.Timescale) is for computing
-				// segment boundaries in presentation time, but the BaseMediaDecodeTime
-				// in tfdt uses the track's own timescale. Using the correct timescale
-				// ensures A/V barrier PTS comparisons are in the same unit (seconds).
-				if ts, err := validate.TimescaleFromInitBytes(initData); err == nil && ts > 0 {
-					in.repTimescales[task.RepKey()] = ts
-				}
+	// No fMP4 media reaches its final path until its init is usable. The
+	// processor normally prepares it asynchronously; direct callers follow
+	// exactly the same rule here.
+	if task.Format == queue.FormatFMP4 {
+		key := in.location(task).InitPath()
+		if in.repTimescales[key] == 0 {
+			ts, err := validate.ReadInitTimescale(key)
+			if err != nil && initData != nil {
+				ts, err = persistInit(key, initData)
 			}
+			if err != nil {
+				return Outcome{Stage: StageInit, Err: err, Retry: true}
+			}
+			in.repTimescales[key] = ts
 		}
 	}
 
@@ -194,13 +191,12 @@ func (in *Intake) Store(ctx context.Context, task *queue.SegmentTask, data, init
 	}
 	metrics.SegmentWriteDuration.Observe(time.Since(writeStart).Seconds())
 
-	// Determine the actual track timescale. Prefer the cached value from the init
-	// segment's mdhd box; fall back to task.Timescale (SegmentTemplate value).
+	// fMP4 uses the validated init timescale. TS/WebVTT use task timing.
 	// This matters when the SegmentTemplate omits timescale (defaulting to 1 per
 	// spec) but the track's BaseMediaDecodeTime is in a different timescale (e.g.
 	// 48000 for audio, 90000 for video), which would cause A/V barrier to fail.
 	trackTS := task.Timescale
-	if ts, ok := in.repTimescales[task.RepKey()]; ok {
+	if ts, ok := in.repTimescales[in.location(task).InitPath()]; ok {
 		trackTS = ts
 	}
 

@@ -30,8 +30,7 @@ type RepLayout struct {
 // each representation's segment counts, read under the index's own locks. It
 // includes what ForEachRep never yields: a period with no AdaptationSets yet,
 // which serving a manifest creates before any segment commits, and an
-// AdaptationSet with no representations, which the rebuild creates before it
-// reads the set's directory. Every level is ordered by ID.
+// AdaptationSet with no representations yet. Every level is ordered by ID.
 func (ci *ChannelIndex) Layout() []PeriodLayout {
 	ci.mu.RLock()
 	defer ci.mu.RUnlock()

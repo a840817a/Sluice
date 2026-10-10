@@ -142,8 +142,8 @@ func TestScanChannelReadsUnencodedNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []PeriodDir{{ID: "p:1", AdaptationSets: []ASDir{{ID: "0", MediaType: "video", Reps: []RepLocation{
-		{DataDir: data, ChannelID: "ch1", PeriodID: "p:1", MediaType: "video", ASID: "0", RepID: "v:0"},
-		{DataDir: data, ChannelID: "ch1", PeriodID: "p:1", MediaType: "video", ASID: "0", RepID: "~x"},
+		{DataDir: data, ChannelID: "ch1", PeriodID: "p:1", MediaType: "video", ASID: "0", RepID: "v:0", scannedDir: filepath.Join(PeriodsDir(data, "ch1"), "p:1", "video_0", "v:0")},
+		{DataDir: data, ChannelID: "ch1", PeriodID: "p:1", MediaType: "video", ASID: "0", RepID: "~x", scannedDir: filepath.Join(PeriodsDir(data, "ch1"), "p:1", "video_0", "~x")},
 	}}}}}
 	if !reflect.DeepEqual(periods, want) {
 		t.Errorf("scanned %+v, want %+v", periods, want)

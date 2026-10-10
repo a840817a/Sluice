@@ -63,16 +63,14 @@ func rebuildFromDisk(ci *ChannelIndex, dataDir, channelID string, capacity int) 
 	for _, pd := range periods {
 		ps := ci.Period(pd.ID)
 		for _, ad := range pd.AdaptationSets {
-			as := ps.AS(ad.ID)
-			as.SetMediaType(ad.MediaType)
 			for _, loc := range ad.Reps {
 				repID := loc.RepID
-				rep := as.Rep(repID, capacity)
 				repPath := loc.Dir()
 				initPath := loc.InitPath()
 
-				// Read timescale from the init segment (best-effort).
-				timescale, _ := validate.ReadInitTimescale(initPath)
+				// The same init readiness rule applies after restart as during ingest.
+				timescale, initErr := validate.ReadInitTimescale(initPath)
+				initWarned := false
 
 				// MPEG-TS segments carry no tfdt box, so their timing is not
 				// recoverable from the files. It comes from the sidecar the
@@ -136,6 +134,14 @@ func rebuildFromDisk(ci *ChannelIndex, dataDir, channelID string, capacity int) 
 						continue
 					}
 
+					if initErr != nil {
+						if !initWarned {
+							slog.Warn("skipping fMP4 representation: init is not ready", "path", initPath, "err", initErr)
+							initWarned = true
+						}
+						continue
+					}
+
 					pts, err := validate.ReadStartPTS(segPath)
 					if err != nil {
 						continue // skip unreadable segments
@@ -146,6 +152,15 @@ func rebuildFromDisk(ci *ChannelIndex, dataDir, channelID string, capacity int) 
 						path:     segPath,
 					})
 				}
+
+				// A representation excluded for missing init must not leave an
+				// empty AdaptationSet blocking the other tracks' A/V barrier.
+				if len(segs) == 0 && len(sidecarStates) == 0 {
+					continue
+				}
+				as := ps.AS(ad.ID)
+				as.SetMediaType(ad.MediaType)
+				rep := as.Rep(repID, capacity)
 
 				// Commit in segment order. Directory listings are lexical
 				// ("10.ts" before "2.ts"), and a bounded ring buffer keeps the

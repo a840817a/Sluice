@@ -237,6 +237,9 @@ func TestUnusualPeriodIDReachesItsSegment(t *testing.T) {
 		if err := os.WriteFile(path, want[period], 0o644); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.WriteFile(filepath.Join(filepath.Dir(path), store.InitFileName), fmp4Init(cmafTimescale), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	cfg := config.Config{Store: config.StoreConfig{DataDir: dataDir}, Server: config.ServerConfig{BaseURL: "http://gw.test"}}
 	mgr := newTestManager(t, cfg)

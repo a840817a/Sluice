@@ -125,7 +125,7 @@ func ReadStartPTS(path string) (uint64, error) {
 	return uint64(tfdt.BaseMediaDecodeTimeV0), nil
 }
 
-// TimescaleFromInitBytes reads the track timescale from an in-memory init segment
+// TimescaleFromInitBytes reads a non-zero track timescale from an in-memory init segment
 // (moov/trak/mdia/mdhd). Used by the processor to get the actual track timescale
 // when the SegmentTemplate timescale differs from the media timescale.
 func TimescaleFromInitBytes(data []byte) (uint32, error) {
@@ -140,10 +140,13 @@ func TimescaleFromInitBytes(data []byte) (uint32, error) {
 	if !ok {
 		return 0, fmt.Errorf("unexpected mdhd payload type")
 	}
+	if mdhd.Timescale == 0 {
+		return 0, errors.New("init mdhd timescale is zero")
+	}
 	return mdhd.Timescale, nil
 }
 
-// ReadInitTimescale opens an init segment file and returns the timescale from
+// ReadInitTimescale opens an init segment file and returns a non-zero timescale from
 // the mdhd box (moov/trak/mdia/mdhd).
 func ReadInitTimescale(path string) (uint32, error) {
 	f, err := os.Open(path)
@@ -161,6 +164,9 @@ func ReadInitTimescale(path string) (uint32, error) {
 	mdhd, ok := boxes[0].Payload.(*mp4.Mdhd)
 	if !ok {
 		return 0, fmt.Errorf("unexpected mdhd payload type in %s", path)
+	}
+	if mdhd.Timescale == 0 {
+		return 0, errors.New("init mdhd timescale is zero")
 	}
 	return mdhd.Timescale, nil
 }
