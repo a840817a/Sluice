@@ -13,11 +13,13 @@ package hlsout
 // an explicit EXT-X-DISCONTINUITY.
 
 import (
+	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/a840817a/sluice/internal/hlsdesc"
 	"github.com/a840817a/sluice/internal/index"
 )
 
@@ -31,81 +33,84 @@ const LocalMasterName = "local.m3u8"
 // representation ID can never turn into a path.
 func LocalMediaName(i int) string { return fmt.Sprintf("local_%d.m3u8", i) }
 
-// LocalRendition is one representation's contribution to the local master.
-type LocalRendition struct {
-	Ref       index.RepRef
-	Segments  []index.SegmentState
-	Bandwidth uint64
-	Codecs    string
-	Width     int
-	Height    int
-}
-
-// LocalMaster renders the master playlist. Renditions are listed in the order
-// given; each entry points at LocalMediaName(i).
-func LocalMaster(rends []LocalRendition) []byte {
-	var b strings.Builder
-	b.WriteString("#EXTM3U\n#EXT-X-VERSION:6\n")
-	for i, r := range rends {
-		attrs := []string{fmt.Sprintf("BANDWIDTH=%d", maxU64(r.Bandwidth, 1))}
-		if r.Width > 0 && r.Height > 0 {
-			attrs = append(attrs, fmt.Sprintf("RESOLUTION=%dx%d", r.Width, r.Height))
-		}
-		if r.Codecs != "" {
-			attrs = append(attrs, fmt.Sprintf("CODECS=%q", r.Codecs))
-		}
-		b.WriteString("#EXT-X-STREAM-INF:" + strings.Join(attrs, ",") + "\n")
-		b.WriteString(LocalMediaName(i) + "\n")
-	}
-	return []byte(b.String())
-}
-
 // LocalMedia renders one representation's media playlist. Every path is
 // relative to channelDir, which is where the playlist itself is written.
 //
 // Paths come from the index's own record of where each file was put, so the
 // playlist cannot name a segment the gateway does not have.
 func LocalMedia(segs []index.SegmentState, channelDir string) ([]byte, error) {
-	if len(segs) == 0 {
+	return LocalMediaPeriods([]PeriodSegments{{Segments: segs}}, channelDir, nil)
+}
+
+// LocalMasterTracks uses the same track signalling as served HLS with local URIs.
+// Callers supply only tracks with exported media playlists and valid groups.
+func LocalMasterTracks(variants []hlsdesc.Variant, o MasterOptions, names map[string]string) []byte {
+	return master(variants, o, func(id string) string { return names[id] })
+}
+
+// LocalMediaPeriods preserves all published segments, including holes, in the
+// supplied period order. Key names refer to validated, separately written keys.
+func LocalMediaPeriods(periods []PeriodSegments, channelDir string, keys map[string]string) ([]byte, error) {
+	var entries []playlistEntry
+	var all []index.SegmentState
+	version := 3
+	for pi, period := range periods {
+		ordered := append([]index.SegmentState(nil), period.Segments...)
+		sort.Slice(ordered, func(i, j int) bool { return ordered[i].SegNo < ordered[j].SegNo })
+		for _, s := range ordered {
+			entries = append(entries, playlistEntry{seg: s, periodIdx: pi})
+			all = append(all, s)
+			if s.InitPath != "" {
+				version = 6
+			}
+		}
+	}
+	if len(entries) == 0 {
 		return nil, fmt.Errorf("local playlist: no published segments")
 	}
-	ordered := append([]index.SegmentState(nil), segs...)
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].SegNo < ordered[j].SegNo })
-
-	version := 3
-	if ordered[0].InitPath != "" {
-		version = 6 // EXT-X-MAP requires 6
-	}
-
 	var b strings.Builder
-	b.WriteString("#EXTM3U\n")
-	fmt.Fprintf(&b, "#EXT-X-VERSION:%d\n", version)
-	fmt.Fprintf(&b, "#EXT-X-TARGETDURATION:%d\n", ceilMaxDuration(ordered))
-	b.WriteString("#EXT-X-PLAYLIST-TYPE:VOD\n")
-	fmt.Fprintf(&b, "#EXT-X-MEDIA-SEQUENCE:%d\n", ordered[0].SegNo)
-
-	if init := ordered[0].InitPath; init != "" {
-		rel, err := relativeTo(init, channelDir)
-		if err != nil {
-			return nil, err
-		}
-		fmt.Fprintf(&b, "#EXT-X-MAP:URI=%q\n", rel)
-	}
-
-	prev := ordered[0].SegNo
-	for i, s := range ordered {
-		// A break in numbering is a break in the timeline. Saying so is what
-		// keeps a reader from treating the jump as continuous media.
-		if i > 0 && (s.SegNo != prev+1 || s.Discontinuity) {
+	fmt.Fprintf(&b, "#EXTM3U\n#EXT-X-VERSION:%d\n#EXT-X-TARGETDURATION:%d\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-MEDIA-SEQUENCE:%d\n", version, ceilMaxDuration(all), entries[0].seg.SegNo)
+	var prev playlistEntry
+	lastKey, lastInit := "", ""
+	for i, e := range entries {
+		s := e.seg
+		boundary := i > 0 && e.periodIdx != prev.periodIdx
+		if i > 0 && (boundary || s.SegNo != prev.seg.SegNo+1 || s.Discontinuity) {
 			b.WriteString("#EXT-X-DISCONTINUITY\n")
 		}
-		prev = s.SegNo
-
+		if s.InitPath != "" && (i == 0 || boundary || s.InitPath != lastInit) {
+			// Persisted init files are validated clear MP4, even in passthrough mode.
+			if lastKey != "" {
+				b.WriteString("#EXT-X-KEY:METHOD=NONE\n")
+				lastKey = ""
+			}
+			rel, err := relativeTo(s.InitPath, channelDir)
+			if err != nil {
+				return nil, err
+			}
+			fmt.Fprintf(&b, "#EXT-X-MAP:URI=%q\n", rel)
+		}
+		key := ""
+		if s.KeyURI != "" {
+			name, ok := keys[s.KeyURI]
+			if !ok || len(s.IV) != 16 {
+				return nil, fmt.Errorf("local playlist: missing key or invalid IV for segment %d", s.SegNo)
+			}
+			key = fmt.Sprintf("#EXT-X-KEY:METHOD=AES-128,URI=%q,IV=0x%s", name, hex.EncodeToString(s.IV))
+		}
+		if key != lastKey {
+			if key == "" {
+				b.WriteString("#EXT-X-KEY:METHOD=NONE\n")
+			} else {
+				b.WriteString(key + "\n")
+			}
+		}
 		rel, err := relativeTo(s.Path, channelDir)
 		if err != nil {
 			return nil, err
 		}
 		fmt.Fprintf(&b, "#EXTINF:%.3f,\n%s\n", segmentDuration(s), rel)
+		prev, lastInit, lastKey = e, s.InitPath, key
 	}
 	b.WriteString("#EXT-X-ENDLIST\n")
 	return []byte(b.String()), nil
@@ -120,11 +125,4 @@ func relativeTo(p, channelDir string) (string, error) {
 		return "", fmt.Errorf("local playlist: %q escapes the channel directory", p)
 	}
 	return filepath.ToSlash(rel), nil
-}
-
-func maxU64(v, min uint64) uint64 {
-	if v < min {
-		return min
-	}
-	return v
 }

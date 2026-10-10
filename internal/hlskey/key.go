@@ -345,3 +345,23 @@ func writeAtomic(path string, data []byte) error {
 	}
 	return nil
 }
+
+// Cached returns a copy of an already acquired key without contacting the origin.
+// Local exports call it after the VOD key checkpoint has finished.
+func (c *Cache) Cached(uri string) ([]byte, error) {
+	if c == nil {
+		return nil, errors.New("HLS key cache unavailable")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e := c.entries[uri]; e != nil {
+		select {
+		case <-e.done:
+			if e.err == nil && len(e.key) == KeyLength {
+				return append([]byte(nil), e.key...), nil
+			}
+		default:
+		}
+	}
+	return nil, fmt.Errorf("HLS key is not cached: %s", KeyID(uri))
+}

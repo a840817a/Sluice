@@ -16,6 +16,7 @@ package manifest
 import (
 	"encoding/xml"
 	"fmt"
+	"math"
 	"path/filepath"
 	"strings"
 
@@ -40,6 +41,8 @@ type localMPD struct {
 }
 
 type localPeriod struct {
+	Start          string    `xml:"start,attr"`
+	Duration       string    `xml:"duration,attr"`
 	ID             string    `xml:"id,attr,omitempty"`
 	AdaptationSets []localAS `xml:"AdaptationSet"`
 }
@@ -58,6 +61,7 @@ type localAS struct {
 }
 
 type localRep struct {
+	MimeType    string           `xml:"mimeType,attr,omitempty"`
 	ID          string           `xml:"id,attr"`
 	Width       uint64           `xml:"width,attr,omitempty"`
 	Height      uint64           `xml:"height,attr,omitempty"`
@@ -67,10 +71,11 @@ type localRep struct {
 }
 
 type localSegmentList struct {
-	Timescale uint32         `xml:"timescale,attr,omitempty"`
-	Timeline  *localTimeline `xml:"SegmentTimeline,omitempty"`
-	Init      *localInit     `xml:"Initialization,omitempty"`
-	URLs      []localSegURL  `xml:"SegmentURL"`
+	PresentationTimeOffset uint64         `xml:"presentationTimeOffset,attr,omitempty"`
+	Timescale              uint32         `xml:"timescale,attr,omitempty"`
+	Timeline               *localTimeline `xml:"SegmentTimeline,omitempty"`
+	Init                   *localInit     `xml:"Initialization,omitempty"`
+	URLs                   []localSegURL  `xml:"SegmentURL"`
 }
 
 type localTimeline struct {
@@ -118,7 +123,27 @@ func GenerateLocalMPD(orig *imdp.ParsedMPD, snap index.Snapshot, channelDir stri
 
 	var maxEndSec float64
 	for _, origPeriod := range orig.Periods {
-		lp := localPeriod{ID: origPeriod.ID}
+		// Rebase all tracks together, never each representation separately: doing
+		// so would erase intentional A/V or subtitle offsets. Source PTO may
+		// use a different clock from the persisted media timescale.
+		begin, end := math.Inf(1), math.Inf(-1)
+		for _, as := range origPeriod.AdaptationSets {
+			for _, rep := range as.Representations {
+				offset := localSourceOffset(rep, as)
+				for _, seg := range snap.Published(origPeriod.ID, as.ID, rep.ID) {
+					if seg.Timescale == 0 || seg.StartPTS < 0 || seg.EndPTS <= seg.StartPTS {
+						return nil, fmt.Errorf("local manifest: invalid segment timing")
+					}
+					begin = math.Min(begin, seg.StartSec()-offset)
+					end = math.Max(end, seg.EndSec()-offset)
+				}
+			}
+		}
+		if math.IsInf(begin, 1) {
+			continue
+		}
+		span := end - begin
+		lp := localPeriod{ID: origPeriod.ID, Start: fmt.Sprintf("PT%.6fS", maxEndSec), Duration: fmt.Sprintf("PT%.6fS", span)}
 		for _, origAS := range origPeriod.AdaptationSets {
 			las := localAS{
 				MimeType: origAS.MimeType,
@@ -133,15 +158,18 @@ func GenerateLocalMPD(orig *imdp.ParsedMPD, snap index.Snapshot, channelDir stri
 					// should not be offered a rendition it cannot play.
 					continue
 				}
-				sl, endSec, err := buildLocalSegmentList(segs, channelDir)
+				sl, _, err := buildLocalSegmentList(segs, channelDir)
 				if err != nil {
 					return nil, err
 				}
-				if endSec > maxEndSec {
-					maxEndSec = endSec
+				offsetTicks := (localSourceOffset(origRep, origAS) + begin) * float64(sl.Timescale)
+				if offsetTicks < -0.5 {
+					return nil, fmt.Errorf("local manifest: negative presentation offset for %s", origRep.ID)
 				}
+				sl.PresentationTimeOffset = uint64(math.Max(0, math.Round(offsetTicks)))
 				las.Reps = append(las.Reps, localRep{
 					ID:          origRep.ID,
+					MimeType:    origRep.MimeType,
 					Width:       origRep.Width,
 					Height:      origRep.Height,
 					Bandwidth:   origRep.Bandwidth,
@@ -155,6 +183,7 @@ func GenerateLocalMPD(orig *imdp.ParsedMPD, snap index.Snapshot, channelDir stri
 		}
 		if len(lp.AdaptationSets) > 0 {
 			doc.Periods = append(doc.Periods, lp)
+			maxEndSec += span
 		}
 	}
 
@@ -228,4 +257,21 @@ func relativeToChannel(p, channelDir string) (string, error) {
 		return "", fmt.Errorf("local manifest: %q escapes the channel directory", p)
 	}
 	return filepath.ToSlash(rel), nil
+}
+
+// localSourceOffset is in seconds in the source presentation clock. A rep-only
+// URL template inherits the AS offset, just as it inherits its timescale.
+func localSourceOffset(rep *imdp.ParsedRepresentation, as *imdp.ParsedAdaptationSet) float64 {
+	if t := rep.EffectiveTemplate(as); t != nil {
+		offset := t.PresentationTimeOffset
+
+		return float64(offset) / float64(max(t.Timescale, 1))
+	}
+	if l := rep.EffectiveSegmentList(as); l != nil {
+		return float64(l.PresentationTimeOffset) / float64(max(l.Timescale, 1))
+	}
+	if b := rep.EffectiveSegmentBase(as); b != nil {
+		return float64(b.PresentationTimeOffset) / float64(max(b.Timescale, 1))
+	}
+	return 0
 }

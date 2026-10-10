@@ -15,10 +15,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/a840817a/sluice/internal/hlsdesc"
-	"github.com/a840817a/sluice/internal/hlsout"
+	"github.com/a840817a/sluice/internal/hlskey"
 	"github.com/a840817a/sluice/internal/index"
-	"github.com/a840817a/sluice/internal/manifest"
 	imdp "github.com/a840817a/sluice/internal/mpd"
 	"github.com/a840817a/sluice/internal/presentation"
 	"github.com/a840817a/sluice/internal/store"
@@ -39,7 +37,7 @@ type vodArtifacts struct {
 	serving  Serving
 	snapshot index.Snapshot
 	rawMPD   []byte
-	variants []hlsdesc.Variant
+	keys     *hlskey.Cache
 }
 
 // captureVODArtifacts freezes the candidate index the VOD transition just
@@ -61,9 +59,7 @@ func (m *Manager) captureVODArtifacts(rt *Runtime, candidate *index.ChannelIndex
 		snapshot: candidate.Snapshot(),
 		rawMPD:   append([]byte(nil), rt.ParsedMPDBytes()...),
 	}
-	if sv.IsHLSSource {
-		a.variants = sv.Tracks.Variants
-	}
+	a.keys = rt.keys
 	return a, nil
 }
 
@@ -125,85 +121,22 @@ func requiredKeyURIs(snapshot index.Snapshot) []string {
 // been committed. Its failures are deliberately contained: they cannot revoke
 // a completed VOD that is already restartable through the gateway.
 func (a vodArtifacts) writeOptional() {
-	if a.serving.IsHLSSource {
-		if err := os.MkdirAll(a.dir, 0o755); err != nil {
-			slog.Warn("local playlist: mkdir failed", "channel", a.id, "err", err)
-			return
-		}
-		a.writeLocalPlaylists()
+	files, err := a.render.Local(a.serving.Channel, a.snapshot, a.dir, a.keys)
+	if err != nil {
+		slog.Warn("local presentation: generate failed", "channel", a.id, "err", err)
 		return
 	}
-	a.writeLocalManifest()
+	for _, file := range files {
+		if err := store.WriteDurable(filepath.Join(a.dir, file.Name), file.Data, file.Mode); err != nil {
+			slog.Warn("local presentation: write failed", "channel", a.id, "file", file.Name, "err", err)
+			return
+		}
+	}
+	slog.Info("local presentation saved", "channel", a.id, "dir", a.dir)
 }
 
 func generateServedVODManifest(a vodArtifacts) ([]byte, error) {
 	return a.render.DASH(a.serving.Channel, a.snapshot)
-}
-
-func (a vodArtifacts) writeLocalManifest() {
-	data, err := manifest.GenerateLocalMPD(a.serving.ParsedMPD, a.snapshot, a.dir)
-	if err != nil {
-		slog.Warn("local manifest: generate failed", "channel", a.id, "err", err)
-		return
-	}
-	path := filepath.Join(a.dir, manifest.LocalManifestName)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		slog.Warn("local manifest: write failed", "channel", a.id, "err", err)
-		return
-	}
-	slog.Info("local manifest saved", "channel", a.id, "path", path)
-}
-
-func (a vodArtifacts) writeLocalPlaylists() {
-	byRep := make(map[string]hlsdesc.Variant, len(a.variants))
-	for _, v := range a.variants {
-		byRep[v.RepID] = v
-	}
-
-	var rends []hlsout.LocalRendition
-	a.snapshot.ForEachRep(func(ref index.RepRef, published []index.SegmentState) {
-		if len(published) == 0 {
-			return
-		}
-		r := hlsout.LocalRendition{Ref: ref, Segments: published}
-		if v, ok := byRep[ref.RepID]; ok {
-			r.Bandwidth, r.Codecs, r.Width, r.Height = v.Bandwidth, v.Codecs, v.Width, v.Height
-		}
-		rends = append(rends, r)
-	})
-	if len(rends) == 0 {
-		slog.Warn("local playlist: no published segments", "channel", a.id)
-		return
-	}
-	sort.Slice(rends, func(i, j int) bool {
-		x, y := rends[i].Ref, rends[j].Ref
-		if x.PeriodID != y.PeriodID {
-			return x.PeriodID < y.PeriodID
-		}
-		if x.ASID != y.ASID {
-			return x.ASID < y.ASID
-		}
-		return x.RepID < y.RepID
-	})
-
-	// Media playlists must exist before the master points at them.
-	for i, r := range rends {
-		data, err := hlsout.LocalMedia(r.Segments, a.dir)
-		if err != nil {
-			slog.Warn("local playlist: generate failed", "channel", a.id, "rep", r.Ref.RepID, "err", err)
-			return
-		}
-		if err := os.WriteFile(filepath.Join(a.dir, hlsout.LocalMediaName(i)), data, 0o644); err != nil {
-			slog.Warn("local playlist: write failed", "channel", a.id, "rep", r.Ref.RepID, "err", err)
-			return
-		}
-	}
-	path := filepath.Join(a.dir, hlsout.LocalMasterName)
-	if err := os.WriteFile(path, hlsout.LocalMaster(rends), 0o644); err != nil {
-		slog.Warn("local playlist: master write failed", "channel", a.id, "err", err)
-		return
-	}
-	slog.Info("local playlist saved", "channel", a.id, "path", path, "renditions", len(rends))
 }
 
 func (m *Manager) vodArtifactDir(channelID string) string {

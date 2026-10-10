@@ -132,12 +132,13 @@ type ParsedContentProtection struct {
 
 // ParsedSegmentTemplate holds the info needed to compute segment URLs and numbers.
 type ParsedSegmentTemplate struct {
-	Timescale              uint64
-	Duration               uint64 // per-segment duration in timescale units; 0 if using SegmentTimeline
-	StartNumber            uint64
-	PresentationTimeOffset uint64 // maps segment numbers to media time; 0 if not set
-	Media                  string // e.g. "manifest_6m_$Number%09d$.mp4"
-	Init                   string // e.g. "manifest_6minit.mp4"
+	presentationTimeOffsetSet bool
+	Timescale                 uint64
+	Duration                  uint64 // per-segment duration in timescale units; 0 if using SegmentTimeline
+	StartNumber               uint64
+	PresentationTimeOffset    uint64 // maps segment numbers to media time; 0 if not set
+	Media                     string // e.g. "manifest_6m_$Number%09d$.mp4"
+	Init                      string // e.g. "manifest_6minit.mp4"
 
 	// SegmentTimeline entries (nil for number-based templates)
 	Timeline []SegmentTimelineEntry
@@ -153,12 +154,14 @@ type SegmentTimelineEntry struct {
 // ParsedSegmentList describes an explicit segment list (<SegmentList>).
 // Segments are numbered from StartNumber (default 1).
 type ParsedSegmentList struct {
-	Timescale   uint64
-	Duration    uint64 // per-segment duration in timescale units (0 = not specified)
-	StartNumber uint64 // first segment number (default 1)
-	InitURL     string // from <Initialization sourceURL="...">; empty = none
-	InitRange   string // byte range ("start-end") if init is a range within BaseURL
-	Segments    []SegmentListEntry
+	presentationTimeOffsetSet bool
+	PresentationTimeOffset    uint64
+	Timescale                 uint64
+	Duration                  uint64 // per-segment duration in timescale units (0 = not specified)
+	StartNumber               uint64 // first segment number (default 1)
+	InitURL                   string // from <Initialization sourceURL="...">; empty = none
+	InitRange                 string // byte range ("start-end") if init is a range within BaseURL
+	Segments                  []SegmentListEntry
 }
 
 // SegmentListEntry is one <SegmentURL> inside a SegmentList.
@@ -170,9 +173,11 @@ type SegmentListEntry struct {
 // ParsedSegmentBase describes a single-file representation (<SegmentBase>).
 // The actual file URL comes from the nearest <BaseURL> element in scope.
 type ParsedSegmentBase struct {
-	Timescale  uint32
-	IndexRange string // byte range of the sidx box, e.g. "0-836"
-	InitRange  string // byte range of the init (moov) segment, e.g. "0-698"
+	presentationTimeOffsetSet bool
+	PresentationTimeOffset    uint64
+	Timescale                 uint32
+	IndexRange                string // byte range of the sidx box, e.g. "0-836"
+	InitRange                 string // byte range of the init (moov) segment, e.g. "0-698"
 }
 
 // SegmentDuration returns the duration of one segment in seconds.
@@ -198,6 +203,9 @@ func (r *ParsedRepresentation) EffectiveTemplate(parent *ParsedAdaptationSet) *P
 	}
 	// Merge: start with a copy of the rep-level template then fill zeros from parent.
 	merged := *r.SegTemplate
+	if !merged.presentationTimeOffsetSet && merged.PresentationTimeOffset == 0 {
+		merged.PresentationTimeOffset = parent.SegTemplate.PresentationTimeOffset
+	}
 	if merged.Timescale == 0 {
 		merged.Timescale = parent.SegTemplate.Timescale
 	}
@@ -220,21 +228,43 @@ func (r *ParsedRepresentation) EffectiveTemplate(parent *ParsedAdaptationSet) *P
 }
 
 // EffectiveSegmentList returns the rep-level SegmentList if present,
-// otherwise the AS-level one.
+// otherwise the AS-level one. Rep-level addressing inherits absent timing
+// attributes from its parent.
 func (r *ParsedRepresentation) EffectiveSegmentList(parent *ParsedAdaptationSet) *ParsedSegmentList {
-	if r.SegList != nil {
+	if r.SegList == nil {
+		return parent.SegList
+	}
+	if parent.SegList == nil {
 		return r.SegList
 	}
-	return parent.SegList
+	merged := *r.SegList
+	if merged.Timescale == 0 {
+		merged.Timescale = parent.SegList.Timescale
+	}
+	if !merged.presentationTimeOffsetSet && merged.PresentationTimeOffset == 0 {
+		merged.PresentationTimeOffset = parent.SegList.PresentationTimeOffset
+	}
+	return &merged
 }
 
 // EffectiveSegmentBase returns the rep-level SegmentBase if present,
-// otherwise the AS-level one.
+// otherwise the AS-level one. Rep-level addressing inherits absent timing
+// attributes from its parent.
 func (r *ParsedRepresentation) EffectiveSegmentBase(parent *ParsedAdaptationSet) *ParsedSegmentBase {
-	if r.SegBase != nil {
+	if r.SegBase == nil {
+		return parent.SegBase
+	}
+	if parent.SegBase == nil {
 		return r.SegBase
 	}
-	return parent.SegBase
+	merged := *r.SegBase
+	if merged.Timescale == 0 {
+		merged.Timescale = parent.SegBase.Timescale
+	}
+	if !merged.presentationTimeOffsetSet && merged.PresentationTimeOffset == 0 {
+		merged.PresentationTimeOffset = parent.SegBase.PresentationTimeOffset
+	}
+	return &merged
 }
 
 // EffectiveBaseURL returns the nearest non-empty BaseURL in the rep→AS chain.
@@ -339,17 +369,19 @@ type extRep struct {
 }
 
 type extSegmentList struct {
-	Timescale   uint64      `xml:"timescale,attr"`
-	Duration    uint64      `xml:"duration,attr"`
-	StartNumber uint64      `xml:"startNumber,attr"`
-	Init        *extInit    `xml:"Initialization"`
-	Segments    []extSegURL `xml:"SegmentURL"`
+	PresentationTimeOffset *uint64     `xml:"presentationTimeOffset,attr"`
+	Timescale              uint64      `xml:"timescale,attr"`
+	Duration               uint64      `xml:"duration,attr"`
+	StartNumber            uint64      `xml:"startNumber,attr"`
+	Init                   *extInit    `xml:"Initialization"`
+	Segments               []extSegURL `xml:"SegmentURL"`
 }
 
 type extSegmentBase struct {
-	Timescale  uint32   `xml:"timescale,attr"`
-	IndexRange string   `xml:"indexRange,attr"`
-	Init       *extInit `xml:"Initialization"`
+	PresentationTimeOffset *uint64  `xml:"presentationTimeOffset,attr"`
+	Timescale              uint32   `xml:"timescale,attr"`
+	IndexRange             string   `xml:"indexRange,attr"`
+	Init                   *extInit `xml:"Initialization"`
 }
 
 type extInit struct {
@@ -378,6 +410,10 @@ func convertSegmentList(e *extSegmentList) *ParsedSegmentList {
 		Duration:    e.Duration,
 		StartNumber: e.StartNumber,
 	}
+	if e.PresentationTimeOffset != nil {
+		sl.PresentationTimeOffset = *e.PresentationTimeOffset
+		sl.presentationTimeOffsetSet = true
+	}
 	if sl.StartNumber == 0 {
 		sl.StartNumber = 1
 	}
@@ -401,6 +437,10 @@ func convertSegmentBase(e *extSegmentBase) *ParsedSegmentBase {
 	sb := &ParsedSegmentBase{
 		Timescale:  e.Timescale,
 		IndexRange: e.IndexRange,
+	}
+	if e.PresentationTimeOffset != nil {
+		sb.PresentationTimeOffset = *e.PresentationTimeOffset
+		sb.presentationTimeOffsetSet = true
 	}
 	if e.Init != nil {
 		sb.InitRange = e.Init.Range
@@ -596,6 +636,7 @@ func parseSegmentTemplate(st *gompeg.SegmentTemplate) *ParsedSegmentTemplate {
 	}
 	if st.PresentationTimeOffset != nil {
 		pst.PresentationTimeOffset = *st.PresentationTimeOffset
+		pst.presentationTimeOffsetSet = true
 	}
 	if st.Media != nil {
 		pst.Media = *st.Media

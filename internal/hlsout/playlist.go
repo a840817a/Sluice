@@ -183,8 +183,12 @@ func consecutiveRun(entries []playlistEntry, vod bool) []playlistEntry {
 // Master renders the multivariant playlist. Every variant URI points at this
 // gateway's media playlist endpoint.
 func Master(variants []hlsdesc.Variant, o MasterOptions) []byte {
-	base := strings.TrimRight(o.GatewayBaseURL, "/")
+	return master(variants, o, func(repID string) string {
+		return gwurl.MediaPlaylistURL(strings.TrimRight(o.GatewayBaseURL, "/"), o.ChannelID, repID)
+	})
+}
 
+func master(variants []hlsdesc.Variant, o MasterOptions, mediaURI func(string) string) []byte {
 	var b strings.Builder
 	b.WriteString("#EXTM3U\n")
 	b.WriteString("#EXT-X-VERSION:3\n")
@@ -209,7 +213,7 @@ func Master(variants []hlsdesc.Variant, o MasterOptions) []byte {
 			attrs = append(attrs, "DEFAULT=YES", "AUTOSELECT=YES")
 		}
 		attrs = append(attrs, fmt.Sprintf("URI=%q",
-			gwurl.MediaPlaylistURL(base, o.ChannelID, r.RepID)))
+			mediaURI(r.RepID)))
 		b.WriteString("#EXT-X-MEDIA:" + strings.Join(attrs, ",") + "\n")
 	}
 
@@ -230,7 +234,7 @@ func Master(variants []hlsdesc.Variant, o MasterOptions) []byte {
 			attrs = append(attrs, "FORCED=YES")
 		}
 		attrs = append(attrs, fmt.Sprintf("URI=%q",
-			gwurl.MediaPlaylistURL(base, o.ChannelID, s.RepID)))
+			mediaURI(s.RepID)))
 		b.WriteString("#EXT-X-MEDIA:" + strings.Join(attrs, ",") + "\n")
 	}
 
@@ -255,7 +259,7 @@ func Master(variants []hlsdesc.Variant, o MasterOptions) []byte {
 			attrs = append(attrs, fmt.Sprintf("SUBTITLES=%q", v.SubtitleGroup))
 		}
 		b.WriteString("#EXT-X-STREAM-INF:" + strings.Join(attrs, ",") + "\n")
-		b.WriteString(gwurl.MediaPlaylistURL(base, o.ChannelID, v.RepID) + "\n")
+		b.WriteString(mediaURI(v.RepID) + "\n")
 	}
 
 	return []byte(b.String())

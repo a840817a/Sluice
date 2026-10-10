@@ -66,3 +66,51 @@ func TestLastSegmentNumberNoUnderflow(t *testing.T) {
 		})
 	}
 }
+
+// A representation may override only URLs, or explicitly reset a parent PTO.
+func TestTemplatePresentationTimeOffsetInheritance(t *testing.T) {
+	for _, tc := range []struct {
+		name, attrs string
+		want        uint64
+	}{{"inherited", "", 100}, {"explicit zero", `presentationTimeOffset="0"`, 0}} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := Parse([]byte(`<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"><Period><AdaptationSet><SegmentTemplate timescale="10" presentationTimeOffset="100"/><Representation id="v"><SegmentTemplate media="$Number$.m4s" ` + tc.attrs + `/></Representation></AdaptationSet></Period></MPD>`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			as := p.Periods[0].AdaptationSets[0]
+			if got := as.Representations[0].EffectiveTemplate(as).PresentationTimeOffset; got != tc.want {
+				t.Fatalf("offset=%d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestListAndBasePresentationTimeOffsetInheritance(t *testing.T) {
+	for _, kind := range []string{"SegmentList", "SegmentBase"} {
+		for _, tc := range []struct {
+			name, attrs string
+			want        uint64
+		}{{"inherited", "", 200}, {"explicit zero", `presentationTimeOffset="0"`, 0}} {
+			t.Run(kind+"/"+tc.name, func(t *testing.T) {
+				p, err := Parse([]byte(`<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"><Period><AdaptationSet><` + kind + ` timescale="10" presentationTimeOffset="200"/><Representation id="a"><` + kind + ` ` + tc.attrs + `/></Representation></AdaptationSet></Period></MPD>`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				as := p.Periods[0].AdaptationSets[0]
+				rep := as.Representations[0]
+				var offset, scale uint64
+				if kind == "SegmentList" {
+					v := rep.EffectiveSegmentList(as)
+					offset, scale = v.PresentationTimeOffset, v.Timescale
+				} else {
+					v := rep.EffectiveSegmentBase(as)
+					offset, scale = v.PresentationTimeOffset, uint64(v.Timescale)
+				}
+				if offset != tc.want || scale != 10 {
+					t.Fatalf("offset/scale=%d/%d, want %d/10", offset, scale, tc.want)
+				}
+			})
+		}
+	}
+}

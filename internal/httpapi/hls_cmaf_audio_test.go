@@ -82,12 +82,13 @@ func TestDemuxedCMAFManifestHasAudioAS(t *testing.T) {
 		w := executeRequest(srv.handleManifest, http.MethodGet,
 			"/v1/channels/ca/manifest.mpd", map[string]string{"channelID": "ca"})
 		mpd = w.Body.String()
-		if w.Code == http.StatusOK && strings.Contains(mpd, `mimeType="audio/mp4"`) {
+		if w.Code == http.StatusOK && strings.Contains(mpd, `type="static"`) {
 			break
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
 	for _, want := range []string{
+		`type="static"`,
 		`mimeType="video/mp4"`,
 		`mimeType="audio/mp4"`,
 		`codecs="avc1.42c01e"`, // video AS: video codec only

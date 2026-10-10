@@ -130,3 +130,36 @@ ffmpeg 9.0.1 build has no DASH demuxer (no libxml2 — `-f dash` reports
 "Unknown input format", and ffmpeg's own dash-muxer output fails to read back
 too). The `.mpd` is validated at the XML/spec level and by the path-existence
 test; its real consumer is the downstream merging program.
+
+## Completed extension: local Presentation
+
+`presentation.Generator.Local` assembles the complete export from the captured
+VOD snapshot and source track descriptions. It returns named files, bytes and
+permissions in dependency order. Channel owns writing those files and warning on
+failure after VOD publication. Rendering finishes before the first write; each
+file is atomically replaced, and the entry manifest is written last. This is not
+an atomic replacement of the whole directory.
+
+For HLS, each Representation has one numbered media playlist across every stored
+Period in numeric order. Period boundaries emit discontinuity and a fresh init
+map; numbering holes remain explicit discontinuities. The master retains audio
+and subtitle metadata and refers only to exported tracks and available groups.
+A source with no published variant cannot produce a usable local master.
+
+Passthrough AES-128 exports include raw 16-byte `local_key_<hash>.key` files with
+0600 permissions. Keys come only from the completed VOD key cache, with no new
+origin requests. Media playlists carry relative key URIs and explicit original
+IVs, including after holes or a Period reset. Missing keys or invalid IVs fail
+the optional export instead of publishing unplayable ciphertext. Validated
+persisted init files are clear MP4 and are explicitly outside any active key.
+The existing ADR-0003 at-rest key tradeoff also applies to these files.
+
+For DASH, local output follows the current origin MPD's document order (including
+ADR-0007's current-generation restriction). Each nonempty Period occupies its
+retained media span on a cumulative local VOD timeline. A shared earliest
+presentation time rebases all its Representations together; source
+presentationTimeOffset and differing media timescales preserve relative audio,
+video and subtitle offsets. Internal holes remain in the SegmentTimeline, while
+empty leading time and empty Periods are omitted. Period start/duration and total
+duration describe this local timeline. DASH DRM signalling remains source
+signalling; exporting a manifest does not make a DRM licence available offline.

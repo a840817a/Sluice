@@ -23,7 +23,7 @@ One player's viewing of a channel. Its media position and play/pause intent belo
 _Avoid_: Channel mode (for a player's viewing state)
 
 **Presentation**:
-What a channel offers to players: its tracks, the protocols it can be served as, and the DASH manifest or HLS playlists rendered from them.
+What a channel offers to players: its tracks, the protocols it can be served as, and the DASH manifest or HLS playlists rendered from them for gateway playback or local playback.
 _Avoid_: Output, manifest (for both protocols)
 
 ## Timeline
