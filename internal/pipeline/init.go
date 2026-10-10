@@ -17,11 +17,15 @@ import (
 )
 
 // initialization belongs to one stored period/representation. A failed attempt
-// remains terminal for this run, except expiry of a live deadline: later live
-// segments may still acquire the init within their own deadline.
+// is terminal for its batch. Later live work may renew it under a later deadline.
 type initialization struct {
-	done bool
-	err  error
+	done     bool
+	err      error
+	deadline time.Time
+}
+
+func (s *initialization) canRenew(task *queue.SegmentTask) bool {
+	return s.done && s.err != nil && !task.Expired() && !task.Deadline.IsZero() && task.Deadline.After(s.deadline)
 }
 
 type initCompletion struct {
@@ -70,7 +74,7 @@ func (p *Processor) runWithInit(ctx context.Context, pool *fetch.Pool) {
 		kept := pending[:0]
 		for _, res := range pending {
 			state := states[p.intake.location(res.Task).InitPath()]
-			if state.done || res.Task.Expired() {
+			if (state.done && !state.canRenew(res.Task)) || res.Task.Expired() {
 				finish(res, state.err)
 			} else {
 				kept = append(kept, res)
@@ -78,6 +82,24 @@ func (p *Processor) runWithInit(ctx context.Context, pool *fetch.Pool) {
 		}
 		clear(pending[len(kept):])
 		pending = kept
+	}
+
+	startInit := func(path string, source *queue.SegmentTask) *initialization {
+		state := &initialization{deadline: source.Deadline}
+		states[path] = state
+		// The task may later be requeued/mutated. Init owns a copy.
+		task := *source
+		active++
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ts, err := p.prepareInit(ctx, pool, &task, path)
+			select {
+			case completed <- initCompletion{path: path, timescale: ts, err: err}:
+			case <-ctx.Done():
+			}
+		}()
+		return state
 	}
 
 	for {
@@ -98,8 +120,16 @@ func (p *Processor) runWithInit(ctx context.Context, pool *fetch.Pool) {
 				p.intake.repTimescales[result.path] = result.timescale
 			}
 			flush()
-			if errors.Is(result.err, context.DeadlineExceeded) {
-				delete(states, result.path)
+			// Preserve fetched media with later live deadlines. Use the latest
+			// pending deadline so a failed batch cannot restart once per segment.
+			var next *queue.SegmentTask
+			for _, res := range pending {
+				if p.intake.location(res.Task).InitPath() == result.path && state.canRenew(res.Task) && (next == nil || res.Task.Deadline.After(next.Deadline)) {
+					next = res.Task
+				}
+			}
+			if next != nil {
+				startInit(result.path, next)
 			}
 		case <-ticker.C:
 			flush()
@@ -114,21 +144,8 @@ func (p *Processor) runWithInit(ctx context.Context, pool *fetch.Pool) {
 			}
 			path := p.intake.location(res.Task).InitPath()
 			state := states[path]
-			if state == nil {
-				state = &initialization{}
-				states[path] = state
-				// The task may later be requeued/mutated. Init owns a copy.
-				task := *res.Task
-				active++
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					ts, err := p.prepareInit(ctx, pool, &task, path)
-					select {
-					case completed <- initCompletion{path: path, timescale: ts, err: err}:
-					case <-ctx.Done():
-					}
-				}()
+			if state == nil || state.canRenew(res.Task) {
+				state = startInit(path, res.Task)
 			}
 			if state.done {
 				finish(res, state.err)
