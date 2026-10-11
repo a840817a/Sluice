@@ -33,24 +33,19 @@ const LocalMasterName = "local.m3u8"
 // representation ID can never turn into a path.
 func LocalMediaName(i int) string { return fmt.Sprintf("local_%d.m3u8", i) }
 
-// LocalMedia renders one representation's media playlist. Every path is
-// relative to channelDir, which is where the playlist itself is written.
-//
-// Paths come from the index's own record of where each file was put, so the
-// playlist cannot name a segment the gateway does not have.
-func LocalMedia(segs []index.SegmentState, channelDir string) ([]byte, error) {
-	return LocalMediaPeriods([]PeriodSegments{{Segments: segs}}, channelDir, nil)
-}
-
 // LocalMasterTracks uses the same track signalling as served HLS with local URIs.
 // Callers supply only tracks with exported media playlists and valid groups.
 func LocalMasterTracks(variants []hlsdesc.Variant, o MasterOptions, names map[string]string) []byte {
 	return master(variants, o, func(id string) string { return names[id] })
 }
 
-// LocalMediaPeriods preserves all published segments, including holes, in the
-// supplied period order. Key names refer to validated, separately written keys.
-func LocalMediaPeriods(periods []PeriodSegments, channelDir string, keys map[string]string) ([]byte, error) {
+// LocalMedia renders one representation's media playlist from its Timeline,
+// keeping every published segment, holes included, in the Timeline's period
+// order. Every path is relative to channelDir, which is where the playlist
+// itself is written, and comes from the index's own record of where each file
+// was put, so the playlist cannot name a segment the gateway does not have.
+// keys names the separately written, validated key file of each key URI.
+func LocalMedia(periods []index.TimelinePeriod, channelDir string, keys map[string]string) ([]byte, error) {
 	var entries []playlistEntry
 	var all []index.SegmentState
 	version := 3

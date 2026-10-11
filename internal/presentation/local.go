@@ -20,9 +20,11 @@ type LocalFile struct {
 	Mode fs.FileMode
 }
 
-// Local renders a complete filesystem presentation from a frozen VOD snapshot.
-// It preserves holes, unlike served live playlists. It does no writes or network
-// I/O; encrypted HLS requires keys already acquired by the VOD checkpoint.
+// Local renders a complete filesystem presentation of a VOD: snap is a
+// snapshot of ch.Index, the VOD index, which no longer changes. HLS playlists
+// read each track's Timeline from ch.Index. It preserves holes, unlike served
+// live playlists. It does no writes or network I/O; encrypted HLS requires
+// keys already acquired by the VOD checkpoint.
 func (g *Generator) Local(ch Channel, snap index.Snapshot, dir string, keys *hlskey.Cache) ([]LocalFile, error) {
 	if !ch.IsHLSSource {
 		data, err := manifest.GenerateLocalMPD(ch.ParsedMPD, snap, dir)
@@ -31,20 +33,16 @@ func (g *Generator) Local(ch Channel, snap index.Snapshot, dir string, keys *hls
 		}
 		return []LocalFile{{Name: manifest.LocalManifestName, Data: data, Mode: 0o644}}, nil
 	}
-	byRep := map[string]map[string][]index.SegmentState{}
+	published := map[string]bool{}
 	snap.ForEachRep(func(ref index.RepRef, segs []index.SegmentState) {
-		if len(segs) == 0 {
-			return
+		if len(segs) > 0 {
+			published[ref.RepID] = true
 		}
-		if byRep[ref.RepID] == nil {
-			byRep[ref.RepID] = map[string][]index.SegmentState{}
-		}
-		byRep[ref.RepID][ref.PeriodID] = append(byRep[ref.RepID][ref.PeriodID], segs...)
 	})
 	// HLS ingest gives every track a unique RepID. Sort independently of discovery
 	// order so numbered file names stay stable for a fixed set of exported tracks.
 	var ids []string
-	for id := range byRep {
+	for id := range published {
 		if ch.Tracks.KnownRep(id) {
 			ids = append(ids, id)
 		}
@@ -90,16 +88,14 @@ func (g *Generator) Local(ch Channel, snap index.Snapshot, dir string, keys *hls
 	}
 	var files []LocalFile
 	keyNames := map[string]string{}
-	periods := snap.PeriodIDs(ch.PeriodDocOrder())
 	for _, id := range ids {
-		var parts []hlsout.PeriodSegments
-		for _, pid := range periods {
-			segs := byRep[id][pid]
-			if len(segs) == 0 {
+		var parts []index.TimelinePeriod
+		for _, p := range ch.Index.Timeline(id, ch.PeriodDocOrder()) {
+			if len(p.Segments) == 0 {
 				continue
 			}
-			parts = append(parts, hlsout.PeriodSegments{PeriodID: pid, Segments: segs})
-			for _, s := range segs {
+			parts = append(parts, p)
+			for _, s := range p.Segments {
 				if s.KeyURI == "" || keyNames[s.KeyURI] != "" {
 					continue
 				}
@@ -112,7 +108,7 @@ func (g *Generator) Local(ch Channel, snap index.Snapshot, dir string, keys *hls
 				files = append(files, LocalFile{Name: name, Data: data, Mode: 0o600})
 			}
 		}
-		data, err := hlsout.LocalMediaPeriods(parts, dir, keyNames)
+		data, err := hlsout.LocalMedia(parts, dir, keyNames)
 		if err != nil {
 			return nil, err
 		}

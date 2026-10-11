@@ -57,7 +57,7 @@ func TestLocalHLSExportsPeriodsTracksAndOfflineKeys(t *testing.T) {
 		localPublished(t, ci, dir, pid, "1", "a0", 1, 0, 2, 1, false, "")
 		localPublished(t, ci, dir, pid, "2", "s0", 1, 0, 2, 1, false, "")
 	}
-	ch := Channel{IsHLSSource: true, Tracks: Tracks{
+	ch := Channel{Index: ci, IsHLSSource: true, Tracks: Tracks{
 		IndependentSegments: true,
 		Variants:            []hlsdesc.Variant{{RepID: "v0", Bandwidth: 800000, AudioGroup: "audio", SubtitleGroup: "subs"}, {RepID: "missing", Bandwidth: 5}},
 		Renditions:          []hlsdesc.Rendition{{RepID: "a0", GroupID: "audio", Name: "Japanese", Language: "ja", Default: true, Channels: "2"}, {RepID: "absent", GroupID: "unused", Name: "absent"}},
@@ -147,7 +147,7 @@ func TestLocalHLSOmitsUnavailableGroupsAndRejectsMissingKeys(t *testing.T) {
 	dir := t.TempDir()
 	ci := index.NewChannelIndex(index.PublishAVBarrier)
 	localPublished(t, ci, dir, "0", "0", "v0", 1, 0, 2, 1, false, "")
-	ch := Channel{IsHLSSource: true, Tracks: Tracks{Variants: []hlsdesc.Variant{{RepID: "v0", AudioGroup: "missing", SubtitleGroup: "missing"}}}}
+	ch := Channel{Index: ci, IsHLSSource: true, Tracks: Tracks{Variants: []hlsdesc.Variant{{RepID: "v0", AudioGroup: "missing", SubtitleGroup: "missing"}}}}
 	files, err := testGenerator().Local(ch, ci.Snapshot(), dir, nil)
 	if err != nil {
 		t.Fatal(err)

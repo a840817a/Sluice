@@ -64,14 +64,6 @@ type MediaOptions struct {
 	KeyProxyBase string
 }
 
-// PeriodSegments is one period's share of a local media playlist
-// (LocalMediaPeriods), which lists exactly the segments it is given.
-type PeriodSegments struct {
-	PeriodID string
-	// Segments are the period's published segments, in any order.
-	Segments []index.SegmentState
-}
-
 // playlistEntry is one segment as the playlist numbers it.
 type playlistEntry struct {
 	seg       index.SegmentState

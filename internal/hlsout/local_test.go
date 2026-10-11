@@ -41,7 +41,7 @@ func TestLocalMediaNamesEverySegmentOnDisk(t *testing.T) {
 		})
 	}
 
-	data, err := LocalMedia(segs, channelDir)
+	data, err := LocalMedia(inPeriod(segs), channelDir, nil)
 	if err != nil {
 		t.Fatalf("LocalMedia: %v", err)
 	}

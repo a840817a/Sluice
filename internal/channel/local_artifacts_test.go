@@ -37,7 +37,7 @@ func TestLocalArtifactsWriteKeysPrivatelyBeforeMaster(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			a := vodArtifacts{dir: dir, render: &presentation.Generator{}, keys: cache, snapshot: ci.Snapshot(), serving: Serving{Channel: presentation.Channel{IsHLSSource: true, Tracks: presentation.Tracks{Variants: []hlsdesc.Variant{{RepID: "v0", Bandwidth: 10}}}}}}
+			a := vodArtifacts{dir: dir, render: &presentation.Generator{}, keys: cache, snapshot: ci.Snapshot(), serving: Serving{Channel: presentation.Channel{Index: ci, IsHLSSource: true, Tracks: presentation.Tracks{Variants: []hlsdesc.Variant{{RepID: "v0", Bandwidth: 10}}}}}}
 			a.writeOptional()
 			keyFile := filepath.Join(dir, "local_key_"+hlskey.KeyID(uri)+".key")
 			stat, err := os.Stat(keyFile)
