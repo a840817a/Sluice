@@ -15,12 +15,12 @@ package hlsout
 import (
 	"encoding/hex"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/a840817a/sluice/internal/hlsdesc"
 	"github.com/a840817a/sluice/internal/index"
+	"github.com/a840817a/sluice/internal/store"
 )
 
 // LocalMasterName is the on-disk name of the HLS local master playlist, a
@@ -117,12 +117,9 @@ func LocalMediaPeriods(periods []PeriodSegments, channelDir string, keys map[str
 }
 
 func relativeTo(p, channelDir string) (string, error) {
-	rel, err := filepath.Rel(channelDir, p)
+	rel, err := store.RelativeToChannel(p, channelDir)
 	if err != nil {
-		return "", fmt.Errorf("local playlist: %q is not under %q: %w", p, channelDir, err)
+		return "", fmt.Errorf("local playlist: %w", err)
 	}
-	if strings.HasPrefix(rel, "..") {
-		return "", fmt.Errorf("local playlist: %q escapes the channel directory", p)
-	}
-	return filepath.ToSlash(rel), nil
+	return rel, nil
 }

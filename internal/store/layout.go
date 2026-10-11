@@ -234,3 +234,17 @@ func ScanChannel(dataDir, channelID string) ([]PeriodDir, error) {
 	}
 	return periods, nil
 }
+
+// RelativeToChannel returns path p relative to channelDir with forward
+// slashes, as a playlist or manifest written into channelDir names the files
+// beside it. It refuses a path outside channelDir.
+func RelativeToChannel(p, channelDir string) (string, error) {
+	rel, err := filepath.Rel(channelDir, p)
+	if err != nil {
+		return "", fmt.Errorf("%q is not under %q: %w", p, channelDir, err)
+	}
+	if strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("%q escapes the channel directory", p)
+	}
+	return filepath.ToSlash(rel), nil
+}

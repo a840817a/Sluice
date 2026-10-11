@@ -17,11 +17,11 @@ import (
 	"encoding/xml"
 	"fmt"
 	"math"
-	"path/filepath"
 	"strings"
 
 	"github.com/a840817a/sluice/internal/index"
 	imdp "github.com/a840817a/sluice/internal/mpd"
+	"github.com/a840817a/sluice/internal/store"
 )
 
 // LocalManifestName is the on-disk name of the DASH local manifest, a sibling
@@ -246,17 +246,14 @@ func buildLocalSegmentList(segs []index.SegmentState, channelDir string) (localS
 	return sl, last.EndSec(), nil
 }
 
-// relativeToChannel turns a committed file path into a forward-slash path
-// relative to the channel directory, which is where the manifest is written.
+// relativeToChannel is store.RelativeToChannel, with the manifest's prefix on
+// its errors.
 func relativeToChannel(p, channelDir string) (string, error) {
-	rel, err := filepath.Rel(channelDir, p)
+	rel, err := store.RelativeToChannel(p, channelDir)
 	if err != nil {
-		return "", fmt.Errorf("local manifest: %q is not under %q: %w", p, channelDir, err)
+		return "", fmt.Errorf("local manifest: %w", err)
 	}
-	if strings.HasPrefix(rel, "..") {
-		return "", fmt.Errorf("local manifest: %q escapes the channel directory", p)
-	}
-	return filepath.ToSlash(rel), nil
+	return rel, nil
 }
 
 // localSourceOffset is in seconds in the source presentation clock. A rep-only

@@ -193,3 +193,22 @@ func TestScanChannelShape(t *testing.T) {
 		t.Errorf("scanned %+v, want %+v", got, want)
 	}
 }
+
+// A playlist or manifest in the channel directory names files below it with
+// forward slashes, and never a file outside it.
+func TestRelativeToChannel(t *testing.T) {
+	dir := filepath.Join("data", "ch")
+	for _, tc := range []struct {
+		path, want string
+		ok         bool
+	}{
+		{filepath.Join(dir, "periods", "0", "video_0", "v0", "1.m4s"), "periods/0/video_0/v0/1.m4s", true},
+		{filepath.Join("data", "other", "1.m4s"), "", false},
+		{filepath.Join("data", "ch", "..", "..", "etc", "passwd"), "", false},
+	} {
+		got, err := RelativeToChannel(tc.path, dir)
+		if (err == nil) != tc.ok || got != tc.want {
+			t.Errorf("RelativeToChannel(%q) = %q, %v; want %q, ok %v", tc.path, got, err, tc.want, tc.ok)
+		}
+	}
+}
