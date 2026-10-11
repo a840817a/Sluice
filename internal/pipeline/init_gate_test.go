@@ -250,6 +250,33 @@ func TestInitGate(t *testing.T) {
 		h.expect("abandon 1: init gone", "deliver 2", "deliver 3")
 	})
 
+	t.Run("live media arriving after a failure renews the init", func(t *testing.T) {
+		h := startGate(t, 4)
+		h.send(fmp4Task(1, 10*time.Second), nil)
+		h.nextPrepare().done <- gone
+		h.expect("abandon 1: init gone")
+		h.send(fmp4Task(2, 20*time.Second), nil)
+		h.nextPrepare().done <- nil
+		h.expect("abandon 1: init gone", "deliver 2")
+	})
+
+	t.Run("one init failing does not hold another's media", func(t *testing.T) {
+		h := startGate(t, 4)
+		h.send(fmp4Task(1, 0), nil)
+		other := fmp4Task(2, 0)
+		other.RepID = "a0"
+		h.send(other, nil)
+		calls := map[string]prepareCall{}
+		for range 2 {
+			c := h.nextPrepare()
+			calls[c.path] = c
+		}
+		calls["0/v0"].done <- gone
+		h.expect("abandon 1: init gone")
+		calls["0/a0"].done <- nil
+		h.expect("abandon 1: init gone", "deliver 2")
+	})
+
 	t.Run("media whose deadline passes while waiting is abandoned", func(t *testing.T) {
 		h := startGate(t, 4)
 		h.send(fmp4Task(1, 5*time.Second), nil)
