@@ -20,15 +20,7 @@ type completion struct {
 
 // Finish settles this attempt. It returns false if it was already settled.
 func (a *Attempt) Finish() bool {
-	c := a.completion
-	c.broker.mu.Lock()
-	defer c.broker.mu.Unlock()
-	if c.finished {
-		return false
-	}
-	c.finished = true
-	c.broker.outstanding--
-	return true
+	return a.completion.settle(nil)
 }
 
 // Retry settles this attempt and atomically hands its work back to the queue.
@@ -37,13 +29,24 @@ func (a *Attempt) Finish() bool {
 // never need a separate Finish after Retry, including when capacity rejects it.
 func (a *Attempt) Retry(maxRetries int, backoff time.Duration) bool {
 	c := a.completion
+	return c.settle(func() bool {
+		return c.broker.requeueLocked(c.task, maxRetries, backoff)
+	})
+}
+
+// settle owns the once-only transition. Any retry runs under the same lock as
+// the count update, so observers cannot see an idle gap during the handover.
+func (c *completion) settle(retry func() bool) bool {
 	c.broker.mu.Lock()
 	defer c.broker.mu.Unlock()
 	if c.finished {
 		return false
 	}
 	c.finished = true
-	queued := c.broker.requeueLocked(c.task, maxRetries, backoff)
+	queued := true
+	if retry != nil {
+		queued = retry()
+	}
 	c.broker.outstanding--
 	return queued
 }

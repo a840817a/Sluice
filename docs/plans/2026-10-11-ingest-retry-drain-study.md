@@ -49,7 +49,7 @@
 | 路徑 | 目前行為 |
 | --- | --- |
 | media HTTP 410 | 放棄，不 retry |
-| media HTTP 425 | 500ms 起的指數退避，不換 CDN |
+| media HTTP 425 | 500ms 起的指數退避，不輪替 fallback URL |
 | 其他 media fetch 錯誤 | 2s 起的指數退避，輪替 fallback URL |
 | media 寫檔失敗 | 1s 起的指數退避，重新下載 media |
 | media validation／decrypt 失敗 | 放棄，不 retry |
@@ -112,7 +112,7 @@ regression guard。log：`/tmp/sluice-retry-study/results.txt`。
 
 `Retry` 的 true 表示邏輯工作已在 queue 中（包含與同 key 的 pending 工作合併），
 false 表示已放棄或此 attempt 已結算。live 容量拒絕會回傳 false。重試次數、
-退避、deadline、CDN 輪替、finite overflow 與解密失敗規則沒有改動。
+退避、deadline、fallback URL 輪替、finite overflow 與解密失敗規則沒有改動。
 
 完成後 task 的所有權也已交出，呼叫端不得再修改它；成功 Retry 後 worker 可以
 立即取走同一 task。完成 handle 自身仍可重複 Finish，結果為 false。
