@@ -206,7 +206,7 @@ func unpadPKCS7(b []byte) ([]byte, error) {
 
 // KeyStorePath returns the on-disk key file for a channel.
 func KeyStorePath(dataDir, channelID string) string {
-	return filepath.Join(dataDir, channelID, "keys.json")
+	return filepath.Join(store.ChannelDir(dataDir, channelID), "keys.json")
 }
 
 // loadStore reads any persisted keys into memory as completed cache entries,

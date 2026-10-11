@@ -152,7 +152,7 @@ func generateServedVODManifest(a vodArtifacts) ([]byte, error) {
 }
 
 func (m *Manager) vodArtifactDir(channelID string) string {
-	return filepath.Join(m.gwCfg.Store.DataDir, channelID)
+	return store.ChannelDir(m.gwCfg.Store.DataDir, channelID)
 }
 
 func (m *Manager) vodArtifactPath(channelID, file string) string {

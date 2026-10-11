@@ -17,7 +17,7 @@ const SourceStateFileName = "hls-source.json"
 
 // SourceStatePath returns where a channel's source description is kept.
 func SourceStatePath(dataDir, channelID string) string {
-	return filepath.Join(dataDir, channelID, SourceStateFileName)
+	return filepath.Join(store.ChannelDir(dataDir, channelID), SourceStateFileName)
 }
 
 // sourceState is what a restart needs to serve playlists without re-contacting

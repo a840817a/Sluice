@@ -65,10 +65,16 @@ func ParseSegmentFile(name string) (segNo uint64, ext string, ok bool) {
 // periodsDirName is the directory under a channel's that holds its periods.
 const periodsDirName = "periods"
 
+// ChannelDir is the directory that holds everything the gateway keeps for a
+// channel: its periods, and the files that describe and restore it.
+func ChannelDir(dataDir, channelID string) string {
+	return filepath.Join(dataDir, channelID)
+}
+
 // PeriodsDir is the directory that holds every period of a channel's stored
 // media.
 func PeriodsDir(dataDir, channelID string) string {
-	return filepath.Join(dataDir, channelID, periodsDirName)
+	return filepath.Join(ChannelDir(dataDir, channelID), periodsDirName)
 }
 
 // OriginMPDFileName is the copy of the origin MPD a period directory keeps.
