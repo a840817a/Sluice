@@ -78,7 +78,7 @@ func TestVODPlaylistOutlastsBrokerCapacity(t *testing.T) {
 			mu.Lock()
 			seen[task.SegNo] = true
 			mu.Unlock()
-			broker.Release()
+			task.Finish()
 		}
 	}()
 
@@ -155,10 +155,10 @@ func TestFinishedRenditionsSurviveConcurrentAdmissionAndRetries(t *testing.T) {
 	}
 
 	// Zero backoff: the retry is immediately poppable again.
-	if !broker.Requeue(inFlight, 3, 0) {
+	if !inFlight.Retry(3, 0) {
 		t.Fatal("finite task could not be retried")
 	}
-	broker.Release()
+	inFlight.Finish()
 	if d := broker.Dropped(); d != 0 {
 		t.Fatalf("broker dropped %d tasks when a retry met a full queue; finished renditions have none to spare", d)
 	}
@@ -170,7 +170,7 @@ func TestFinishedRenditionsSurviveConcurrentAdmissionAndRetries(t *testing.T) {
 			t.Fatalf("broker not idle but nothing is ready: len=%d stored=%v", broker.Len(), stored)
 		}
 		stored[task.ChannelID]++
-		broker.Release()
+		task.Finish()
 	}
 	if stored["a"] != 1 || stored["b"] != 1 || broker.Dropped() != 0 {
 		t.Fatalf("stored=%v dropped=%d, want one segment from each rendition and no drops", stored, broker.Dropped())

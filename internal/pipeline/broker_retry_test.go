@@ -35,7 +35,8 @@ func TestFiniteRetryThroughProcessorWithFullBroker(t *testing.T) {
 			if !broker.PushPreserving(context.Background(), failed) {
 				t.Fatal("failed to admit first task")
 			}
-			if broker.Pop() != failed {
+			attempt := broker.Pop()
+			if attempt == nil || attempt.SegmentTask != failed {
 				t.Fatal("first task was not fetched")
 			}
 			next := &queue.SegmentTask{ChannelID: "retry", RepID: "v", SegNo: 2}
@@ -48,16 +49,16 @@ func TestFiniteRetryThroughProcessorWithFullBroker(t *testing.T) {
 			done := make(chan struct{})
 			retryStarted := time.Now()
 			go func() {
-				processor.handle(fetch.Result{Task: failed, StatusCode: tc.status, Err: errors.New("origin failure")})
-				broker.Release() // Same order as Processor.Run.
+				processor.handle(fetch.Result{Task: failed, Attempt: attempt, StatusCode: tc.status, Err: errors.New("origin failure")})
+				attempt.Finish() // Idempotent after Retry.
 				close(done)
 			}()
 			select {
 			case <-done:
 			case <-time.After(time.Second):
 				// Free the queue so an incorrectly blocking retry can exit.
-				if broker.Pop() != nil {
-					broker.Release()
+				if pending := broker.Pop(); pending != nil {
+					pending.Finish()
 				}
 				select {
 				case <-done:
@@ -71,10 +72,11 @@ func TestFiniteRetryThroughProcessorWithFullBroker(t *testing.T) {
 			if broker.Idle() {
 				t.Fatal("broker reports completion before queued work is stored")
 			}
-			if got := broker.Pop(); got != next {
+			got := broker.Pop()
+			if got == nil || got.SegmentTask != next {
 				t.Fatalf("next task was displaced: got %v", got)
 			}
-			broker.Release()
+			got.Finish()
 			if tc.wantRetry {
 				if broker.Idle() {
 					t.Fatal("broker reports completion while retry is pending")
@@ -84,10 +86,11 @@ func TestFiniteRetryThroughProcessorWithFullBroker(t *testing.T) {
 				}
 				// Handling has finished; skip the real backoff before draining.
 				failed.NextRetry = time.Time{}
-				if got := broker.Pop(); got != failed {
+				got := broker.Pop()
+				if got == nil || got.SegmentTask != failed {
 					t.Fatalf("failed segment was lost instead of retried: got %v", got)
 				}
-				broker.Release()
+				got.Finish()
 			}
 			if !broker.Idle() {
 				t.Fatal("broker did not become idle after all terminal results")

@@ -84,7 +84,7 @@ func TestStaticIngestOutlastsBrokerCapacity(t *testing.T) {
 			mu.Lock()
 			seen[task.SegNo] = true
 			mu.Unlock()
-			broker.Release()
+			task.Finish()
 		}
 	}()
 

@@ -129,7 +129,7 @@ func (p *Processor) handle(res fetch.Result) {
 		case http.StatusGone: // 410: segment permanently unavailable, drop without retry.
 			return
 		case http.StatusTooEarly: // 425: segment not yet available, retry quickly without CDN rotation.
-			p.broker.Requeue(task, p.cfg.Worker.MaxRetriesStatic, 500*time.Millisecond)
+			res.Attempt.Retry(p.cfg.Worker.MaxRetriesStatic, 500*time.Millisecond)
 			return
 		}
 		// Default: rotate to next CDN before requeueing (multi-BaseURL fallback).
@@ -138,7 +138,7 @@ func (p *Processor) handle(res fetch.Result) {
 				append(task.FallbackURLs[1:], task.URL)
 		}
 		// Requeue for retry if within deadline and retry budget.
-		p.broker.Requeue(task, p.cfg.Worker.MaxRetriesStatic, 2*time.Second)
+		res.Attempt.Retry(p.cfg.Worker.MaxRetriesStatic, 2*time.Second)
 		return
 	}
 
@@ -159,7 +159,7 @@ func (p *Processor) handle(res fetch.Result) {
 		}
 		p.prog.RecordSegmentError(out.Stage, out.Err.Error(), task.RepID, task.SegNo)
 		if out.Retry {
-			p.broker.Requeue(task, p.cfg.Worker.MaxRetriesStatic, time.Second)
+			res.Attempt.Retry(p.cfg.Worker.MaxRetriesStatic, time.Second)
 		}
 		return
 	}

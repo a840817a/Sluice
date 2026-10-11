@@ -51,8 +51,8 @@ func (p *Processor) runWithInit(ctx context.Context, pool *fetch.Pool) {
 	defer func() {
 		cancel()
 		wg.Wait() // Stop/Join must include every init fetch and write.
-		for range pending {
-			p.broker.Release()
+		for _, res := range pending {
+			res.Attempt.Finish()
 		}
 	}()
 	ticker := time.NewTicker(50 * time.Millisecond)
@@ -68,7 +68,7 @@ func (p *Processor) runWithInit(ctx context.Context, pool *fetch.Pool) {
 		} else {
 			p.handle(res)
 		}
-		p.broker.Release()
+		res.Attempt.Finish()
 	}
 	flush := func() {
 		kept := pending[:0]
@@ -139,7 +139,7 @@ func (p *Processor) runWithInit(ctx context.Context, pool *fetch.Pool) {
 			}
 			if res.Err != nil || res.Task.Format != queue.FormatFMP4 {
 				p.handle(res)
-				p.broker.Release()
+				res.Attempt.Finish()
 				continue
 			}
 			path := p.intake.location(res.Task).InitPath()

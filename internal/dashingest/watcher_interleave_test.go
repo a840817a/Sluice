@@ -90,7 +90,7 @@ func TestTasksAreEnqueuedInPresentationOrder(t *testing.T) {
 				continue
 			}
 			popped <- pop{rep: task.RepID, segNo: task.SegNo}
-			broker.Release()
+			task.Finish()
 		}
 	}()
 

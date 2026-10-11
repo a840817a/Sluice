@@ -310,6 +310,9 @@ func TestStopCancelsInitAndJoins(t *testing.T) {
 	if _, err := os.Stat(location(dir, task).SegmentPath(1, store.ExtFMP4)); !os.IsNotExist(err) {
 		t.Fatal("stopped ingest wrote waiting media")
 	}
+	if !pl.broker.Idle() {
+		t.Fatal("cancelled init wait leaked its media attempt")
+	}
 }
 
 func TestInitReadinessIsScopedToPeriod(t *testing.T) {

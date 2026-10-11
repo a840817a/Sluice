@@ -34,7 +34,7 @@ func TestPreservingAdmissionConcurrentProducersAndRetries(t *testing.T) {
 			continue
 		}
 		if task.Retries == 0 {
-			if !broker.Requeue(task, 1, time.Millisecond) {
+			if !task.Retry(1, time.Millisecond) {
 				t.Fatal("first attempt could not be retried")
 			}
 		} else {
@@ -43,7 +43,7 @@ func TestPreservingAdmissionConcurrentProducersAndRetries(t *testing.T) {
 			}
 			stored[task.SegNo] = true
 		}
-		broker.Release()
+		task.Finish()
 		// This test has one consumer: only its popped task can add retry
 		// overflow. Repeated failures must not accumulate unbounded work.
 		if got := broker.Len(); got > capacity+1 {
@@ -93,10 +93,11 @@ func TestPreservingAdmissionWaitsForRoomAndCancels(t *testing.T) {
 			if cancelWaiting {
 				cancel()
 			} else {
-				if broker.Pop() != first {
+				task := broker.Pop()
+				if task == nil || task.SegmentTask != first {
 					t.Fatal("original task was displaced")
 				}
-				broker.Release()
+				task.Finish()
 			}
 			select {
 			case admitted := <-done:
@@ -110,10 +111,11 @@ func TestPreservingAdmissionWaitsForRoomAndCancels(t *testing.T) {
 			if cancelWaiting {
 				want = first
 			}
-			if broker.Pop() != want || broker.Dropped() != 0 {
+			task := broker.Pop()
+			if task == nil || task.SegmentTask != want || broker.Dropped() != 0 {
 				t.Fatal("waiting or cancellation lost the queued task")
 			}
-			broker.Release()
+			task.Finish()
 			if !broker.Idle() {
 				t.Fatal("unexpected work after drain")
 			}
@@ -144,10 +146,11 @@ func TestPreservingAdmissionWaitsBehindLiveWork(t *testing.T) {
 	if broker.PushPreserving(ctx, makeTask(2, 0)) {
 		t.Fatal("finite admission displaced live work instead of waiting for room")
 	}
-	if broker.Pop() != live || broker.Dropped() != 0 {
+	task := broker.Pop()
+	if task == nil || task.SegmentTask != live || broker.Dropped() != 0 {
 		t.Fatal("waiting finite admission lost existing live work")
 	}
-	broker.Release()
+	task.Finish()
 }
 
 func TestLiveRetryStillHonorsCapacityAndPriority(t *testing.T) {
@@ -155,11 +158,11 @@ func TestLiveRetryStillHonorsCapacityAndPriority(t *testing.T) {
 		broker := NewBroker(1)
 		retry := makeTask(1, 0)
 		broker.Push(retry)
-		broker.Pop()
+		task := broker.Pop()
 		queued := makeTask(2, queuedPriority)
 		broker.Push(queued)
-		broker.Requeue(retry, 1, 0)
-		broker.Release()
+		task.Retry(1, 0)
+		task.Finish()
 		if broker.Len() != 1 || broker.Dropped() != 1 {
 			t.Fatalf("live retry bypassed capacity: len=%d dropped=%d", broker.Len(), broker.Dropped())
 		}
@@ -167,10 +170,11 @@ func TestLiveRetryStillHonorsCapacityAndPriority(t *testing.T) {
 		if queuedPriority == 9 {
 			want = retry
 		}
-		if broker.Pop() != want {
+		task = broker.Pop()
+		if task == nil || task.SegmentTask != want {
 			t.Fatal("live retry changed priority eviction")
 		}
-		broker.Release()
+		task.Finish()
 	}
 }
 
@@ -181,21 +185,23 @@ func TestLiveAdmissionCannotEvictPreservedWork(t *testing.T) {
 		broker.PushPreserving(context.Background(), finite)
 		broker.Push(live)
 		broker.Push(urgent)
-		if broker.Pop() != urgent || broker.Pop() != finite || broker.Dropped() != 1 {
+		task, other := broker.Pop(), broker.Pop()
+		if task == nil || other == nil || task.SegmentTask != urgent || other.SegmentTask != finite || broker.Dropped() != 1 {
 			t.Fatal("live admission did not preserve finite work and evict the live candidate")
 		}
-		broker.Release()
-		broker.Release()
+		task.Finish()
+		other.Finish()
 	})
 	t.Run("all protected rejects incoming live work", func(t *testing.T) {
 		broker := NewBroker(1)
 		finite := makeTask(1, 9)
 		broker.PushPreserving(context.Background(), finite)
 		broker.Push(makeTask(2, 0))
-		if broker.Pop() != finite || broker.Dropped() != 1 {
+		task := broker.Pop()
+		if task == nil || task.SegmentTask != finite || broker.Dropped() != 1 {
 			t.Fatal("live work evicted a protected task")
 		}
-		broker.Release()
+		task.Finish()
 	})
 }
 
@@ -209,10 +215,11 @@ func TestPreservingAdmissionPromotesQueuedDuplicate(t *testing.T) {
 		t.Fatal("queued duplicate waited for capacity instead of being preserved")
 	}
 	broker.Push(makeTask(2, 0))
-	if broker.Pop() != original || broker.Dropped() != 1 {
+	task := broker.Pop()
+	if task == nil || task.SegmentTask != original || broker.Dropped() != 1 {
 		t.Fatal("duplicate did not preserve the original queued task")
 	}
-	broker.Release()
+	task.Finish()
 }
 
 func TestPreservingAdmissionPromotionTransfersDeadlinePolicy(t *testing.T) {
@@ -232,10 +239,11 @@ func TestPreservingAdmissionPromotionTransfersDeadlinePolicy(t *testing.T) {
 		if !live.Deadline.IsZero() {
 			t.Fatal("finite source did not clear the stale live deadline")
 		}
-		if broker.Pop() != live || broker.Dropped() != 0 {
+		task := broker.Pop()
+		if task == nil || task.SegmentTask != live || broker.Dropped() != 0 {
 			t.Fatal("promoted finite task was dropped by its old live deadline")
 		}
-		broker.Release()
+		task.Finish()
 	})
 
 	t.Run("explicit finite expiry remains effective", func(t *testing.T) {
@@ -260,7 +268,8 @@ func TestPreservedRequeueCollisionTransfersDeadlinePolicy(t *testing.T) {
 	if !broker.PushPreserving(context.Background(), finite) {
 		t.Fatal("finite task was not admitted")
 	}
-	if broker.Pop() != finite {
+	attempt := broker.Pop()
+	if attempt == nil || attempt.SegmentTask != finite {
 		t.Fatal("could not fetch finite task")
 	}
 
@@ -269,18 +278,19 @@ func TestPreservedRequeueCollisionTransfersDeadlinePolicy(t *testing.T) {
 	broker.Push(live)
 	// As above, expire the live copy without relying on test scheduling.
 	live.Deadline = time.Now().Add(-time.Second)
-	if !broker.Requeue(finite, 1, 0) {
+	if !attempt.Retry(1, 0) {
 		t.Fatal("finite retry was not requeued")
 	}
-	broker.Release()
+	attempt.Finish()
 
 	if !live.preserve || !live.Deadline.IsZero() {
 		t.Fatal("requeue collision did not transfer finite deadline policy")
 	}
-	if broker.Pop() != live || broker.Dropped() != 0 {
+	task := broker.Pop()
+	if task == nil || task.SegmentTask != live || broker.Dropped() != 0 {
 		t.Fatal("requeue collision left the queued live deadline in effect")
 	}
-	broker.Release()
+	task.Finish()
 }
 
 func TestPreservingAdmissionStillDropsExpiredWork(t *testing.T) {

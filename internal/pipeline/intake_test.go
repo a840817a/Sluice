@@ -328,8 +328,13 @@ func TestProcessorActsOnTheOutcome(t *testing.T) {
 			p.SetProgress(prog)
 			task := videoTask(1, queue.FormatTS)
 
-			p.handle(fetch.Result{Task: task, Data: tc.data})
-			p.handle(fetch.Result{Task: task, Data: tc.data}) // the same segment again
+			for range 2 {
+				task.NextRetry = time.Time{}
+				broker.Push(task)
+				attempt := broker.Pop()
+				p.handle(fetch.Result{Task: task, Data: tc.data, Attempt: attempt})
+				attempt.Finish()
+			} // the same segment again
 
 			if requeued := broker.Len() > 0; requeued != tc.wantRequeue {
 				t.Errorf("requeued = %v, want %v", requeued, tc.wantRequeue)

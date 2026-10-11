@@ -33,7 +33,8 @@ func drain(b *queue.Broker) map[uint64]*queue.SegmentTask {
 		if t == nil {
 			return out
 		}
-		out[t.SegNo] = t
+		out[t.SegNo] = t.SegmentTask
+		t.Finish()
 	}
 }
 

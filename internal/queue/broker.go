@@ -20,11 +20,11 @@ type Broker struct {
 	// dropped counts tasks abandoned without ever being fetched. Without it, a
 	// channel that sheds load leaves its progress short of the expected total
 	// with nothing to explain the gap. It is an atomic rather than a mu-guarded
-	// field because Requeue abandons tasks without holding mu.
+	// field so callers can read it independently of the queue lock.
 	dropped atomic.Uint64
 
 	// outstanding counts tasks that have left the queue and not yet been
-	// released: being fetched, waiting in the pool's result channel, or being
+	// completed: being fetched, waiting in the pool's result channel, or being
 	// written to disk. It is guarded by mu rather than atomic precisely so that
 	// leaving the queue and becoming outstanding happen together — a reader
 	// between the two would see no work anywhere and conclude, wrongly, that
@@ -48,16 +48,21 @@ func (b *Broker) Push(t *SegmentTask) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	b.pushLocked(t)
+}
+
+// pushLocked reports whether this logical work remains queued.
+func (b *Broker) pushLocked(t *SegmentTask) bool {
 	key := t.Key()
 	if _, ok := b.seen[key]; ok {
 		// Not a drop: the same work is already queued, so nothing is lost.
-		return
+		return true
 	}
 
 	// Drop expired tasks before checking capacity
 	if t.Expired() {
 		b.dropped.Add(1)
-		return
+		return false
 	}
 
 	// Evict the lowest-priority live entry if over capacity. Completed-source
@@ -71,12 +76,13 @@ func (b *Broker) Push(t *SegmentTask) {
 			b.dropped.Add(1)
 		} else {
 			b.dropped.Add(1)
-			return // new task is worse than everything in queue, drop it
+			return false // new task is worse than everything in queue, drop it
 		}
 	}
 
 	b.seen[key] = struct{}{}
 	heap.Push(&b.pq, t)
+	return true
 }
 
 // PushPreserving admits a task from a finite source. It atomically performs
@@ -135,11 +141,11 @@ func (b *Broker) PushPreserving(ctx context.Context, t *SegmentTask) bool {
 	}
 }
 
-// Pop removes and returns the highest-priority non-expired task that is ready
-// to execute (not in backoff). Tasks still in their backoff window are skipped
+// Pop returns a completion handle for the highest-priority ready task.
+// Expired tasks are dropped. Tasks still in their backoff window are skipped
 // and re-queued so that lower-priority but immediately runnable tasks are not
 // starved. Returns nil if no ready task exists.
-func (b *Broker) Pop() *SegmentTask {
+func (b *Broker) Pop() *Attempt {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -170,20 +176,10 @@ func (b *Broker) Pop() *SegmentTask {
 		b.seen[t.Key()] = struct{}{}
 	}
 
-	return result
-}
-
-// Release reports that one popped task has reached a terminal state, whatever
-// that state was: stored, dropped, or handed back to Requeue. The processor
-// calls it once per result after handling, so a task that was requeued is back
-// in the queue before its in-flight count drops and the broker never looks
-// empty in between.
-func (b *Broker) Release() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.outstanding > 0 {
-		b.outstanding--
+	if result == nil {
+		return nil
 	}
+	return &Attempt{SegmentTask: result, completion: &completion{broker: b, task: result}}
 }
 
 // Idle reports that this broker has no work anywhere: nothing queued and
@@ -215,9 +211,8 @@ const awaitRoomPollInterval = 5 * time.Millisecond
 // already queued.
 func (b *Broker) Dropped() uint64 { return b.dropped.Load() }
 
-// Requeue pushes a task back after a failed attempt, applying backoff.
-// If maxRetries is reached or the task is expired, it is discarded.
-func (b *Broker) Requeue(t *SegmentTask, maxRetries int, backoff time.Duration) bool {
+// requeueLocked applies existing retry policy while holding the completion lock.
+func (b *Broker) requeueLocked(t *SegmentTask, maxRetries int, backoff time.Duration) bool {
 	t.Retries++
 	if maxRetries > 0 && t.Retries > maxRetries {
 		b.dropped.Add(1)
@@ -236,12 +231,9 @@ func (b *Broker) Requeue(t *SegmentTask, maxRetries int, backoff time.Duration) 
 	// Lower urgency on retry
 	t.Priority++
 	// Only protected work may bypass capacity. Live retries retain Push's
-	// shedding semantics after releasing the lock.
-	b.mu.Lock()
+	// shedding semantics.
 	if !t.preserve {
-		b.mu.Unlock()
-		b.Push(t)
-		return true
+		return b.pushLocked(t)
 	}
 	// The processor is the sole result consumer: waiting here for capacity
 	// could stall the fetch workers behind its full result channel. This task
@@ -259,7 +251,6 @@ func (b *Broker) Requeue(t *SegmentTask, maxRetries int, backoff time.Duration) 
 			}
 		}
 	}
-	b.mu.Unlock()
 	return true
 }
 

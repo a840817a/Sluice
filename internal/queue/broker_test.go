@@ -66,7 +66,7 @@ func TestBroker_Requeue_Backoff(t *testing.T) {
 	b := NewBroker(0)
 	task := makeTask(1, 0)
 	b.Push(task)
-	task = b.Pop()
+	attempt := b.Pop()
 	if task == nil {
 		t.Fatal("initial Pop returned nil")
 	}
@@ -74,7 +74,7 @@ func TestBroker_Requeue_Backoff(t *testing.T) {
 	// Requeue with 1s backoff.
 	const maxRetries = 3
 	const backoff = time.Second
-	ok := b.Requeue(task, maxRetries, backoff)
+	ok := attempt.Retry(maxRetries, backoff)
 	if !ok {
 		t.Fatal("Requeue returned false unexpectedly")
 	}
@@ -172,14 +172,17 @@ func TestBroker_DroppedCountsEveryAbandonment(t *testing.T) {
 
 	t.Run("out of retries", func(t *testing.T) {
 		b := NewBroker(0)
-		task := makeTask(1, 0)
-		if ok := b.Requeue(task, 1, time.Millisecond); !ok {
+		b.Push(makeTask(1, 0))
+		task := b.Pop()
+		if ok := task.Retry(1, time.Millisecond); !ok {
 			t.Fatal("first Requeue returned false, want true")
 		}
 		if got := b.Dropped(); got != 0 {
 			t.Fatalf("Dropped() = %d after a retry within budget, want 0", got)
 		}
-		if ok := b.Requeue(task, 1, time.Millisecond); ok {
+		task.NextRetry = time.Time{}
+		task = b.Pop()
+		if ok := task.Retry(1, time.Millisecond); ok {
 			t.Fatal("Requeue past maxRetries returned true, want false")
 		}
 		if got := b.Dropped(); got != 1 {
@@ -190,8 +193,10 @@ func TestBroker_DroppedCountsEveryAbandonment(t *testing.T) {
 	t.Run("requeue of an expired task", func(t *testing.T) {
 		b := NewBroker(0)
 		task := makeTask(1, 0)
+		b.Push(task)
+		attempt := b.Pop()
 		task.Deadline = time.Now().Add(-time.Second)
-		if ok := b.Requeue(task, 5, time.Millisecond); ok {
+		if ok := attempt.Retry(5, time.Millisecond); ok {
 			t.Fatal("Requeue of an expired task returned true, want false")
 		}
 		if got := b.Dropped(); got != 1 {
@@ -239,15 +244,15 @@ func TestBrokerIdleAccountsForWorkInFlight(t *testing.T) {
 			"this is the state that loses segments in the VOD transition")
 	}
 
-	b.Release()
+	task.Finish()
 	if !b.Idle() {
 		t.Error("broker is not idle after its only task was released")
 	}
 }
 
 // A task the processor hands back for retry is queued again, so the broker must
-// never look idle across the handover. Requeue happens while handling, Release
-// after it, so the task is back in the queue before its in-flight count drops.
+// never look idle across the handover. Retry atomically replaces the in-flight
+// attempt with queued work; a redundant Finish cannot consume that work.
 func TestBrokerNotIdleAcrossRequeue(t *testing.T) {
 	b := NewBroker(0)
 	b.Push(makeTask(1, 1))
@@ -256,14 +261,14 @@ func TestBrokerNotIdleAcrossRequeue(t *testing.T) {
 	if task == nil {
 		t.Fatal("Pop returned nil")
 	}
-	if !b.Requeue(task, 3, time.Millisecond) {
+	if !task.Retry(3, time.Millisecond) {
 		t.Fatal("Requeue discarded a task with retries left")
 	}
 	if b.Idle() {
 		t.Error("broker reports idle with a requeued task still pending")
 	}
 
-	b.Release()
+	task.Finish()
 	if b.Idle() {
 		t.Error("broker reports idle after releasing a task it had requeued: " +
 			"the task is still in the queue")
@@ -271,7 +276,7 @@ func TestBrokerNotIdleAcrossRequeue(t *testing.T) {
 }
 
 // Retries exhausted: the task is discarded rather than requeued, so once the
-// processor releases it there is genuinely nothing left.
+// retry call returns there is genuinely nothing left.
 func TestBrokerIdleAfterRequeueDiscardsTask(t *testing.T) {
 	b := NewBroker(0)
 	b.Push(makeTask(1, 1))
@@ -282,11 +287,11 @@ func TestBrokerIdleAfterRequeueDiscardsTask(t *testing.T) {
 	}
 	// Requeue discards once Retries exceeds the budget, so spend it first.
 	task.Retries = 3
-	if b.Requeue(task, 1, time.Millisecond) {
+	if task.Retry(1, time.Millisecond) {
 		t.Fatal("Requeue kept a task that was out of retries")
 	}
 
-	b.Release()
+	task.Finish()
 	if !b.Idle() {
 		t.Error("broker is not idle after its only task was discarded")
 	}

@@ -43,7 +43,7 @@ func drain(b *queue.Broker) map[string][]uint64 {
 	out := map[string][]uint64{}
 	for t := b.Pop(); t != nil; t = b.Pop() {
 		out[t.PeriodID] = append(out[t.PeriodID], t.SegNo)
-		b.Release()
+		t.Finish()
 	}
 	return out
 }

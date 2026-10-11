@@ -26,6 +26,8 @@ func (e *httpError) Error() string {
 
 // Result is the outcome of a single segment fetch attempt.
 type Result struct {
+	// Attempt owns completion for pool results; direct Fetch calls have none.
+	Attempt    *queue.Attempt
 	Task       *queue.SegmentTask
 	Data       []byte // nil on error
 	InitData   []byte // non-nil when an init download was requested
@@ -244,8 +246,8 @@ func (p *Pool) worker(ctx context.Context) {
 		default:
 		}
 
-		task := p.broker.Pop()
-		if task == nil {
+		attempt := p.broker.Pop()
+		if attempt == nil {
 			// Queue empty or next task not ready; yield briefly
 			select {
 			case <-ctx.Done():
@@ -255,12 +257,13 @@ func (p *Pool) worker(ctx context.Context) {
 			continue
 		}
 
-		result := p.fetcher.Fetch(ctx, task, false)
+		result := p.fetcher.Fetch(ctx, attempt.SegmentTask, false)
+		result.Attempt = attempt
 
 		select {
 		case p.results <- result:
 		case <-ctx.Done():
-			p.broker.Release()
+			attempt.Finish()
 			return
 		}
 	}
