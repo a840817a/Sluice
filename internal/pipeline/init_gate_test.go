@@ -213,13 +213,18 @@ func TestInitGate(t *testing.T) {
 		other := fmp4Task(2, 0)
 		other.PeriodID = "1"
 		h.send(other, nil)
-		first, second := h.nextPrepare(), h.nextPrepare()
-		if first.path == second.path {
-			t.Fatalf("both preparations are of %s", first.path)
+		// The two preparations run concurrently; tell them apart by path.
+		calls := map[string]prepareCall{}
+		for range 2 {
+			c := h.nextPrepare()
+			calls[c.path] = c
 		}
-		second.done <- nil
+		if len(calls) != 2 {
+			t.Fatalf("both preparations are of one init: %v", calls)
+		}
+		calls["1/v0"].done <- nil
 		h.expect("deliver 2")
-		first.done <- nil
+		calls["0/v0"].done <- nil
 		h.expect("deliver 2", "deliver 1")
 	})
 
