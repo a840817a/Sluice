@@ -63,7 +63,7 @@ func TestFetcherRejectsOversizedSegment(t *testing.T) {
 		defer srv.Close()
 
 		f := NewFetcher(nil, nil, limit, 0)
-		res := f.Fetch(t.Context(), &queue.SegmentTask{URL: srv.URL}, false)
+		res := f.Fetch(t.Context(), &queue.SegmentTask{URL: srv.URL})
 		if res.Err == nil {
 			t.Fatalf("Fetch succeeded with %d bytes, want an error", len(res.Data))
 		}
@@ -90,7 +90,7 @@ func TestFetcherRejectsOversizedSegment(t *testing.T) {
 		defer srv.Close()
 
 		f := NewFetcher(nil, nil, limit, 0)
-		res := f.Fetch(t.Context(), &queue.SegmentTask{URL: srv.URL}, false)
+		res := f.Fetch(t.Context(), &queue.SegmentTask{URL: srv.URL})
 		if res.Err == nil {
 			t.Fatalf("Fetch succeeded with %d bytes, want an error", len(res.Data))
 		}
@@ -110,7 +110,7 @@ func TestFetcherRejectsOversizedSegment(t *testing.T) {
 		defer srv.Close()
 
 		f := NewFetcher(nil, nil, limit, 0)
-		res := f.Fetch(t.Context(), &queue.SegmentTask{URL: srv.URL}, false)
+		res := f.Fetch(t.Context(), &queue.SegmentTask{URL: srv.URL})
 		if res.Err != nil {
 			t.Fatalf("unexpected error: %v", res.Err)
 		}
@@ -134,7 +134,7 @@ func TestFetcherRangeIsBoundedByTheRequestedRange(t *testing.T) {
 	f := NewFetcher(nil, nil, 1<<30, 0) // segment ceiling far above the range
 	res := f.Fetch(t.Context(), &queue.SegmentTask{
 		URL: srv.URL, RangeStart: 0, RangeEnd: 99, // asks for 100 bytes
-	}, false)
+	})
 
 	if res.Err == nil {
 		t.Fatalf("Fetch returned %d bytes for a 100-byte range, want an error", len(res.Data))
@@ -154,7 +154,7 @@ func TestFetcherRangeWithinBoundsSucceeds(t *testing.T) {
 	f := NewFetcher(nil, nil, 1<<30, 0)
 	res := f.Fetch(t.Context(), &queue.SegmentTask{
 		URL: srv.URL, RangeStart: 0, RangeEnd: 99,
-	}, false)
+	})
 	if res.Err != nil {
 		t.Fatalf("unexpected error: %v", res.Err)
 	}

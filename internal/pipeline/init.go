@@ -3,17 +3,12 @@ package pipeline
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
-	"net/http"
-	"os"
 	"sync"
 	"time"
 
 	"github.com/a840817a/sluice/internal/fetch"
 	"github.com/a840817a/sluice/internal/queue"
-	"github.com/a840817a/sluice/internal/store"
-	"github.com/a840817a/sluice/internal/validate"
 )
 
 // initialization belongs to one stored period/representation. A failed attempt
@@ -29,9 +24,8 @@ func (s *initialization) canRenew(task *queue.SegmentTask) bool {
 }
 
 type initCompletion struct {
-	path      string
-	timescale uint32
-	err       error
+	path string
+	err  error
 }
 
 // runWithInit owns the handover from fetched media to Intake. Waiting media
@@ -93,9 +87,9 @@ func (p *Processor) runWithInit(ctx context.Context, pool *fetch.Pool) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ts, err := p.prepareInit(ctx, pool, &task, path)
+			_, err := p.inits.prepare(ctx, &task, path)
 			select {
-			case completed <- initCompletion{path: path, timescale: ts, err: err}:
+			case completed <- initCompletion{path: path, err: err}:
 			case <-ctx.Done():
 			}
 		}()
@@ -116,9 +110,6 @@ func (p *Processor) runWithInit(ctx context.Context, pool *fetch.Pool) {
 			active--
 			state := states[result.path]
 			state.done, state.err = true, result.err
-			if result.err == nil {
-				p.intake.repTimescales[result.path] = result.timescale
-			}
 			flush()
 			// Preserve fetched media with later live deadlines. Use the latest
 			// pending deadline so a failed batch cannot restart once per segment.
@@ -154,104 +145,4 @@ func (p *Processor) runWithInit(ctx context.Context, pool *fetch.Pool) {
 			}
 		}
 	}
-}
-
-// prepareInit first reuses a validated local init. Only init is retried; media
-// already in memory keeps its retry budget. The deadline belongs to live work,
-// while finite work is bounded by a retry budget even for a zero-value config.
-func (p *Processor) prepareInit(ctx context.Context, pool *fetch.Pool, task *queue.SegmentTask, path string) (uint32, error) {
-	if !task.Deadline.IsZero() {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithDeadline(ctx, task.Deadline)
-		defer cancel()
-	}
-	if err := ctx.Err(); err != nil {
-		return 0, err
-	}
-	if ts, err := validate.ReadInitTimescale(path); err == nil {
-		return ts, nil
-	}
-	// A rebuilt index can point at an ADR-0006 legacy directory. Reuse that
-	// init locally, copying it to the encoded location used for new segments.
-	if rep := p.ci.FindRep(task.PeriodID, task.ASID, task.RepID); rep != nil {
-		for _, seg := range rep.Published() {
-			if seg.InitPath == "" || seg.InitPath == path {
-				continue
-			}
-			f, err := os.Open(seg.InitPath)
-			if err != nil {
-				break
-			}
-			limit := p.cfg.Worker.MaxSegmentBytes
-			if limit <= 0 {
-				limit = fetch.DefaultMaxSegmentBytes
-			}
-			data, err := fetch.ReadAtMost(f, limit)
-			_ = f.Close()
-			if err == nil && ctx.Err() == nil {
-				if ts, err := persistInit(path, data); err == nil {
-					return ts, nil
-				}
-			}
-			break
-		}
-	}
-	if task.InitURL == "" {
-		return 0, errors.New("fMP4 representation has no usable local init or init URL")
-	}
-	retries := p.cfg.Worker.MaxRetriesStatic
-	if retries <= 0 {
-		retries = 5 // Same default as gateway configuration; never retry forever.
-	}
-	for attempt := 0; ; attempt++ {
-		res := pool.FetchInit(ctx, task)
-		err := res.Err
-		backoff := 2 * time.Second
-		if err == nil {
-			if err = ctx.Err(); err == nil {
-				var ts uint32
-				ts, err = persistInit(path, res.InitData)
-				if err == nil {
-					return ts, nil
-				}
-				backoff = time.Second
-			}
-		}
-		if ctx.Err() != nil {
-			return 0, ctx.Err()
-		}
-		p.prog.RecordSegmentError(StageInit, err.Error(), task.RepID, task.SegNo)
-		if res.StatusCode == http.StatusGone || attempt >= retries {
-			return 0, fmt.Errorf("init unavailable after %d attempts: %w", attempt+1, err)
-		}
-		if res.StatusCode == http.StatusTooEarly {
-			backoff = 500 * time.Millisecond
-		}
-		for i := 0; i < attempt && backoff < time.Minute; i++ {
-			backoff *= 2
-		}
-		timer := time.NewTimer(min(backoff, time.Minute))
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return 0, ctx.Err()
-		case <-timer.C:
-		}
-	}
-}
-
-// persistInit returns a timescale only after validation and atomic persistence.
-// Both asynchronous preparation and direct Intake callers use this rule.
-func persistInit(path string, data []byte) (uint32, error) {
-	if err := validate.ValidateInit(data); err != nil {
-		return 0, fmt.Errorf("validate init: %w", err)
-	}
-	ts, err := validate.TimescaleFromInitBytes(data)
-	if err != nil {
-		return 0, fmt.Errorf("read init timescale: %w", err)
-	}
-	if err := store.Write(path, data); err != nil {
-		return 0, fmt.Errorf("write init: %w", err)
-	}
-	return ts, nil
 }

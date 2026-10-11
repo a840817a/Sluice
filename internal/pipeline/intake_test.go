@@ -131,7 +131,10 @@ func TestStoreFMP4(t *testing.T) {
 	task.Duration, task.Timescale = 2, 1 // two seconds, in the template's timescale
 	data := fmp4Segment(180000)
 
-	out := in.Store(context.Background(), task, data, fmp4Init(90000))
+	if err := store.Write(location(dir, task).InitPath(), fmp4Init(90000)); err != nil {
+		t.Fatal(err)
+	}
+	out := in.Store(context.Background(), task, data)
 	if !out.Stored || !out.New || out.Published != 1 || out.Bytes != len(data) {
 		t.Fatalf("Outcome = %+v, want stored, new, 1 published, %d bytes", out, len(data))
 	}
@@ -150,7 +153,7 @@ func TestStoreFMP4(t *testing.T) {
 	}
 
 	// Fetched again, as the HLS backfill path can: stored, but not new.
-	if again := in.Store(context.Background(), task, data, nil); !again.Stored || again.New {
+	if again := in.Store(context.Background(), task, data); !again.Stored || again.New {
 		t.Errorf("second Store = %+v, want stored and not new", again)
 	}
 }
@@ -163,7 +166,7 @@ func TestStoreTS(t *testing.T) {
 	task.StartPTS, task.Duration, task.Timescale = 900, 4, 1
 	task.PersistMeta, task.Discontinuity = true, true
 
-	if out := in.Store(context.Background(), task, tsSegment(), nil); !out.Stored {
+	if out := in.Store(context.Background(), task, tsSegment()); !out.Stored {
 		t.Fatalf("Outcome = %+v, want stored", out)
 	}
 	loc := location(dir, task)
@@ -187,7 +190,7 @@ func TestStorePassthroughCiphertext(t *testing.T) {
 	task.Encrypted, task.KeyURI, task.IV, task.PersistMeta = true, "https://keys/k1", iv, true
 	cipherText := bytes.Repeat([]byte{0xAB}, 32) // no sync byte anywhere
 
-	if out := in.Store(context.Background(), task, cipherText, nil); !out.Stored {
+	if out := in.Store(context.Background(), task, cipherText); !out.Stored {
 		t.Fatalf("Outcome = %+v, want stored", out)
 	}
 	if !bytes.Equal(readFile(t, location(dir, task).SegmentPath(1, store.ExtTS)), cipherText) {
@@ -201,7 +204,7 @@ func TestStorePassthroughCiphertext(t *testing.T) {
 		t.Errorf("sidecar = %+v, want the IV recorded", records)
 	}
 
-	if out := in.Store(context.Background(), videoTaskEncrypted(2), bytes.Repeat([]byte{1}, 33), nil); out.Stored || out.Stage != StageValidate {
+	if out := in.Store(context.Background(), videoTaskEncrypted(2), bytes.Repeat([]byte{1}, 33)); out.Stored || out.Stage != StageValidate {
 		t.Errorf("ciphertext of a non-block length: Outcome = %+v, want refused at validate", out)
 	}
 }
@@ -222,7 +225,7 @@ func TestStoreDecryptOnIngest(t *testing.T) {
 	task.Encrypted, task.DecryptOnIngest, task.KeyURI, task.IV = true, true, "https://keys/k1", iv
 	plain := tsSegment()
 
-	out := in.Store(context.Background(), task, encrypt(t, plain, key, iv), nil)
+	out := in.Store(context.Background(), task, encrypt(t, plain, key, iv))
 	if !out.Stored || out.Bytes != len(plain) {
 		t.Fatalf("Outcome = %+v, want stored with %d bytes", out, len(plain))
 	}
@@ -236,7 +239,7 @@ func TestStoreDecryptOnIngest(t *testing.T) {
 	in.SetKeyFetcher(fakeKeys{err: errors.New("key server down")})
 	task2 := *task
 	task2.SegNo = 2
-	if out := in.Store(context.Background(), &task2, encrypt(t, plain, key, iv), nil); out.Stored || out.Stage != StageDecrypt || out.Retry {
+	if out := in.Store(context.Background(), &task2, encrypt(t, plain, key, iv)); out.Stored || out.Stage != StageDecrypt || out.Retry {
 		t.Errorf("key server down: Outcome = %+v, want refused at decrypt without retry", out)
 	}
 }
@@ -246,7 +249,7 @@ func TestStoreDecryptOnIngest(t *testing.T) {
 func TestStoreRefusesInvalidMedia(t *testing.T) {
 	in, ci, dir := newTestIntake(t)
 	for _, task := range []*queue.SegmentTask{videoTask(1, queue.FormatFMP4), videoTask(2, queue.FormatTS), videoTask(3, queue.FormatWebVTT)} {
-		out := in.Store(context.Background(), task, []byte("<html>origin error</html>"), nil)
+		out := in.Store(context.Background(), task, []byte("<html>origin error</html>"))
 		if out.Stored || out.Stage != StageValidate || out.Err == nil || out.Retry {
 			t.Errorf("format %v: Outcome = %+v, want refused at validate without retry", task.Format, out)
 		}
@@ -269,7 +272,7 @@ func TestStoreRetriesAFailedWrite(t *testing.T) {
 	ci := index.NewChannelIndex(index.PublishImmediately)
 	in := NewIntake(config.Config{Store: config.StoreConfig{DataDir: notADir}}, "ch", ci)
 
-	out := in.Store(context.Background(), videoTask(1, queue.FormatTS), tsSegment(), nil)
+	out := in.Store(context.Background(), videoTask(1, queue.FormatTS), tsSegment())
 	if out.Stored || out.Stage != StageWrite || !out.Retry {
 		t.Errorf("Outcome = %+v, want refused at write with retry", out)
 	}
@@ -289,7 +292,7 @@ func TestStoreExpiresWhatLeftTheWindow(t *testing.T) {
 	for n := uint64(0); n < 6; n++ {
 		task := videoTask(n, queue.FormatTS)
 		task.StartPTS, task.Duration, task.Timescale = int64(n)*2, 2, 1
-		if out := in.Store(context.Background(), task, tsSegment(), nil); !out.Stored {
+		if out := in.Store(context.Background(), task, tsSegment()); !out.Stored {
 			t.Fatalf("segment %d: %+v", n, out)
 		}
 	}

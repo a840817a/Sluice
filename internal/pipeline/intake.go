@@ -68,9 +68,8 @@ type Intake struct {
 	channelID string
 	ci        *index.ChannelIndex
 	keys      KeyFetcher
-	// repTimescales holds only validated, persisted init timescales, keyed by
-	// init path (including the period and representation).
-	repTimescales map[string]uint32
+	// inits says whether a segment's init is usable, and its timescale.
+	inits *initPreparer
 	// sidecarAppends counts metadata records written per representation since
 	// that representation's file was last compacted.
 	sidecarAppends map[string]int
@@ -79,11 +78,15 @@ type Intake struct {
 // NewIntake returns an Intake storing channelID's segments under cfg's data
 // directory and committing them to ci.
 func NewIntake(cfg config.Config, channelID string, ci *index.ChannelIndex) *Intake {
+	return newIntake(cfg, channelID, ci, newInitPreparer(cfg, ci))
+}
+
+func newIntake(cfg config.Config, channelID string, ci *index.ChannelIndex, inits *initPreparer) *Intake {
 	return &Intake{
 		cfg:            cfg,
 		channelID:      channelID,
 		ci:             ci,
-		repTimescales:  make(map[string]uint32),
+		inits:          inits,
 		sidecarAppends: make(map[string]int),
 	}
 }
@@ -91,10 +94,9 @@ func NewIntake(cfg config.Config, channelID string, ci *index.ChannelIndex) *Int
 // SetKeyFetcher attaches the key source used for decrypt-on-ingest channels.
 func (in *Intake) SetKeyFetcher(k KeyFetcher) { in.keys = k }
 
-// Store stores task's segment, fetched as data, with initData the
-// representation's init segment when this fetch carried one. ctx bounds the
-// content-key request a decrypt-on-ingest segment makes.
-func (in *Intake) Store(ctx context.Context, task *queue.SegmentTask, data, initData []byte) Outcome {
+// Store stores task's segment, fetched as data. ctx bounds the content-key
+// request a decrypt-on-ingest segment makes.
+func (in *Intake) Store(ctx context.Context, task *queue.SegmentTask, data []byte) Outcome {
 	// Decrypt before anything inspects the bytes, so that structural validation
 	// runs on real media rather than ciphertext. Only decrypt-on-ingest channels
 	// take this path; passthrough keeps the ciphertext all the way to disk.
@@ -158,20 +160,15 @@ func (in *Intake) Store(ctx context.Context, task *queue.SegmentTask, data, init
 	}
 
 	// No fMP4 media reaches its final path until its init is usable. The
-	// processor normally prepares it asynchronously; direct callers follow
-	// exactly the same rule here.
+	// processor prepares it before handing the segment over; a direct caller
+	// gets StageInit until the init is on disk.
+	var initTimescale uint32
 	if task.Format == queue.FormatFMP4 {
-		key := in.location(task).InitPath()
-		if in.repTimescales[key] == 0 {
-			ts, err := validate.ReadInitTimescale(key)
-			if err != nil && initData != nil {
-				ts, err = persistInit(key, initData)
-			}
-			if err != nil {
-				return Outcome{Stage: StageInit, Err: err, Retry: true}
-			}
-			in.repTimescales[key] = ts
+		ts, err := in.inits.timescale(in.location(task).InitPath())
+		if err != nil {
+			return Outcome{Stage: StageInit, Err: err, Retry: true}
 		}
+		initTimescale = ts
 	}
 
 	// Write media segment atomically to disk (timed for metrics).
@@ -196,8 +193,8 @@ func (in *Intake) Store(ctx context.Context, task *queue.SegmentTask, data, init
 	// spec) but the track's BaseMediaDecodeTime is in a different timescale (e.g.
 	// 48000 for audio, 90000 for video), which would cause A/V barrier to fail.
 	trackTS := task.Timescale
-	if ts, ok := in.repTimescales[in.location(task).InitPath()]; ok {
-		trackTS = ts
+	if initTimescale != 0 {
+		trackTS = initTimescale
 	}
 
 	// Compute EndPTS: convert the SegmentTemplate duration (in SegmentTemplate

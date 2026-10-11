@@ -121,8 +121,8 @@ func TestOriginBoundsWhatItReads(t *testing.T) {
 }
 
 // The pipeline drops a segment on 410 Gone and backs off briefly on 425 Too
-// Early, so a fetch result must carry the origin's status for media and
-// init requests alike, ranged or not.
+// Early, so a fetch result must carry the origin's status for media and init
+// requests alike, ranged or not.
 func TestFetchResultCarriesTheOriginStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		code, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/"))
@@ -132,22 +132,14 @@ func TestFetchResultCarriesTheOriginStatus(t *testing.T) {
 	f := NewFetcher(nil, nil, 0, 0)
 	for _, code := range []int{http.StatusGone, http.StatusTooEarly} {
 		url := srv.URL + "/" + strconv.Itoa(code)
-		for name, task := range map[string]*queue.SegmentTask{
-			"segment":     {URL: url},
-			"ranged":      {URL: url, RangeStart: 0, RangeEnd: 9},
-			"init":        {URL: srv.URL + "/200", InitURL: url},
-			"ranged init": {URL: srv.URL + "/200", InitURL: url, InitRangeEnd: 9},
+		for name, r := range map[string]Result{
+			"segment":     f.Fetch(t.Context(), &queue.SegmentTask{URL: url}),
+			"ranged":      f.Fetch(t.Context(), &queue.SegmentTask{URL: url, RangeEnd: 9}),
+			"init":        f.FetchInit(t.Context(), &queue.SegmentTask{InitURL: url}),
+			"ranged init": f.FetchInit(t.Context(), &queue.SegmentTask{InitURL: url, InitRangeEnd: 9}),
 		} {
-			isInit := strings.Contains(name, "init")
-			results := []Result{f.Fetch(t.Context(), task, isInit)}
-			if isInit {
-				// Ingest fetches inits through Pool.FetchInit.
-				results = append(results, f.fetchInit(t.Context(), task))
-			}
-			for _, r := range results {
-				if r.Err == nil || r.StatusCode != code {
-					t.Errorf("%s answered %d: StatusCode %d, err %v", name, code, r.StatusCode, r.Err)
-				}
+			if r.Err == nil || r.StatusCode != code {
+				t.Errorf("%s answered %d: StatusCode %d, err %v", name, code, r.StatusCode, r.Err)
 			}
 		}
 	}

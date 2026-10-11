@@ -16,10 +16,11 @@ import (
 // Result is the outcome of a single segment fetch attempt.
 type Result struct {
 	// Attempt owns completion for pool results; direct Fetch calls have none.
-	Attempt    *queue.Attempt
-	Task       *queue.SegmentTask
-	Data       []byte // nil on error
-	InitData   []byte // non-nil when an init download was requested
+	Attempt *queue.Attempt
+	Task    *queue.SegmentTask
+	// Data is the fetched body, nil on error: the media segment for Fetch,
+	// the init segment for FetchInit.
+	Data       []byte
 	Err        error
 	StatusCode int // origin HTTP status when Err != nil; 0 for non-HTTP errors
 }
@@ -57,15 +58,10 @@ func NewFetcher(client *http.Client, origin *Origin, maxSegmentBytes int64, time
 	}
 }
 
-// Fetch downloads the segment described by task.
-// It always fetches the media segment; it also fetches the init segment when
-// needInit is true and task.InitURL is set.
-// Byte-range requests are used when task.RangeEnd > 0 (media) or
-// task.InitRangeEnd > 0 (init).
-func (f *Fetcher) Fetch(ctx context.Context, task *queue.SegmentTask, needInit bool) Result {
+// Fetch downloads the media segment described by task, as a byte range when
+// task.RangeEnd > 0.
+func (f *Fetcher) Fetch(ctx context.Context, task *queue.SegmentTask) Result {
 	r := Result{Task: task}
-
-	// Fetch media segment
 	var err error
 	if task.RangeEnd > 0 {
 		r.Data, err = f.getRange(ctx, task.URL, task.RangeStart, task.RangeEnd)
@@ -78,34 +74,33 @@ func (f *Fetcher) Fetch(ctx context.Context, task *queue.SegmentTask, needInit b
 			r.StatusCode = se.Code
 		}
 		r.Err = fmt.Errorf("segment %s: %w", task.URL, err)
-		return r
-	}
-
-	if needInit && task.InitURL != "" {
-		init := f.fetchInit(ctx, task)
-		r.InitData, r.Err, r.StatusCode = init.InitData, init.Err, init.StatusCode
 	}
 	return r
 }
 
-// fetchInit only downloads bytes; validation and readiness belong to ingest.
-func (f *Fetcher) fetchInit(ctx context.Context, task *queue.SegmentTask) Result {
+// FetchInit downloads the init segment of task's representation, as a byte
+// range when task.InitRangeEnd > 0. It only downloads bytes; validation and
+// readiness belong to ingest, which fetches inits apart from the media
+// workers and their bounded result channel, so media backpressure cannot
+// prevent its prerequisite from completing.
+func (f *Fetcher) FetchInit(ctx context.Context, task *queue.SegmentTask) Result {
 	r := Result{Task: task}
 	if task.InitURL == "" {
 		r.Err = errors.New("fMP4 representation has no init URL")
 		return r
 	}
+	var err error
 	if task.InitRangeEnd > 0 {
-		r.InitData, r.Err = f.getRange(ctx, task.InitURL, task.InitRangeStart, task.InitRangeEnd)
+		r.Data, err = f.getRange(ctx, task.InitURL, task.InitRangeStart, task.InitRangeEnd)
 	} else {
-		r.InitData, r.Err = f.get(ctx, task.InitURL)
+		r.Data, err = f.get(ctx, task.InitURL)
 	}
-	if r.Err != nil {
+	if err != nil {
 		var se *StatusError
-		if errors.As(r.Err, &se) {
+		if errors.As(err, &se) {
 			r.StatusCode = se.Code
 		}
-		r.Err = fmt.Errorf("init %s: %w", task.InitURL, r.Err)
+		r.Err = fmt.Errorf("init %s: %w", task.InitURL, err)
 	}
 	return r
 }
@@ -196,7 +191,7 @@ func (p *Pool) worker(ctx context.Context) {
 			continue
 		}
 
-		result := p.fetcher.Fetch(ctx, attempt.SegmentTask, false)
+		result := p.fetcher.Fetch(ctx, attempt.SegmentTask)
 		result.Attempt = attempt
 
 		select {
@@ -208,9 +203,6 @@ func (p *Pool) worker(ctx context.Context) {
 	}
 }
 
-// FetchInit downloads an init independently of the media workers and their
-// bounded result channel. Ingest owns deduplication, retries and persistence,
-// so media backpressure cannot prevent its prerequisite from completing.
-func (p *Pool) FetchInit(ctx context.Context, task *queue.SegmentTask) Result {
-	return p.fetcher.fetchInit(ctx, task)
-}
+// Fetcher is the Fetcher the pool's workers use, for requests ingest makes
+// apart from them, such as inits.
+func (p *Pool) Fetcher() *Fetcher { return p.fetcher }

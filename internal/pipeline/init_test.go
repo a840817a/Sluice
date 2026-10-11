@@ -348,7 +348,12 @@ func TestIntakeRefusesUnreadyInitBeforeWritingMedia(t *testing.T) {
 	for _, data := range [][]byte{nil, mp4box("moov"), fmp4Init(0)} {
 		in, ci, dir := newTestIntake(t)
 		task := videoTask(1, queue.FormatFMP4)
-		out := in.Store(t.Context(), task, fmp4Segment(0), data)
+		if data != nil {
+			if err := store.Write(location(dir, task).InitPath(), data); err != nil {
+				t.Fatal(err)
+			}
+		}
+		out := in.Store(t.Context(), task, fmp4Segment(0))
 		if out.Stored || out.Err == nil || out.Stage != "init" {
 			t.Fatalf("unready init was accepted: %+v", out)
 		}

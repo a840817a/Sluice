@@ -42,7 +42,7 @@ func slowOrigin(t *testing.T, chunks int, perChunk time.Duration) *httptest.Serv
 }
 
 func fetchOnce(f *Fetcher, url string) Result {
-	return f.Fetch(context.Background(), &queue.SegmentTask{URL: url, Format: queue.FormatTS}, false)
+	return f.Fetch(context.Background(), &queue.SegmentTask{URL: url, Format: queue.FormatTS})
 }
 
 // A download slower than the configured timeout must fail, and the failure must

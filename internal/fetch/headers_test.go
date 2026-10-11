@@ -28,11 +28,11 @@ func TestFetcherSendsRotatedHeaders(t *testing.T) {
 	h := NewAtomicHeaders(map[string]string{"X-Token": "old"})
 	f := NewFetcher(nil, NewOrigin(h, "", ""), 0, 0)
 
-	if res := f.Fetch(t.Context(), &queue.SegmentTask{URL: srv.URL}, false); res.Err != nil {
+	if res := f.Fetch(t.Context(), &queue.SegmentTask{URL: srv.URL}); res.Err != nil {
 		t.Fatalf("first fetch: %v", res.Err)
 	}
 	h.Store(map[string]string{"X-Token": "new"})
-	if res := f.Fetch(t.Context(), &queue.SegmentTask{URL: srv.URL}, false); res.Err != nil {
+	if res := f.Fetch(t.Context(), &queue.SegmentTask{URL: srv.URL}); res.Err != nil {
 		t.Fatalf("fetch after rotation: %v", res.Err)
 	}
 

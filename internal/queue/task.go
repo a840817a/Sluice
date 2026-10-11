@@ -125,8 +125,11 @@ type SegmentTask struct {
 }
 
 // Expired returns true if the task has passed its usefulness deadline.
-func (t *SegmentTask) Expired() bool {
-	return !t.Deadline.IsZero() && time.Now().After(t.Deadline)
+func (t *SegmentTask) Expired() bool { return t.ExpiredAt(time.Now()) }
+
+// ExpiredAt reports whether the task's deadline had passed at now.
+func (t *SegmentTask) ExpiredAt(now time.Time) bool {
+	return !t.Deadline.IsZero() && now.After(t.Deadline)
 }
 
 // Key returns a unique string identifying this task.

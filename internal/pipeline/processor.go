@@ -58,6 +58,7 @@ type Processor struct {
 	broker    *queue.Broker
 	channelID string
 	intake    *Intake
+	inits     *initPreparer
 	keys      KeyFetcher
 	// warmedKeys tracks key server URIs already fetched into the key cache, so
 	// a passthrough channel captures each key on disk exactly once while the
@@ -79,16 +80,21 @@ type Processor struct {
 }
 
 // SetProgress attaches the channel's progress counters. Must be called before Run.
-func (p *Processor) SetProgress(c *progress.Counters) { p.prog = c }
+func (p *Processor) SetProgress(c *progress.Counters) {
+	p.prog = c
+	p.inits.prog = c
+}
 
 // NewProcessor creates a Processor.
 func NewProcessor(cfg config.Config, channelID string, ci *index.ChannelIndex, broker *queue.Broker) *Processor {
+	inits := newInitPreparer(cfg, ci)
 	return &Processor{
 		cfg:        cfg,
 		ci:         ci,
 		broker:     broker,
 		channelID:  channelID,
-		intake:     NewIntake(cfg, channelID, ci),
+		intake:     newIntake(cfg, channelID, ci, inits),
+		inits:      inits,
 		warmedKeys: make(map[string]bool),
 		keyCtx:     context.Background(),
 	}
@@ -108,6 +114,7 @@ func (p *Processor) SetKeyFetcher(k KeyFetcher) {
 // to the channel's key cache.
 func (p *Processor) Run(ctx context.Context, pool *fetch.Pool) {
 	p.keyCtx = ctx
+	p.inits.download = pool.Fetcher()
 	defer p.warmWG.Wait()
 	p.runWithInit(ctx, pool)
 }
@@ -149,7 +156,7 @@ func (p *Processor) handle(res fetch.Result) {
 		p.warmKey(task.KeyURI)
 	}
 
-	out := p.intake.Store(p.keyCtx, task, res.Data, res.InitData)
+	out := p.intake.Store(p.keyCtx, task, res.Data)
 	if !out.Stored {
 		switch out.Stage {
 		case StageDecrypt:
