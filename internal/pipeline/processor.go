@@ -116,7 +116,24 @@ func (p *Processor) Run(ctx context.Context, pool *fetch.Pool) {
 	p.keyCtx = ctx
 	p.inits.download = pool.Fetcher()
 	defer p.warmWG.Wait()
-	p.runWithInit(ctx, pool)
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	gate := initGate{
+		limit:    p.cfg.Worker.FetchWorkers,
+		initPath: func(task *queue.SegmentTask) string { return p.intake.location(task).InitPath() },
+		prepare: func(ctx context.Context, task *queue.SegmentTask, path string) error {
+			_, err := p.inits.prepare(ctx, task, path)
+			return err
+		},
+		deliver: p.handle,
+		abandon: func(res fetch.Result, err error) {
+			p.prog.RecordSegmentError(StageInit, err.Error(), res.Task.RepID, res.Task.SegNo)
+			slog.Warn("segment abandoned: init is not ready", "rep", res.Task.RepID, "seg", res.Task.SegNo, "err", err)
+		},
+		now:  time.Now,
+		tick: ticker.C,
+	}
+	gate.run(ctx, pool.Results())
 }
 
 func (p *Processor) handle(res fetch.Result) {

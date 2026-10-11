@@ -3,7 +3,6 @@ package pipeline
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"sync"
 	"time"
 
@@ -19,8 +18,8 @@ type initialization struct {
 	deadline time.Time
 }
 
-func (s *initialization) canRenew(task *queue.SegmentTask) bool {
-	return s.done && s.err != nil && !task.Expired() && !task.Deadline.IsZero() && task.Deadline.After(s.deadline)
+func (s *initialization) canRenew(task *queue.SegmentTask, now time.Time) bool {
+	return s.done && s.err != nil && !task.ExpiredAt(now) && !task.Deadline.IsZero() && task.Deadline.After(s.deadline)
 }
 
 type initCompletion struct {
@@ -28,15 +27,43 @@ type initCompletion struct {
 	err  error
 }
 
-// runWithInit owns the handover from fetched media to Intake. Waiting media
-// stays outstanding in the broker and never reaches disk. At most one result
-// per configured worker waits here; the pool also has its bounded result
-// channel and one body per worker. Each body is bounded by MaxSegmentBytes.
-// When this buffer fills we stop reading media, but keep reading init outcomes.
-// Init work never uses the media workers or their result channel.
-func (p *Processor) runWithInit(ctx context.Context, pool *fetch.Pool) {
+// initGate owns the handover from fetched media to Intake: no fMP4 segment is
+// delivered before its representation's init is usable. Waiting media stays
+// outstanding in the broker and never reaches disk. At most limit results wait
+// here; the pool also has its bounded result channel and one body per worker,
+// each bounded by MaxSegmentBytes. When the buffer fills the gate stops
+// reading media, but keeps reading init outcomes. Init work never uses the
+// media workers or their result channel.
+//
+// One init preparation runs per init path at a time. A failure is final for
+// the media waiting on it, unless later live media carries a later deadline:
+// then preparation starts again for the media that can still use it.
+//
+// The gate settles every result it reads: after deliver or abandon, and for
+// whatever still waits when run returns.
+type initGate struct {
+	// limit caps both the media waiting and the preparations running.
+	limit int
+	// initPath names where task's init lives; it identifies the init.
+	initPath func(task *queue.SegmentTask) string
+	// prepare makes the init at path usable; it runs on a goroutine of its own.
+	prepare func(ctx context.Context, task *queue.SegmentTask, path string) error
+	// deliver hands over a result that may be stored: a failed fetch, a format
+	// without an init, or media whose init is usable.
+	deliver func(fetch.Result)
+	// abandon drops media whose init will not become usable.
+	abandon func(fetch.Result, error)
+	// now and tick are the gate's clock; tick prompts it to drop waiting media
+	// whose deadline has passed.
+	now  func() time.Time
+	tick <-chan time.Time
+}
+
+// run reads results until they close or ctx ends, and returns only after
+// every preparation it started has returned.
+func (g *initGate) run(ctx context.Context, results <-chan fetch.Result) {
 	ctx, cancel := context.WithCancel(ctx)
-	limit := max(1, p.cfg.Worker.FetchWorkers)
+	limit := max(1, g.limit)
 	completed := make(chan initCompletion, limit)
 	states := make(map[string]*initialization)
 	var pending []fetch.Result
@@ -49,26 +76,24 @@ func (p *Processor) runWithInit(ctx context.Context, pool *fetch.Pool) {
 			res.Attempt.Finish()
 		}
 	}()
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
 
 	finish := func(res fetch.Result, err error) {
-		if res.Task.Expired() {
+		if res.Task.ExpiredAt(g.now()) {
 			err = errors.New("media deadline expired while waiting for init")
 		}
 		if err != nil {
-			p.prog.RecordSegmentError(StageInit, err.Error(), res.Task.RepID, res.Task.SegNo)
-			slog.Warn("segment abandoned: init is not ready", "rep", res.Task.RepID, "seg", res.Task.SegNo, "err", err)
+			g.abandon(res, err)
 		} else {
-			p.handle(res)
+			g.deliver(res)
 		}
 		res.Attempt.Finish()
 	}
 	flush := func() {
+		now := g.now()
 		kept := pending[:0]
 		for _, res := range pending {
-			state := states[p.intake.location(res.Task).InitPath()]
-			if (state.done && !state.canRenew(res.Task)) || res.Task.Expired() {
+			state := states[g.initPath(res.Task)]
+			if (state.done && !state.canRenew(res.Task, now)) || res.Task.ExpiredAt(now) {
 				finish(res, state.err)
 			} else {
 				kept = append(kept, res)
@@ -87,7 +112,7 @@ func (p *Processor) runWithInit(ctx context.Context, pool *fetch.Pool) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := p.inits.prepare(ctx, &task, path)
+			err := g.prepare(ctx, &task, path)
 			select {
 			case completed <- initCompletion{path: path, err: err}:
 			case <-ctx.Done():
@@ -97,11 +122,11 @@ func (p *Processor) runWithInit(ctx context.Context, pool *fetch.Pool) {
 	}
 
 	for {
-		results := pool.Results()
+		in := results
 		// The active cap also covers jobs whose last waiting media expired
 		// just before their cancelled HTTP request returned.
 		if len(pending) >= limit || active >= limit {
-			results = nil
+			in = nil
 		}
 		select {
 		case <-ctx.Done():
@@ -113,29 +138,30 @@ func (p *Processor) runWithInit(ctx context.Context, pool *fetch.Pool) {
 			flush()
 			// Preserve fetched media with later live deadlines. Use the latest
 			// pending deadline so a failed batch cannot restart once per segment.
+			now := g.now()
 			var next *queue.SegmentTask
 			for _, res := range pending {
-				if p.intake.location(res.Task).InitPath() == result.path && state.canRenew(res.Task) && (next == nil || res.Task.Deadline.After(next.Deadline)) {
+				if g.initPath(res.Task) == result.path && state.canRenew(res.Task, now) && (next == nil || res.Task.Deadline.After(next.Deadline)) {
 					next = res.Task
 				}
 			}
 			if next != nil {
 				startInit(result.path, next)
 			}
-		case <-ticker.C:
+		case <-g.tick:
 			flush()
-		case res, ok := <-results:
+		case res, ok := <-in:
 			if !ok {
 				return
 			}
 			if res.Err != nil || res.Task.Format != queue.FormatFMP4 {
-				p.handle(res)
+				g.deliver(res)
 				res.Attempt.Finish()
 				continue
 			}
-			path := p.intake.location(res.Task).InitPath()
+			path := g.initPath(res.Task)
 			state := states[path]
-			if state == nil || state.canRenew(res.Task) {
+			if state == nil || state.canRenew(res.Task, g.now()) {
 				state = startInit(path, res.Task)
 			}
 			if state.done {
