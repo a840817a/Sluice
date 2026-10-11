@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestRepresentationPeriodsRetainPublishedHistory(t *testing.T) {
+func TestTimelineRetainsPublishedHistory(t *testing.T) {
 	ci := NewChannelIndex(PublishAVBarrier)
 	rep := ci.Period("10").AS("0").Rep("v", 2)
 	for _, n := range []uint64{100, 101, 103, 102} {
@@ -17,17 +17,17 @@ func TestRepresentationPeriodsRetainPublishedHistory(t *testing.T) {
 	rep.commit(SegmentState{SegNo: 104, Discontinuity: true, InitPath: "pending"})
 	ci.Period("2").AS("0").Rep("v", 0).RestorePublished(SegmentState{SegNo: 1})
 	ci.Period("1").AS("0").Rep("other", 0).RestorePublished(SegmentState{SegNo: 99})
-	got := ci.RepresentationPeriods("v")
+	got := ci.Timeline("v", nil)
 	if len(got) != 2 || got[0].PeriodID != "2" || got[1].PeriodID != "10" {
 		t.Fatalf("periods = %+v", got)
 	}
 	p := got[1]
-	if !slices.Equal(segNos(p.Segments), []uint64{102}) || !p.RangeKnown || p.First != 100 || p.Last != 103 || !slices.Equal(p.Discontinuities, []uint64{101}) || p.InitPath != "init" {
+	if !slices.Equal(segNos(p.Segments), []uint64{102}) || p.First != 100 || p.Last != 103 || !slices.Equal(p.Discontinuities, []uint64{101}) || p.InitPath != "init" {
 		t.Fatalf("published window/history/init = %+v", p)
 	}
 	rep.ExpireOlderThan(200)
-	p = ci.RepresentationPeriods("v")[1]
-	if len(p.Segments) != 0 || p.First != 100 || p.Last != 103 || !p.RangeKnown || !slices.Equal(p.Discontinuities, []uint64{101}) || p.InitPath != "pending" {
+	p = ci.Timeline("v", nil)[1]
+	if len(p.Segments) != 0 || p.First != 100 || p.Last != 103 || !slices.Equal(p.Discontinuities, []uint64{101}) || p.InitPath != "pending" {
 		t.Fatalf("expired window lost history/fallback: %+v", p)
 	}
 }
@@ -37,7 +37,7 @@ func TestRepresentationReadsAreDetached(t *testing.T) {
 	rep := ci.Period("0").AS("0").Rep("v", 2)
 	iv := []byte{1, 2}
 	rep.RestorePublished(SegmentState{SegNo: 1, IV: iv, Discontinuity: true, InitPath: "old"})
-	periods := ci.RepresentationPeriods("v")
+	periods := ci.Timeline("v", nil)
 	snap := ci.Snapshot()
 	iv[0] = 9
 	if periods[0].Segments[0].IV[0] != 1 || snap.Published("0", "0", "v")[0].IV[0] != 1 {
@@ -45,11 +45,11 @@ func TestRepresentationReadsAreDetached(t *testing.T) {
 	}
 	periods[0].Segments[0].IV[1] = 8
 	periods[0].Discontinuities[0] = 99
-	if fresh := ci.RepresentationPeriods("v")[0]; fresh.Segments[0].IV[1] != 2 || fresh.Discontinuities[0] != 1 {
+	if fresh := ci.Timeline("v", nil)[0]; fresh.Segments[0].IV[1] != 2 || fresh.Discontinuities[0] != 1 {
 		t.Fatal("reader changed live state")
 	}
 	// Replacement and eviction must not alter any field already returned.
-	before := ci.RepresentationPeriods("v")[0]
+	before := ci.Timeline("v", nil)[0]
 	rep.RestorePublished(SegmentState{SegNo: 2, Discontinuity: true, InitPath: "new"})
 	rep.RestorePublished(SegmentState{SegNo: 3, InitPath: "new"})
 	rep.ExpireOlderThan(1)
@@ -75,8 +75,8 @@ func TestRepresentationReadIsCoherentDuringPublication(t *testing.T) {
 	}()
 	defer func() { <-done }()
 	for i := 0; ; i++ {
-		p := ci.RepresentationPeriods("v")[0]
-		if len(p.Segments) != 1 || !p.RangeKnown || p.First != 1 {
+		p := ci.Timeline("v", nil)[0]
+		if len(p.Segments) != 1 || p.First != 1 {
 			t.Fatalf("invalid read: %+v", p)
 		}
 		n := p.Segments[0].SegNo
@@ -125,7 +125,7 @@ func TestInitPathPrefersPublishedAndFallsBackToCommitted(t *testing.T) {
 			if got := ci.InitPath("0", "v"); got != "pending" {
 				t.Fatalf("committed fallback = %q", got)
 			}
-			if got := ci.RepresentationPeriods("v")[0].InitPath; got != "pending" {
+			if got := ci.Timeline("v", nil)[0].InitPath; got != "pending" {
 				t.Fatalf("period fallback = %q", got)
 			}
 			published := rep
@@ -138,7 +138,7 @@ func TestInitPathPrefersPublishedAndFallsBackToCommitted(t *testing.T) {
 				if got := ci.InitPath("0", "v"); got != "published" {
 					t.Fatalf("published priority = %q", got)
 				}
-				if got := ci.RepresentationPeriods("v")[0].InitPath; got != "published" {
+				if got := ci.Timeline("v", nil)[0].InitPath; got != "published" {
 					t.Fatalf("period published priority = %q", got)
 				}
 			}
@@ -154,22 +154,22 @@ func TestReadMissingRepresentationCreatesNothing(t *testing.T) {
 	ci := NewChannelIndex(PublishImmediately)
 	ci.Period("0").AS("0").Rep("known", 0)
 	before := ci.Snapshot()
-	if len(ci.RepresentationPeriods("missing")) != 0 || ci.InitPath("missing", "v") != "" || ci.InitPath("0", "missing") != "" || ci.PublishedSegmentPath("missing", "v", 1) != "" || ci.PublishedSegmentPath("0", "missing", 1) != "" {
+	if len(ci.Timeline("missing", nil)) != 0 || ci.InitPath("missing", "v") != "" || ci.InitPath("0", "missing") != "" || ci.PublishedSegmentPath("missing", "v", 1) != "" || ci.PublishedSegmentPath("0", "missing", 1) != "" {
 		t.Fatal("missing read returned content")
 	}
 	after := ci.Snapshot()
-	if !reflect.DeepEqual(before.keys, after.keys) || !reflect.DeepEqual(before.PeriodIDs(), after.PeriodIDs()) {
+	if !reflect.DeepEqual(before.keys, after.keys) || !reflect.DeepEqual(before.PeriodIDs(nil), after.PeriodIDs(nil)) {
 		t.Fatal("read created an entry")
 	}
 }
 
-func TestRepresentationPeriodsSortSegments(t *testing.T) {
+func TestTimelineSortsSegments(t *testing.T) {
 	ci := NewChannelIndex(PublishImmediately)
 	rep := ci.Period("0").AS("0").Rep("v", 0)
 	for _, n := range []uint64{8, 3, 5} {
 		rep.RestorePublished(SegmentState{SegNo: n, Discontinuity: true})
 	}
-	p := ci.RepresentationPeriods("v")[0]
+	p := ci.Timeline("v", nil)[0]
 	if !slices.Equal(segNos(p.Segments), []uint64{3, 5, 8}) || !slices.Equal(p.Discontinuities, []uint64{3, 5, 8}) {
 		t.Fatalf("unsorted read: %+v", p)
 	}
@@ -177,7 +177,7 @@ func TestRepresentationPeriodsSortSegments(t *testing.T) {
 	// existing merge if two AdaptationSets happen to contain the same ID.
 	ci.Period("0").AS("1").Rep("v", 0).RestorePublished(SegmentState{SegNo: 7, Discontinuity: true})
 	for i := 0; i < 30; i++ {
-		p = ci.RepresentationPeriods("v")[0]
+		p = ci.Timeline("v", nil)[0]
 		if !slices.Equal(segNos(p.Segments), []uint64{3, 5, 7, 8}) || !slices.Equal(p.Discontinuities, []uint64{3, 5, 7, 8}) {
 			t.Fatalf("unsorted merged read: %+v", p)
 		}

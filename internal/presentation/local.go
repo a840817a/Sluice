@@ -90,7 +90,7 @@ func (g *Generator) Local(ch Channel, snap index.Snapshot, dir string, keys *hls
 	}
 	var files []LocalFile
 	keyNames := map[string]string{}
-	periods := ch.OrderPeriods(snap.PeriodIDs())
+	periods := snap.PeriodIDs(ch.PeriodDocOrder())
 	for _, id := range ids {
 		var parts []hlsout.PeriodSegments
 		for _, pid := range periods {

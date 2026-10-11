@@ -3,42 +3,15 @@ package presentation
 import (
 	"errors"
 	"regexp"
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/a840817a/sluice/internal/gwurl"
+	"github.com/a840817a/sluice/internal/hlsdesc"
 	"github.com/a840817a/sluice/internal/hlsout"
 	"github.com/a840817a/sluice/internal/index"
 	imdp "github.com/a840817a/sluice/internal/mpd"
 )
-
-// The playlist numbers a later period after an earlier one's lifetime range,
-// so the renderer must pass that range on rather than let it be recomputed
-// from whatever the ring still holds, and must order periods numerically. The
-// same holds for the lifetime record of origin discontinuities, which
-// EXT-X-DISCONTINUITY-SEQUENCE counts.
-func TestPeriodSegmentsCarryLifetimeRangeInOrder(t *testing.T) {
-	ci := index.NewChannelIndex(index.PublishAVBarrier)
-	for _, period := range []string{"10", "2"} {
-		rep := ci.Period(period).AS("0").Rep("v0", 2) // holds 2; 5 published
-		for n := uint64(100); n <= 104; n++ {
-			rep.RestorePublished(index.SegmentState{SegNo: n, EndPTS: 1, Timescale: 1, Discontinuity: n == 101})
-		}
-	}
-	got := testGenerator().periodSegments(Channel{ID: "c", Index: ci}, "v0")
-	if len(got) != 2 || got[0].PeriodID != "2" || got[1].PeriodID != "10" {
-		t.Fatalf("periods = %+v, want 2 then 10", got)
-	}
-	for _, p := range got {
-		if !p.RangeKnown || p.First != 100 || p.Last != 104 {
-			t.Errorf("period %s range = %d..%d (known %v), want the lifetime 100..104", p.PeriodID, p.First, p.Last, p.RangeKnown)
-		}
-		if !slices.Equal(p.Discontinuities, []uint64{101}) {
-			t.Errorf("period %s discontinuities = %v, want the evicted 101", p.PeriodID, p.Discontinuities)
-		}
-	}
-}
 
 // A segment the index committed but never published — a video segment whose
 // audio never arrived before an origin reset, say — is not part of what the
@@ -63,7 +36,7 @@ func TestUnpublishedSegmentAtAPeriodEdgeKeepsBothPeriods(t *testing.T) {
 	commit("0", 1, 5, 4) // segment 5 committed, never published
 	commit("1", 1, 3, 3)
 
-	periods := testGenerator().periodSegments(Channel{ID: "c", Index: ci}, "v0")
+	periods := ci.Timeline("v0", nil)
 	want := []string{"0/v0/1", "0/v0/2", "0/v0/3", "0/v0/4", "1/v0/1", "1/v0/2", "1/v0/3"}
 	for _, vod := range []bool{true, false} {
 		out := string(hlsout.Media(periods, hlsout.MediaOptions{GatewayBaseURL: "http://gw", ChannelID: "c", RepID: "v0", VOD: vod, TargetDuration: 1}))
@@ -77,22 +50,38 @@ func TestUnpublishedSegmentAtAPeriodEdgeKeepsBothPeriods(t *testing.T) {
 	}
 }
 
-func TestHLSReadPreservesDocumentOrderAndInitURLs(t *testing.T) {
+// A DASH source served as HLS lists its periods in the order its MPD does,
+// each opened by its own init: the published one, not one still pending.
+func TestHLSMediaFollowsTheDocumentOrderAndInitURLs(t *testing.T) {
 	ci := index.NewChannelIndex(index.PublishAVBarrier)
 	for _, id := range []string{"2", "10"} {
 		ci.Period(id).AS("1").SetMediaType(index.MediaAudio)
 		ci.Commit(index.RepRef{PeriodID: id, ASID: "0", RepID: "v", MediaType: index.MediaVideo}, 0, index.SegmentState{SegNo: 2, InitPath: "pending"})
-		ci.FindRep(id, "0", "v").RestorePublished(index.SegmentState{SegNo: 1, InitPath: "published", EndPTS: 1, Timescale: 1})
+		ci.FindRep(id, "0", "v").RestorePublished(index.SegmentState{SegNo: 1, InitPath: "published", EndPTS: 1, Timescale: 1, Path: "/x.m4s"})
 	}
-	ch := Channel{ID: "c", Index: ci, ParsedMPD: &imdp.ParsedMPD{Periods: []*imdp.ParsedPeriod{{ID: "10"}, {ID: "2"}}}}
-	got := testGenerator().periodSegments(ch, "v")
-	if len(got) != 2 || got[0].PeriodID != "10" || got[1].PeriodID != "2" {
-		t.Fatalf("DASH document order: %+v", got)
+	ch := Channel{
+		ID: "c", Index: ci, VOD: true,
+		ParsedMPD: &imdp.ParsedMPD{Periods: []*imdp.ParsedPeriod{{ID: "10"}, {ID: "2"}}},
+		Tracks:    Tracks{ServesHLS: true, Variants: []hlsdesc.Variant{{RepID: "v", Bandwidth: 1}}},
 	}
-	for _, p := range got {
-		if p.InitURI != gwurl.InitURL("http://gw.test", "c", p.PeriodID, "v") || len(p.Segments) != 1 || p.Segments[0].SegNo != 1 || !p.RangeKnown || p.First != 1 || p.Last != 1 {
-			t.Fatalf("HLS read: %+v", p)
+	out, err := testGenerator().Media(ch, "v")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "#EXT-X-MAP:") || strings.Contains(line, "/segments/") {
+			got = append(got, line)
 		}
+	}
+	want := []string{
+		`#EXT-X-MAP:URI="` + gwurl.InitURL("http://gw.test", "c", "10", "v") + `"`,
+		gwurl.SegmentURL("http://gw.test", "c", "10", "v", 1, ".m4s"),
+		`#EXT-X-MAP:URI="` + gwurl.InitURL("http://gw.test", "c", "2", "v") + `"`,
+		gwurl.SegmentURL("http://gw.test", "c", "2", "v", 1, ".m4s"),
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("playlist lists\n%s\nwant\n%s\n\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"), out)
 	}
 }
 

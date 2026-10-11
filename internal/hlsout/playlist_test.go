@@ -1,6 +1,7 @@
 package hlsout
 
 import (
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -46,10 +47,40 @@ func lineAfter(t *testing.T, out, prefix string) string {
 	return ""
 }
 
+// testPeriod is one period of a test Timeline: segs are published in it, and
+// those numbered below present have since left the window.
+type testPeriod struct {
+	id      string
+	segs    []index.SegmentState
+	present uint64
+}
+
+// timeline publishes periods, in this order, through an index as ingest
+// does, and reads representation v0's Timeline back.
+func timeline(periods ...testPeriod) []index.TimelinePeriod {
+	ci := index.NewChannelIndex(index.PublishImmediately)
+	var order []string
+	for _, p := range periods {
+		rep := ci.Period(p.id).AS("0").Rep("v0", 0)
+		cutoff := math.Inf(1)
+		for _, s := range p.segs {
+			rep.RestorePublished(s)
+			if s.SegNo >= p.present {
+				cutoff = math.Min(cutoff, s.EndSec())
+			}
+		}
+		if p.present > 0 {
+			rep.ExpireOlderThan(cutoff)
+		}
+		order = append(order, p.id)
+	}
+	return ci.Timeline("v0", order)
+}
+
 // inPeriod puts segs in the single period "p0", which is what every
 // single-period test here means.
-func inPeriod(segs []index.SegmentState) []PeriodSegments {
-	return []PeriodSegments{{PeriodID: "p0", Segments: segs}}
+func inPeriod(segs []index.SegmentState) []index.TimelinePeriod {
+	return timeline(testPeriod{id: "p0", segs: segs})
 }
 
 func TestMediaLiveBasics(t *testing.T) {
@@ -181,9 +212,8 @@ func TestMediaWindowKeepsNewestSegments(t *testing.T) {
 func TestMediaFMP4EmitsMapAndVersion6(t *testing.T) {
 	s := seg(1, 0, 4)
 	s.Path = "/data/ch1/periods/p0/video_0/v0/1.m4s"
-	periods := inPeriod([]index.SegmentState{s})
-	periods[0].InitURI = "https://gw.example.com/v1/channels/ch1/init/p0/v0.mp4"
-	out := string(Media(periods, mediaOpts()))
+	s.InitPath = "/data/ch1/periods/p0/video_0/v0/init.mp4"
+	out := string(Media(inPeriod([]index.SegmentState{s}), mediaOpts()))
 
 	if !strings.Contains(out, "#EXT-X-VERSION:6") {
 		t.Errorf("fMP4 playlist must declare version 6:\n%s", out)

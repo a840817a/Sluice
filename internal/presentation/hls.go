@@ -36,7 +36,7 @@ func (g *Generator) Media(ch Channel, repID string) ([]byte, error) {
 		return nil, notServed("404 page not found")
 	}
 
-	periods := g.periodSegments(ch, repID)
+	periods := ch.Index.Timeline(repID, ch.PeriodDocOrder())
 	var segs []index.SegmentState
 	for _, p := range periods {
 		segs = append(segs, p.Segments...)
@@ -69,34 +69,6 @@ func windowSegments(depthSec float64, targetDur int, keepAll bool) int {
 		n = 3
 	}
 	return n
-}
-
-// periodSegments collects repID's Published segments period by period, in
-// timeline order (Channel.OrderPeriods). Merging them into one list would let
-// two periods' identical segment numbers collide (ADR-0005).
-func (g *Generator) periodSegments(ch Channel, repID string) []hlsout.PeriodSegments {
-	reads := ch.Index.RepresentationPeriods(repID)
-	byPeriod := make(map[string]index.PeriodRead, len(reads))
-	ids := make([]string, 0, len(reads))
-	for _, p := range reads {
-		byPeriod[p.PeriodID] = p
-		ids = append(ids, p.PeriodID)
-	}
-	out := make([]hlsout.PeriodSegments, 0, len(reads))
-	for _, id := range ch.OrderPeriods(ids) {
-		r := byPeriod[id]
-		p := hlsout.PeriodSegments{
-			PeriodID: id, Segments: r.Segments,
-			First: r.First, Last: r.Last, RangeKnown: r.RangeKnown,
-			Discontinuities: r.Discontinuities,
-		}
-		// A non-empty init path identifies fMP4; TS/WebVTT are self-contained.
-		if r.InitPath != "" {
-			p.InitURI = gwurl.InitURL(g.baseURL, ch.ID, id, repID)
-		}
-		out = append(out, p)
-	}
-	return out
 }
 
 // keyProxyURL returns the base URL of a channel's AES-128 key proxy.

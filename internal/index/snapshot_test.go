@@ -80,7 +80,7 @@ func TestSnapshotMissingRepIsEmptyNotPanic(t *testing.T) {
 	if snap.HasRep("nope", "0", "v0") {
 		t.Error("HasRep reported true for an unknown rep")
 	}
-	if ids := snap.PeriodIDs(); len(ids) != 0 {
+	if ids := snap.PeriodIDs(nil); len(ids) != 0 {
 		t.Errorf("PeriodIDs on an empty index = %v, want none", ids)
 	}
 }
@@ -92,7 +92,7 @@ func TestSnapshotPeriodIDsSorted(t *testing.T) {
 	for _, p := range []string{"2", "0", "1"} {
 		commitPublished(t, ci, p, "0", "v0", 1)
 	}
-	got := ci.Snapshot().PeriodIDs()
+	got := ci.Snapshot().PeriodIDs(nil)
 	want := []string{"0", "1", "2"}
 	if len(got) != len(want) {
 		t.Fatalf("PeriodIDs = %v, want %v", got, want)

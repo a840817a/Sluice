@@ -158,7 +158,7 @@ func buildStatus(rt *Runtime) ChannelStatus {
 	for pid := range stats {
 		ids = append(ids, pid)
 	}
-	for _, pid := range sv.OrderPeriods(ids) {
+	for _, pid := range index.OrderPeriodIDs(ids, sv.PeriodDocOrder()) {
 		s.Periods = append(s.Periods, *stats[pid])
 	}
 

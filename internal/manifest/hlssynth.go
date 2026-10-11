@@ -69,7 +69,7 @@ func SynthesizeHLSMPD(variants []hlsdesc.Variant, snap index.Snapshot, o HLSSynt
 	// the audio AdaptationSet the audio part.
 	demuxed := len(o.Audio) > 0
 
-	for _, periodID := range snap.PeriodIDs() {
+	for _, periodID := range snap.PeriodIDs(nil) {
 		var sets []*imdp.ParsedAdaptationSet
 
 		vas := &imdp.ParsedAdaptationSet{

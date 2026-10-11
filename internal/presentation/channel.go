@@ -55,15 +55,16 @@ type Channel struct {
 	StaticIngestStart time.Time
 }
 
-// OrderPeriods returns period IDs in timeline order: a DASH source's periods in
-// the order its MPD lists them, an HLS source's periods numerically
-// (index.OrderPeriodIDs).
-func (c Channel) OrderPeriods(ids []string) []string {
-	var docOrder []string
-	if c.ParsedMPD != nil {
-		for _, p := range c.ParsedMPD.Periods {
-			docOrder = append(docOrder, p.ID)
-		}
+// PeriodDocOrder is the document order the index orders the channel's
+// periods by (index.OrderPeriodIDs): the order a DASH source's MPD lists
+// them in, or nil for an HLS source, whose periods are numbered.
+func (c Channel) PeriodDocOrder() []string {
+	if c.ParsedMPD == nil {
+		return nil
 	}
-	return index.OrderPeriodIDs(ids, docOrder)
+	docOrder := make([]string, 0, len(c.ParsedMPD.Periods))
+	for _, p := range c.ParsedMPD.Periods {
+		docOrder = append(docOrder, p.ID)
+	}
+	return docOrder
 }

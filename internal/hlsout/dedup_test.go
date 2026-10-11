@@ -59,16 +59,20 @@ func TestContiguousRunToleratesDuplicates(t *testing.T) {
 	})
 }
 
-// The rendered playlist must carry each segment exactly once.
+// The rendered playlist must carry each segment exactly once, even when a
+// period lists the representation in two AdaptationSets that both hold it:
+// the Timeline merges them, as its URLs omit the AdaptationSet.
 func TestMediaPlaylistHasNoDuplicateSegments(t *testing.T) {
-	segs := []index.SegmentState{
-		{SegNo: 5, StartPTS: 5 * 90000, EndPTS: 6 * 90000, Timescale: 90000, Status: index.StatusPublished},
-		{SegNo: 6, StartPTS: 6 * 90000, EndPTS: 7 * 90000, Timescale: 90000, Status: index.StatusPublished},
-		{SegNo: 6, StartPTS: 6 * 90000, EndPTS: 7 * 90000, Timescale: 90000, Status: index.StatusPublished},
-		{SegNo: 7, StartPTS: 7 * 90000, EndPTS: 8 * 90000, Timescale: 90000, Status: index.StatusPublished},
+	ci := index.NewChannelIndex(index.PublishImmediately)
+	for as, nos := range map[string][]uint64{"0": {5, 6, 7}, "1": {6}} {
+		for _, n := range nos {
+			ci.Period("p0").AS(as).Rep("v0", 0).RestorePublished(index.SegmentState{
+				SegNo: n, StartPTS: int64(n) * 90000, EndPTS: int64(n+1) * 90000, Timescale: 90000, Path: "/x.m4s",
+			})
+		}
 	}
 
-	out := string(Media(inPeriod(segs), MediaOptions{
+	out := string(Media(ci.Timeline("v0", nil), MediaOptions{
 		GatewayBaseURL: "http://gw", ChannelID: "ch", RepID: "v0", TargetDuration: 1,
 	}))
 

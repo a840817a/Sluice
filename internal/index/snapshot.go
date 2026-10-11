@@ -102,11 +102,8 @@ func (s Snapshot) ForEachRep(fn func(ref RepRef, published []SegmentState)) {
 }
 
 // PeriodIDs returns the periods that have at least one representation, in
-// OrderPeriodIDs order without a document: period numbers numerically. That is the
-// timeline order of an HLS source only; a DASH source's periods are ordered by
-// its MPD (channel.Serving.OrderPeriods).
-func (s Snapshot) PeriodIDs() []string {
-	out := make([]string, len(s.periodIDs))
-	copy(out, s.periodIDs)
-	return out
+// timeline order: OrderPeriodIDs with docOrder, the source's document order,
+// or nil for a source without one.
+func (s Snapshot) PeriodIDs(docOrder []string) []string {
+	return OrderPeriodIDs(s.periodIDs, docOrder)
 }

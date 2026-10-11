@@ -37,7 +37,7 @@ func vodOriginMPD(final *imdp.ParsedMPD, snap index.Snapshot, dataDir, channelID
 		docOrder = append(docOrder, p.ID)
 	}
 	var warnings []string
-	for _, id := range snap.PeriodIDs() {
+	for _, id := range snap.PeriodIDs(docOrder) {
 		if _, listed := byID[id]; listed {
 			continue
 		}

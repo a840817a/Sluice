@@ -2,19 +2,6 @@ package index
 
 import "slices"
 
-// PeriodRead is the published content of one representation in one period.
-// Segments and Discontinuities are sorted by segment number and owned by this
-// read. First/Last retain the lifetime published range after eviction. InitPath
-// prefers published content, with a committed init as a fallback.
-type PeriodRead struct {
-	PeriodID        string
-	Segments        []SegmentState
-	First, Last     uint64
-	RangeKnown      bool
-	Discontinuities []uint64
-	InitPath        string
-}
-
 type representationRead struct {
 	published                    []SegmentState
 	first, last                  uint64
@@ -62,53 +49,6 @@ func compareSegments(a, b SegmentState) int {
 		return 1
 	}
 	return 0
-}
-
-// RepresentationPeriods reads repID across periods, without creating missing
-// entries. It includes periods with an empty published window so their lifetime
-// range and discontinuities can still number a later period's playlist. Periods
-// use OrderPeriodIDs without a document; DASH callers apply their document order.
-// Each representation is copied once under its own lock.
-func (ci *ChannelIndex) RepresentationPeriods(repID string) []PeriodRead {
-	byPeriod := make(map[string]*PeriodRead)
-	publishedInits := make(map[string]string)
-	var ids []string
-	ci.ForEachRep(func(ref RepRef, rep *RepresentationState) {
-		if ref.RepID != repID {
-			return
-		}
-		r := rep.read()
-		p := byPeriod[ref.PeriodID]
-		if p == nil {
-			p = &PeriodRead{PeriodID: ref.PeriodID}
-			byPeriod[ref.PeriodID] = p
-			ids = append(ids, ref.PeriodID)
-		}
-		p.Segments = append(p.Segments, r.published...)
-		if r.seen {
-			p.First, p.Last, p.RangeKnown = r.first, r.last, true
-		}
-		p.Discontinuities = append(p.Discontinuities, r.discontinuities...)
-		// Preserve published priority even when more than one AdaptationSet
-		// contains the same representation ID, as the URL omits the AS ID.
-		if publishedInits[ref.PeriodID] == "" {
-			publishedInits[ref.PeriodID] = r.publishedInit
-		}
-		if r.committedInit != "" {
-			p.InitPath = r.committedInit
-		}
-	})
-	out := make([]PeriodRead, 0, len(ids))
-	for _, id := range OrderPeriodIDs(ids, nil) {
-		p := *byPeriod[id]
-		if publishedInits[id] != "" {
-			p.InitPath = publishedInits[id]
-		}
-		slices.SortFunc(p.Segments, compareSegments)
-		slices.Sort(p.Discontinuities)
-		out = append(out, p)
-	}
-	return out
 }
 
 // TimelinePeriod is one period of a representation's Timeline: what it has

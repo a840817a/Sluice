@@ -12,7 +12,7 @@ func TestSnapshotOrdersNumericPeriodsNumerically(t *testing.T) {
 	for _, id := range []string{"10", "2", "0", "1"} {
 		ci.Period(id).AS("0").Rep("v0", 8).RestorePublished(SegmentState{SegNo: 1, EndPTS: 1, Timescale: 1})
 	}
-	if got, want := ci.Snapshot().PeriodIDs(), []string{"0", "1", "2", "10"}; !slices.Equal(got, want) {
+	if got, want := ci.Snapshot().PeriodIDs(nil), []string{"0", "1", "2", "10"}; !slices.Equal(got, want) {
 		t.Errorf("PeriodIDs = %v, want %v", got, want)
 	}
 }
