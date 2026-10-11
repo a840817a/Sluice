@@ -40,6 +40,9 @@ _Avoid_: Rep (outside code), variant, rendition, track
 A segment's position within its representation, taken from the HLS media sequence or the DASH `$Number$`.
 _Avoid_: Sequence, index
 
+**Timeline**:
+One representation's periods in time order, each with the lowest and highest segment numbers it has ever published there and the origin discontinuities among them, kept after those segments leave the live window.
+
 **Live index**:
 The segment index a channel serves from while it is ingesting.
 
