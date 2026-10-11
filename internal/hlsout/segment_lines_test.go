@@ -71,12 +71,20 @@ func TestSegmentLines(t *testing.T) {
 		})
 	}
 
-	t.Run("an address that cannot be written fails the playlist", func(t *testing.T) {
-		bad := lines
-		bad.uri = func(playlistEntry) (string, error) { return "", errors.New("outside") }
-		var b strings.Builder
-		if err := bad.write(&b, []playlistEntry{{seg: index.SegmentState{SegNo: 1}}}); err == nil {
-			t.Error("write succeeded")
+	t.Run("a segment, init or key that cannot be addressed fails the playlist", func(t *testing.T) {
+		fail := errors.New("outside")
+		for name, bad := range map[string]segmentLines{
+			"segment": {extinf: lines.extinf, initURI: lines.initURI, keyLine: lines.keyLine,
+				uri: func(playlistEntry) (string, error) { return "", fail }},
+			"init": {extinf: lines.extinf, uri: lines.uri, keyLine: lines.keyLine,
+				initURI: func(playlistEntry) (string, error) { return "", fail }},
+			"key": {extinf: lines.extinf, uri: lines.uri, initURI: lines.initURI,
+				keyLine: func(index.SegmentState) (string, error) { return "", fail }},
+		} {
+			var b strings.Builder
+			if err := bad.write(&b, []playlistEntry{{seg: index.SegmentState{SegNo: 1}}}); !errors.Is(err, fail) {
+				t.Errorf("%s: write returned %v, want the addressing error", name, err)
+			}
 		}
 	})
 }
