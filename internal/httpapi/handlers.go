@@ -45,14 +45,6 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 	sv := rt.Serving()
 
 	out, err := s.presentations.DASHNow(sv.Channel)
-	if errors.Is(err, presentation.ErrNotReady) && !sv.IsHLSSource && sv.IsVOD() {
-		// A VOD record saved before its origin MPD could be restored has no
-		// parsed MPD to render from, only the manifest the transition saved.
-		if path := s.manager.SavedVODManifestPath(channelID); path != "" {
-			serveFile(w, r, path, "application/dash+xml")
-			return
-		}
-	}
 	if err != nil {
 		writeRenderError(w, err, "manifest generation failed")
 		return

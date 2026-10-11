@@ -91,6 +91,7 @@ func (rt *Runtime) servingAs(mode ChannelMode, ci *index.ChannelIndex) Serving {
 			Widevine:          cfg.WidevineEnabled(),
 			FinalDuration:     rt.FinalDuration(),
 			StaticIngestStart: rt.StaticIngestStartTime(),
+			SavedDASH:         rt.savedDASHManifest(),
 		},
 	}
 }

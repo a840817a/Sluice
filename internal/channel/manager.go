@@ -78,6 +78,7 @@ type Runtime struct {
 	// plain fields.
 	vodIndex          atomic.Pointer[index.ChannelIndex] // non-nil after a successful VOD transition
 	vodMPD            atomic.Pointer[imdp.ParsedMPD]     // DASH: what ParsedMPD returns once VOD (vodOriginMPD)
+	savedDASH         atomic.Pointer[[]byte]             // DASH: saved manifest of a VOD restored without its origin MPD
 	finalDuration     atomic.Int64                       // time.Duration: mediaPresentationDuration from finalMPD
 	staticIngestStart atomic.Pointer[time.Time]          // set when a static origin is first detected
 }

@@ -90,6 +90,9 @@ func TestDASHArtifactsSurviveRestartWithOriginOffline(t *testing.T) {
 				if err != nil || !bytes.Equal(saved, w.Body.Bytes()) {
 					t.Fatal("missing origin MPD did not fall back to the saved served manifest")
 				}
+				if cc := w.Header().Get("Cache-Control"); cc != "no-cache" {
+					t.Errorf("saved manifest Cache-Control = %q, want no-cache like any manifest", cc)
+				}
 			}
 			init := executeRequest(h2.srv.handleInit, http.MethodGet,
 				"/v1/channels/"+id+"/init/0/v0.mp4", map[string]string{"channelID": id, "periodID": "0", "repID": "v0"})

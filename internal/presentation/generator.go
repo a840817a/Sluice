@@ -2,6 +2,7 @@ package presentation
 
 import (
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/a840817a/sluice/internal/config"
@@ -88,6 +89,9 @@ func (g *Generator) DASH(ch Channel, snap index.Snapshot) ([]byte, error) {
 		p = g.synthesizeHLSMPD(ch, snap, windowDepth)
 	}
 	if p == nil {
+		if ch.VOD && !ch.IsHLSSource && len(ch.SavedDASH) > 0 {
+			return slices.Clone(ch.SavedDASH), nil
+		}
 		return nil, notReady("manifest not yet available")
 	}
 

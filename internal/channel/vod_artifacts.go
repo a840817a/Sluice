@@ -190,20 +190,9 @@ func generateServedVODManifest(a vodArtifacts) ([]byte, error) {
 	return a.render.DASH(a.serving.Channel, a.snapshot)
 }
 
-// SavedVODManifestPath returns the persisted served manifest when it exists.
-// HTTP uses this only as a fallback when an old VOD record has no parseable
-// origin MPD; lifecycle code owns both the name and existence check.
-func (m *Manager) SavedVODManifestPath(channelID string) string {
-	path := m.vod.path(channelID, vodManifestFile)
-	if _, err := os.Stat(path); err != nil {
-		return ""
-	}
-	return path
-}
-
 // restore reads back what a restart in VOD needs that the index rebuild does
 // not: a DASH channel's last origin MPD, with every stored period put back
-// (vodOriginMPD).
+// (vodOriginMPD), or, without one, the manifest the transition saved.
 func (v vodAsset) restore(rt *Runtime) {
 	if rt.watcher == nil {
 		return
@@ -211,11 +200,13 @@ func (v vodAsset) restore(rt *Runtime) {
 	raw, err := os.ReadFile(v.path(rt.ID, vodUpstreamFile))
 	if err != nil {
 		slog.Warn("VOD restore: upstream MPD unavailable; using saved manifest fallback", "channel", rt.ID, "err", err)
+		v.restoreSavedManifest(rt)
 		return
 	}
 	p, err := imdp.Parse(raw)
 	if err != nil {
 		slog.Warn("VOD restore: upstream MPD parse failed", "channel", rt.ID, "err", err)
+		v.restoreSavedManifest(rt)
 		return
 	}
 	rt.watcher.SetParsedMPD(p, raw)
@@ -226,4 +217,23 @@ func (v vodAsset) restore(rt *Runtime) {
 		}
 		rt.vodMPD.Store(merged)
 	}
+}
+
+// restoreSavedManifest keeps the served manifest the transition saved, for a
+// VOD whose origin MPD is gone: the presentation serves it as it is.
+func (v vodAsset) restoreSavedManifest(rt *Runtime) {
+	data, err := os.ReadFile(v.path(rt.ID, vodManifestFile))
+	if err != nil {
+		slog.Warn("VOD restore: saved manifest unavailable", "channel", rt.ID, "err", err)
+		return
+	}
+	rt.savedDASH.Store(&data)
+}
+
+// savedDASHManifest is the manifest restoreSavedManifest kept, or nil.
+func (rt *Runtime) savedDASHManifest() []byte {
+	if p := rt.savedDASH.Load(); p != nil {
+		return *p
+	}
+	return nil
 }

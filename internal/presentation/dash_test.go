@@ -200,3 +200,35 @@ func TestDASHSignalsOnlyEnabledDRM(t *testing.T) {
 		t.Error("disabled Widevine is still signalled")
 	}
 }
+
+// A DASH VOD restored without its origin MPD serves the manifest its
+// transition saved, as it is; nothing else does.
+func TestDASHServesTheSavedManifestOnlyForAVODWithoutItsMPD(t *testing.T) {
+	saved := []byte("<MPD saved/>")
+	ci := index.NewChannelIndex(index.PublishAVBarrier)
+	base := Channel{ID: "c", Index: ci, Tracks: Tracks{ServesDASH: true}, SavedDASH: saved}
+	for _, tc := range []struct {
+		name string
+		edit func(*Channel)
+		want bool
+	}{
+		{"VOD without its MPD", func(c *Channel) { c.VOD = true }, true},
+		{"live without its MPD", func(c *Channel) {}, false},
+		{"VOD with nothing saved", func(c *Channel) { c.VOD, c.SavedDASH = true, nil }, false},
+	} {
+		ch := base
+		tc.edit(&ch)
+		out, err := testGenerator().DASHNow(ch)
+		switch {
+		case tc.want && (err != nil || string(out) != string(saved)):
+			t.Errorf("%s: %q, %v; want the saved manifest", tc.name, out, err)
+		case !tc.want && !errors.Is(err, ErrNotReady):
+			t.Errorf("%s: %q, %v; want ErrNotReady", tc.name, out, err)
+		}
+	}
+	out, _ := testGenerator().DASHNow(Channel{ID: "c", Index: ci, VOD: true, Tracks: Tracks{ServesDASH: true}, SavedDASH: saved})
+	out[0] = 'x'
+	if saved[0] != '<' {
+		t.Error("the returned manifest aliases the saved one")
+	}
+}

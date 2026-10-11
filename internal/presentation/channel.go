@@ -53,6 +53,10 @@ type Channel struct {
 	// StaticIngestStart is when a static origin was first detected, or the
 	// zero time if that has not happened.
 	StaticIngestStart time.Time
+	// SavedDASH is the served manifest a VOD transition saved, for a DASH VOD
+	// restored without the origin MPD it was rendered from (as a VOD written
+	// by an older gateway can be). It is served as it is.
+	SavedDASH []byte
 }
 
 // PeriodDocOrder is the document order the index orders the channel's
