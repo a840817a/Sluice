@@ -2,6 +2,7 @@ package dashingest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -28,11 +29,10 @@ type Watcher struct {
 	broker    *queue.Broker
 	channelID string
 
-	// headers are the channel's FetchHeaders, applied to every origin request
-	// this watcher makes. The provider is shared with the channel's fetcher and
-	// swapped atomically by the admin API, so rotating origin credentials does
-	// not require restarting the channel.
-	headers fetch.Headers
+	// origin makes every request this watcher sends to the origin, with the
+	// channel's headers (rotated live by the admin API) and the gateway's auth
+	// header.
+	origin *fetch.Origin
 
 	// prog records ingest progress for the admin UI. Nil is valid and means
 	// "record nothing" — every Counters method tolerates a nil receiver.
@@ -66,7 +66,7 @@ func (w *Watcher) SetProgress(p *progress.Counters) { w.prog = p }
 // headers carries the channel's FetchHeaders. They are needed here and not only
 // in the segment fetcher: an origin that requires an auth header for segments
 // almost always requires it for the manifest too.
-func NewWatcher(cfg config.Config, channelID string, headers fetch.Headers, ci *index.ChannelIndex, broker *queue.Broker) *Watcher {
+func NewWatcher(cfg config.Config, channelID string, origin *fetch.Origin, ci *index.ChannelIndex, broker *queue.Broker) *Watcher {
 	lk, _ := snapshotTrackedSegments(channelID, ci)
 
 	return &Watcher{
@@ -74,21 +74,11 @@ func NewWatcher(cfg config.Config, channelID string, headers fetch.Headers, ci *
 		ci:           ci,
 		broker:       broker,
 		channelID:    channelID,
-		headers:      headers,
+		origin:       origin,
 		lastKnown:    lk,
 		generations:  make(map[string]int),
 		savedPeriods: make(map[string]string),
 		client:       &http.Client{Timeout: 10 * time.Second},
-	}
-}
-
-// applyOriginHeaders sets the channel's FetchHeaders followed by the
-// gateway-wide auth header, so a gateway-level credential wins over a
-// same-named per-channel one. This matches hlsingest.Watcher.fetch.
-func (w *Watcher) applyOriginHeaders(req *http.Request) {
-	fetch.ApplyHeaders(req, w.headers)
-	if w.cfg.Upstream.AuthHeader != "" {
-		req.Header.Set(w.cfg.Upstream.AuthHeader, w.cfg.Upstream.AuthValue)
 	}
 }
 
@@ -204,20 +194,10 @@ func (w *Watcher) SetParsedMPD(p *imdp.ParsedMPD, raw []byte) {
 }
 
 func (w *Watcher) fetchMPD(ctx context.Context) (*imdp.ParsedMPD, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, w.cfg.Upstream.MPDURL, nil)
-	if err != nil {
-		return nil, err
+	data, err := w.origin.Get(ctx, w.client, w.cfg.Upstream.MPDURL, fetch.MaxManifestBytes)
+	if se := (*fetch.StatusError)(nil); errors.As(err, &se) {
+		return nil, fmt.Errorf("upstream MPD status %d", se.Code)
 	}
-	w.applyOriginHeaders(req)
-	resp, err := w.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("upstream MPD status %d", resp.StatusCode)
-	}
-	data, err := fetch.ReadAtMost(resp.Body, fetch.MaxManifestBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -612,24 +592,13 @@ func snapshotTrackedSegments(channelID string, ci *index.ChannelIndex) (map[stri
 
 // fetchRange fetches a byte range from url using the watcher's HTTP client.
 func (w *Watcher) fetchRange(ctx context.Context, url string, start, end uint64) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	w.applyOriginHeaders(req)
-	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
-
-	resp, err := w.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d fetching range from %s", resp.StatusCode, url)
-	}
 	// The requested range bounds the read: an origin that ignores Range and
 	// replies with the whole file must not be buffered whole.
-	return fetch.ReadAtMost(resp.Body, int64(end-start)+1)
+	data, err := w.origin.GetRange(ctx, w.client, url, start, end, 0)
+	if se := (*fetch.StatusError)(nil); errors.As(err, &se) {
+		return nil, fmt.Errorf("HTTP %d fetching range from %s", se.Code, url)
+	}
+	return data, err
 }
 
 // mpdDirURL returns the directory portion of an MPD URL so that relative

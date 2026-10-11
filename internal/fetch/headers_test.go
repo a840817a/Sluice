@@ -26,7 +26,7 @@ func TestFetcherSendsRotatedHeaders(t *testing.T) {
 	defer srv.Close()
 
 	h := NewAtomicHeaders(map[string]string{"X-Token": "old"})
-	f := NewFetcher(nil, h, 0, 0)
+	f := NewFetcher(nil, NewOrigin(h, "", ""), 0, 0)
 
 	if res := f.Fetch(t.Context(), &queue.SegmentTask{URL: srv.URL}, false); res.Err != nil {
 		t.Fatalf("first fetch: %v", res.Err)

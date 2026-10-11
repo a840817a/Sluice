@@ -167,7 +167,7 @@ func TestCacheSendsConfiguredHeaders(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewCache(nil, fetch.NewAtomicHeaders(map[string]string{"X-Token": "secret"}), "")
+	c := NewCache(nil, fetch.NewOrigin(fetch.NewAtomicHeaders(map[string]string{"X-Token": "secret"}), "", ""), "")
 	if _, err := c.Get(context.Background(), srv.URL+"/k.bin"); err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestCacheUsesRotatedHeaders(t *testing.T) {
 	defer srv.Close()
 
 	h := fetch.NewAtomicHeaders(map[string]string{"X-Token": "old"})
-	c := NewCache(nil, h, "")
+	c := NewCache(nil, fetch.NewOrigin(h, "", ""), "")
 	if _, err := c.Get(context.Background(), srv.URL+"/k1.bin"); err != nil {
 		t.Fatalf("Get: %v", err)
 	}

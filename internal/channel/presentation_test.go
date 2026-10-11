@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/a840817a/sluice/internal/fetch"
 	"github.com/a840817a/sluice/internal/hlsdesc"
 	"github.com/a840817a/sluice/internal/hlsingest"
 	"github.com/a840817a/sluice/internal/hlskey"
@@ -24,7 +23,7 @@ func TestTracksBeforeFirstMPD(t *testing.T) {
 
 // The key proxy serves only a passthrough HLS channel's own keys.
 func TestResolveKeyRefusesWhatItMustNot(t *testing.T) {
-	keys := hlskey.NewCache(nil, fetch.NewAtomicHeaders(nil), "")
+	keys := hlskey.NewCache(nil, nil, "")
 	for _, tc := range []struct {
 		name string
 		rt   *Runtime

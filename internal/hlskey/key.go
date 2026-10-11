@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -52,12 +51,12 @@ func KeyID(uri string) string {
 // simultaneous requests at the key server.
 type Cache struct {
 	client *http.Client
-	// headers is shared with the channel's fetcher and watcher, so rotating the
-	// channel's origin credentials reaches key requests too. Note this only
+	// origin shares its headers with the channel's fetcher and watcher, so
+	// rotating the channel's origin credentials reaches key requests too. Note this only
 	// affects key URIs not yet fetched: a key already in entries is never
 	// re-requested (see the caching note above), which is the intended
 	// behaviour — the key itself does not expire, only the credential does.
-	headers fetch.Headers
+	origin *fetch.Origin
 	// storePath, when set, persists fetched keys to disk so a passthrough
 	// channel can keep serving them after a restart even if the key server
 	// has gone away. Empty means memory-only.
@@ -82,20 +81,20 @@ type entry struct {
 }
 
 // NewCache creates a Cache. A nil client gets a default with a short timeout;
-// headers are applied to every key request so token-gated key servers work.
+// every key request goes through origin, so token-gated key servers work.
 //
 // storePath, when non-empty, is a JSON file the cache persists keys to and
 // reloads on construction. Pass it only for passthrough channels: it trades
 // at-rest protection (the key sits on disk beside the ciphertext) for the
 // ability to serve keys after the key server is gone. Decrypt-mode channels
 // do not need it and should pass "".
-func NewCache(client *http.Client, headers fetch.Headers, storePath string) *Cache {
+func NewCache(client *http.Client, origin *fetch.Origin, storePath string) *Cache {
 	if client == nil {
 		client = &http.Client{Timeout: 15 * time.Second}
 	}
 	c := &Cache{
 		client:    client,
-		headers:   headers,
+		origin:    origin,
 		storePath: storePath,
 		entries:   make(map[string]*entry),
 		stored:    make(map[string]string),
@@ -138,24 +137,15 @@ func (c *Cache) Get(ctx context.Context, uri string) ([]byte, error) {
 }
 
 func (c *Cache) fetch(ctx context.Context, uri string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, uri, nil)
-	if err != nil {
-		return nil, err
-	}
-	fetch.ApplyHeaders(req, c.headers)
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("key server status %d for %s", resp.StatusCode, uri)
-	}
-
 	// Bound the read: a content key is 16 bytes, and an origin misconfigured to
 	// return a large body should not be streamed into memory.
-	key, err := io.ReadAll(io.LimitReader(resp.Body, KeyLength+1))
+	key, err := c.origin.Get(ctx, c.client, uri, KeyLength+1)
+	if se := (*fetch.StatusError)(nil); errors.As(err, &se) {
+		return nil, fmt.Errorf("key server status %d for %s", se.Code, uri)
+	}
+	if errors.Is(err, fetch.ErrTooLarge) {
+		return nil, fmt.Errorf("key from %s is %d bytes, want %d", uri, KeyLength+1, KeyLength)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -13,17 +13,6 @@ import (
 	"github.com/a840817a/sluice/internal/queue"
 )
 
-// httpError carries the origin's HTTP status code so callers can apply
-// status-specific retry strategies (e.g. 410 Gone → drop, 425 Too Early → short backoff).
-type httpError struct {
-	statusCode int
-	url        string
-}
-
-func (e *httpError) Error() string {
-	return fmt.Sprintf("HTTP %d from %s", e.statusCode, e.url)
-}
-
 // Result is the outcome of a single segment fetch attempt.
 type Result struct {
 	// Attempt owns completion for pool results; direct Fetch calls have none.
@@ -35,23 +24,23 @@ type Result struct {
 	StatusCode int // origin HTTP status when Err != nil; 0 for non-HTTP errors
 }
 
-// Fetcher wraps an http.Client and origin credential configuration.
+// Fetcher downloads segments and inits through the channel's Origin.
 type Fetcher struct {
-	client       *http.Client
-	extraHeaders Headers // injected into every origin request; may be rotated live
+	client *http.Client
+	origin *Origin
 	// maxSegmentBytes bounds a full-file download. Range requests are bounded by
 	// the range itself, which is tighter.
 	maxSegmentBytes int64
 }
 
-// NewFetcher creates a Fetcher with the given HTTP client and origin headers.
-// Pass nil for headers if no origin auth is required, and zero for
-// maxSegmentBytes or timeout to accept the defaults.
+// NewFetcher creates a Fetcher with the given HTTP client and Origin. Pass nil
+// for origin if the origin needs no headers, and zero for maxSegmentBytes or
+// timeout to accept the defaults.
 //
 // timeout builds the client's own http.Client.Timeout and therefore applies
 // only when client is nil. Pass a client with its Timeout already set to
 // override it; every production caller passes nil.
-func NewFetcher(client *http.Client, headers Headers, maxSegmentBytes int64, timeout time.Duration) *Fetcher {
+func NewFetcher(client *http.Client, origin *Origin, maxSegmentBytes int64, timeout time.Duration) *Fetcher {
 	if timeout <= 0 {
 		timeout = DefaultSegmentTimeout
 	}
@@ -63,7 +52,7 @@ func NewFetcher(client *http.Client, headers Headers, maxSegmentBytes int64, tim
 	}
 	return &Fetcher{
 		client:          client,
-		extraHeaders:    headers,
+		origin:          origin,
 		maxSegmentBytes: maxSegmentBytes,
 	}
 }
@@ -84,9 +73,9 @@ func (f *Fetcher) Fetch(ctx context.Context, task *queue.SegmentTask, needInit b
 		r.Data, err = f.get(ctx, task.URL)
 	}
 	if err != nil {
-		var he *httpError
-		if errors.As(err, &he) {
-			r.StatusCode = he.statusCode
+		var se *StatusError
+		if errors.As(err, &se) {
+			r.StatusCode = se.Code
 		}
 		r.Err = fmt.Errorf("segment %s: %w", task.URL, err)
 		return r
@@ -112,9 +101,9 @@ func (f *Fetcher) fetchInit(ctx context.Context, task *queue.SegmentTask) Result
 		r.InitData, r.Err = f.get(ctx, task.InitURL)
 	}
 	if r.Err != nil {
-		var he *httpError
-		if errors.As(r.Err, &he) {
-			r.StatusCode = he.statusCode
+		var se *StatusError
+		if errors.As(r.Err, &se) {
+			r.StatusCode = se.Code
 		}
 		r.Err = fmt.Errorf("init %s: %w", task.InitURL, r.Err)
 	}
@@ -122,30 +111,7 @@ func (f *Fetcher) fetchInit(ctx context.Context, task *queue.SegmentTask) Result
 }
 
 func (f *Fetcher) get(ctx context.Context, url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	ApplyHeaders(req, f.extraHeaders)
-
-	resp, err := f.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, &httpError{statusCode: resp.StatusCode, url: url}
-	}
-
-	// When the origin declares a size, refuse an oversized body before reading a
-	// single byte of it.
-	if resp.ContentLength > f.maxSegmentBytes {
-		slog.Warn("upstream segment exceeds the size limit; refusing",
-			"url", url, "content_length", resp.ContentLength, "limit", f.maxSegmentBytes)
-		return nil, ErrTooLarge
-	}
-	data, err := ReadAtMost(resp.Body, f.maxSegmentBytes)
+	data, err := f.origin.Get(ctx, f.client, url, f.maxSegmentBytes)
 	if errors.Is(err, ErrTooLarge) {
 		slog.Warn("upstream segment exceeds the size limit; refusing",
 			"url", url, "limit", f.maxSegmentBytes)
@@ -153,41 +119,14 @@ func (f *Fetcher) get(ctx context.Context, url string) ([]byte, error) {
 	return data, err
 }
 
+// getRange's read is bounded by the range itself, which is tighter than the
+// segment ceiling; the ceiling still applies in case the manifest asked for
+// an absurd range in the first place.
 func (f *Fetcher) getRange(ctx context.Context, url string, start, end uint64) ([]byte, error) {
-	if end < start {
-		return nil, fmt.Errorf("invalid byte range %d-%d for %s", start, end, url)
-	}
-	// The request states exactly how many bytes it wants, so that count is the
-	// bound — tighter than the segment ceiling, and it also catches an origin
-	// that ignores Range and replies with the whole file. The ceiling still
-	// applies in case the manifest asked for an absurd range in the first place.
-	limit := int64(end-start) + 1
-	if limit <= 0 || limit > f.maxSegmentBytes {
-		limit = f.maxSegmentBytes
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	ApplyHeaders(req, f.extraHeaders)
-	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
-
-	resp, err := f.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	// Servers may return 206 Partial Content or 200 OK (full content).
-	if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
-		return nil, &httpError{statusCode: resp.StatusCode, url: fmt.Sprintf("%s (range %d-%d)", url, start, end)}
-	}
-
-	data, err := ReadAtMost(resp.Body, limit)
+	data, err := f.origin.GetRange(ctx, f.client, url, start, end, f.maxSegmentBytes)
 	if errors.Is(err, ErrTooLarge) {
 		slog.Warn("upstream returned more than the requested byte range; refusing",
-			"url", url, "range_start", start, "range_end", end, "limit", limit)
+			"url", url, "range_start", start, "range_end", end)
 	}
 	return data, err
 }

@@ -10,6 +10,7 @@ package hlsingest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -117,12 +118,12 @@ type Watcher struct {
 	broker    *queue.Broker
 	channelID string
 	sourceURL string
-	// headers is shared with the channel's fetcher and key cache and swapped
-	// atomically by the admin API, so rotating origin credentials reaches
+	// origin shares its headers with the channel's fetcher and key cache; the
+	// admin API swaps them atomically, so rotating origin credentials reaches
 	// playlist polls without restarting the channel (which would reset each
 	// variant's media sequence).
-	headers fetch.Headers
-	client  *http.Client
+	origin *fetch.Origin
+	client *http.Client
 	// decryptOnIngest is the channel's AES-128 policy, stamped onto every
 	// encrypted task so the processor never needs to know channel config.
 	decryptOnIngest bool
@@ -166,7 +167,7 @@ type Watcher struct {
 func NewWatcher(
 	cfg config.Config,
 	channelID, sourceURL string,
-	headers fetch.Headers,
+	origin *fetch.Origin,
 	decryptOnIngest bool,
 	statePath string,
 	ci *index.ChannelIndex,
@@ -178,7 +179,7 @@ func NewWatcher(
 		broker:          broker,
 		channelID:       channelID,
 		sourceURL:       sourceURL,
-		headers:         headers,
+		origin:          origin,
 		decryptOnIngest: decryptOnIngest,
 		statePath:       statePath,
 		client:          &http.Client{Timeout: 30 * time.Second},
@@ -884,26 +885,13 @@ func (w *Watcher) fetchMedia(ctx context.Context, playlistURL string) (*hlssrc.M
 	return hlssrc.ParseMedia(data, base)
 }
 
-// fetch performs a GET with the channel's configured origin headers.
+// fetch GETs a playlist through the channel's Origin.
 func (w *Watcher) fetch(ctx context.Context, rawURL string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return nil, err
+	data, err := w.origin.Get(ctx, w.client, rawURL, fetch.MaxManifestBytes)
+	if se := (*fetch.StatusError)(nil); errors.As(err, &se) {
+		return nil, fmt.Errorf("upstream playlist status %d for %s", se.Code, rawURL)
 	}
-	fetch.ApplyHeaders(req, w.headers)
-	if w.cfg.Upstream.AuthHeader != "" {
-		req.Header.Set(w.cfg.Upstream.AuthHeader, w.cfg.Upstream.AuthValue)
-	}
-
-	resp, err := w.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("upstream playlist status %d for %s", resp.StatusCode, rawURL)
-	}
-	return fetch.ReadAtMost(resp.Body, fetch.MaxManifestBytes)
+	return data, err
 }
 
 // halve returns d/2, used to reload sooner when a playlist did not advance.

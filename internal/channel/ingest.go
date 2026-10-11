@@ -32,8 +32,12 @@ import (
 // supervising the source and transitioning to VOD stay with the Manager, which
 // is what actually makes those decisions.
 type ingestPipeline struct {
-	index     *index.ChannelIndex
-	headers   *fetch.AtomicHeaders
+	index   *index.ChannelIndex
+	headers *fetch.AtomicHeaders
+	// manifests makes the MPD and playlist requests, media the segment, init
+	// and key requests; both send headers.
+	manifests *fetch.Origin
+	media     *fetch.Origin
 	broker    *queue.Broker
 	pool      *fetch.Pool
 	processor *pipeline.Processor
@@ -118,7 +122,11 @@ func newIngestPipeline(gwCfg gocfg.Config, id string, cfg Config) *ingestPipelin
 	headers := fetch.NewAtomicHeaders(HeaderMap(cfg.FetchHeaders))
 
 	broker := queue.NewBroker(4096)
-	fetcher := fetch.NewFetcher(nil, headers, chGwCfg.Worker.MaxSegmentBytes, chGwCfg.Worker.SegmentTimeout)
+	// The gateway auth header goes only to the MPD and playlist requests;
+	// segments, inits and keys carry the channel's headers alone.
+	manifests := fetch.NewOrigin(headers, chGwCfg.Upstream.AuthHeader, chGwCfg.Upstream.AuthValue)
+	media := fetch.NewOrigin(headers, "", "")
+	fetcher := fetch.NewFetcher(nil, media, chGwCfg.Worker.MaxSegmentBytes, chGwCfg.Worker.SegmentTimeout)
 	pool := fetch.NewPool(fetcher, broker, chGwCfg.Worker.FetchWorkers)
 	processor := pipeline.NewProcessor(chGwCfg, id, ci, broker)
 
@@ -133,6 +141,8 @@ func newIngestPipeline(gwCfg gocfg.Config, id string, cfg Config) *ingestPipelin
 	p := &ingestPipeline{
 		index:     ci,
 		headers:   headers,
+		manifests: manifests,
+		media:     media,
 		broker:    broker,
 		pool:      pool,
 		processor: processor,
@@ -150,14 +160,14 @@ func newIngestPipeline(gwCfg gocfg.Config, id string, cfg Config) *ingestPipelin
 // complete, instead of being mutated into shape after construction.
 func (p *ingestPipeline) attachSource(id string, cfg Config, chGwCfg gocfg.Config) {
 	if !cfg.IsHLS() {
-		w := dashingest.NewWatcher(chGwCfg, id, p.headers, p.index, p.broker)
+		w := dashingest.NewWatcher(chGwCfg, id, p.manifests, p.index, p.broker)
 		w.SetProgress(p.progress)
 		p.watcher = w
 		p.source = dashSource{w}
 		return
 	}
 
-	hw := hlsingest.NewWatcher(chGwCfg, id, cfg.MPDURL, p.headers, cfg.DecryptOnIngest(),
+	hw := hlsingest.NewWatcher(chGwCfg, id, cfg.MPDURL, p.manifests, cfg.DecryptOnIngest(),
 		hlsingest.SourceStatePath(chGwCfg.Store.DataDir, id), p.index, p.broker)
 	hw.SetProgress(p.progress)
 	p.hls = hw
@@ -170,7 +180,7 @@ func (p *ingestPipeline) attachSource(id string, cfg Config, chGwCfg gocfg.Confi
 	if !cfg.DecryptOnIngest() {
 		keyStorePath = hlskey.KeyStorePath(chGwCfg.Store.DataDir, id)
 	}
-	p.keys = hlskey.NewCache(nil, p.headers, keyStorePath)
+	p.keys = hlskey.NewCache(nil, p.media, keyStorePath)
 	p.source = hlsSource{w: hw, keys: p.keys}
 	p.processor.SetKeyFetcher(p.keys)
 }
