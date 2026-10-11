@@ -37,8 +37,8 @@ func TestCheckpointVODMediaRepairsHLSSidecarsPerRepresentation(t *testing.T) {
 		KeyURI: "https://keys.example.test/a", IV: []byte{1, 2, 3},
 	})
 
-	if w := m.checkpointVODMedia(rt); len(w) != 0 {
-		t.Fatalf("checkpointVODMedia warnings: %q", w)
+	if w := m.vod.checkpointMedia(rt); len(w) != 0 {
+		t.Fatalf("checkpointMedia warnings: %q", w)
 	}
 
 	for _, tc := range []struct {
@@ -83,9 +83,9 @@ func TestCheckpointVODMediaReportsUnknownSidecarTimedSegment(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			w := m.checkpointVODMedia(rt)
+			w := m.vod.checkpointMedia(rt)
 			if len(w) != 1 || !strings.Contains(w[0], "no restart metadata") {
-				t.Fatalf("checkpointVODMedia warnings = %q, want one missing-metadata warning", w)
+				t.Fatalf("checkpointMedia warnings = %q, want one missing-metadata warning", w)
 			}
 		})
 	}
@@ -111,14 +111,14 @@ func TestCheckpointVODMediaRetriesAfterBlockedSidecarPath(t *testing.T) {
 	if err := os.Mkdir(sidecar, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if w := m.checkpointVODMedia(rt); len(w) == 0 {
-		t.Fatal("checkpointVODMedia reported nothing with a sidecar directory blocking the write")
+	if w := m.vod.checkpointMedia(rt); len(w) == 0 {
+		t.Fatal("checkpointMedia reported nothing with a sidecar directory blocking the write")
 	}
 	if err := os.Remove(sidecar); err != nil {
 		t.Fatalf("remove blocked sidecar: %v", err)
 	}
-	if w := m.checkpointVODMedia(rt); len(w) != 0 {
-		t.Fatalf("checkpointVODMedia retry warnings: %q", w)
+	if w := m.vod.checkpointMedia(rt); len(w) != 0 {
+		t.Fatalf("checkpointMedia retry warnings: %q", w)
 	}
 	records, err := store.ReadSegmentMeta(sidecar)
 	if err != nil {
@@ -143,8 +143,8 @@ func TestCheckpointVODMediaAggregatesMissingMetadataPerDirectory(t *testing.T) {
 		}
 	}
 	// A status poll carries every warning; a stray history must not flood it.
-	w := m.checkpointVODMedia(rt)
+	w := m.vod.checkpointMedia(rt)
 	if len(w) != 1 || !strings.Contains(w[0], "500 segment(s)") {
-		t.Fatalf("checkpointVODMedia warnings = %d entries, first %q; want one naming all 500", len(w), w)
+		t.Fatalf("checkpointMedia warnings = %d entries, first %q; want one naming all 500", len(w), w)
 	}
 }

@@ -88,7 +88,7 @@ func (t *vodTransition) publish(finalMPD *imdp.ParsedMPD) vodOutcome {
 	}
 
 	// Every exit below records this attempt's warnings.
-	warnings := m.checkpointVODMedia(rt)
+	warnings := m.vod.checkpointMedia(rt)
 
 	// Rebuild from disk with unbounded ring buffers so the VOD covers the whole
 	// recorded history rather than just what the live ring still held. fMP4
@@ -105,21 +105,13 @@ func (t *vodTransition) publish(finalMPD *imdp.ParsedMPD) vodOutcome {
 		return vodFailed
 	}
 
-	// The source's own checkpoint may fetch keys over the network, so it
-	// happens before configMu — a hot edit must not wait on an unreachable key
-	// server — and is bounded. Its failures are warnings: the completed VOD is
-	// served from the in-memory index either way, and only a later restart
-	// depends on these files.
-	if rt.Source != nil {
-		ctx, cancel := context.WithTimeout(lifecycleContext(rt), keyCheckpointTimeout)
-		warnings = append(warnings, rt.Source.Checkpoint(ctx, vodCI.Snapshot())...)
-		cancel()
-	}
+	// Before configMu: it may wait on a key server (vodAsset.checkpointSource).
+	warnings = append(warnings, m.vod.checkpointSource(rt, vodCI.Snapshot())...)
 
 	// A hot edit cannot change the configuration between manifest generation,
 	// the store commit, and runtime publication. Stop never acquires configMu.
 	rt.configMu.Lock()
-	a, err := m.captureVODArtifacts(rt, vodCI)
+	a, err := m.vod.capture(rt, vodCI)
 	if err != nil {
 		rt.configMu.Unlock()
 		slog.Error("VOD artifact capture failed", "channel", rt.ID, "err", err)

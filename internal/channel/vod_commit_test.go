@@ -48,7 +48,7 @@ func TestVODConfigFailureCompletesWithWarning(t *testing.T) {
 		t.Fatal("failed rename committed VOD config")
 	}
 	for _, name := range []string{vodManifestFile, vodUpstreamFile} {
-		if _, err := os.Stat(filepath.Join(m.vodArtifactDir("ch"), name)); err != nil {
+		if _, err := os.Stat(filepath.Join(m.vod.dir("ch"), name)); err != nil {
 			t.Fatal(err)
 		}
 	}

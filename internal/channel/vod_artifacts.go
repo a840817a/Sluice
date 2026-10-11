@@ -7,6 +7,7 @@ package channel
 // their consumer is VOD restore, not HTTP request handling.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -27,6 +28,44 @@ const (
 	vodUpstreamFile = "upstream.mpd"
 )
 
+// vodAsset owns the files that make a completed channel restartable without
+// its origin, and nothing else does: what the VOD transition writes once
+// ingest has stopped, and what a VOD restore reads back. Media written during
+// live ingest (segments, inits, sidecars, period origin MPDs) belongs to the
+// pipeline and the source; vodAsset only makes it durable and complete.
+//
+// The transition calls it in this order, and owns the order itself:
+// checkpointMedia, then (after the rebuild) checkpointSource and capture,
+// whose persistDASHManifests runs before the VOD is published and whose
+// writeOptional after. A restart in VOD calls restore.
+type vodAsset struct {
+	dataDir string
+	render  *presentation.Generator
+}
+
+// dir is the channel's directory, where its VOD files live.
+func (v vodAsset) dir(channelID string) string { return store.ChannelDir(v.dataDir, channelID) }
+
+func (v vodAsset) path(channelID, file string) string {
+	return filepath.Join(v.dir(channelID), file)
+}
+
+// checkpointSource makes the source's own restart state durable: for HLS its
+// variant description and, in passthrough, the keys the VOD still needs. It
+// may fetch keys over the network, so the transition runs it before configMu
+// (a hot edit must not wait on an unreachable key server), and it is bounded
+// by keyCheckpointTimeout. Its failures are warnings: the completed VOD is
+// served from the in-memory index either way, and only a later restart
+// depends on these files.
+func (v vodAsset) checkpointSource(rt *Runtime, snapshot index.Snapshot) []string {
+	if rt.Source == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(lifecycleContext(rt), keyCheckpointTimeout)
+	defer cancel()
+	return rt.Source.Checkpoint(ctx, snapshot)
+}
+
 // vodArtifacts is a single capture of all state needed to write a completed
 // channel. Capturing before any I/O prevents a long artifact write from
 // combining a later hot configuration update with the served manifest.
@@ -44,18 +83,18 @@ type vodArtifacts struct {
 	periodWarnings []string
 }
 
-// captureVODArtifacts freezes the candidate index the VOD transition just
+// capture freezes the candidate index the VOD transition just
 // rebuilt.
 // The runtime has not been published as VOD yet, so it deliberately does not
 // consult rt.VODIndex: doing so would make durable artifacts depend on an
 // already-visible VOD state.
-func (m *Manager) captureVODArtifacts(rt *Runtime, candidate *index.ChannelIndex) (vodArtifacts, error) {
+func (v vodAsset) capture(rt *Runtime, candidate *index.ChannelIndex) (vodArtifacts, error) {
 	if candidate == nil {
 		return vodArtifacts{}, errors.New("missing VOD index")
 	}
 	sv := rt.servingAs(ModeVOD, candidate)
 	snapshot := candidate.Snapshot()
-	originMPD, periodWarnings := vodOriginMPD(sv.ParsedMPD, snapshot, m.gwCfg.Store.DataDir, rt.ID)
+	originMPD, periodWarnings := vodOriginMPD(sv.ParsedMPD, snapshot, v.dataDir, rt.ID)
 	if originMPD != sv.ParsedMPD {
 		sv.ParsedMPD = originMPD
 		sv.Tracks = rt.tracks(originMPD)
@@ -63,8 +102,8 @@ func (m *Manager) captureVODArtifacts(rt *Runtime, candidate *index.ChannelIndex
 
 	a := vodArtifacts{
 		id:             rt.ID,
-		dir:            m.vodArtifactDir(rt.ID),
-		render:         m.presentations,
+		dir:            v.dir(rt.ID),
+		render:         v.render,
 		serving:        sv,
 		snapshot:       snapshot,
 		rawMPD:         append([]byte(nil), rt.ParsedMPDBytes()...),
@@ -151,30 +190,25 @@ func generateServedVODManifest(a vodArtifacts) ([]byte, error) {
 	return a.render.DASH(a.serving.Channel, a.snapshot)
 }
 
-func (m *Manager) vodArtifactDir(channelID string) string {
-	return store.ChannelDir(m.gwCfg.Store.DataDir, channelID)
-}
-
-func (m *Manager) vodArtifactPath(channelID, file string) string {
-	return filepath.Join(m.vodArtifactDir(channelID), file)
-}
-
 // SavedVODManifestPath returns the persisted served manifest when it exists.
 // HTTP uses this only as a fallback when an old VOD record has no parseable
 // origin MPD; lifecycle code owns both the name and existence check.
 func (m *Manager) SavedVODManifestPath(channelID string) string {
-	path := m.vodArtifactPath(channelID, vodManifestFile)
+	path := m.vod.path(channelID, vodManifestFile)
 	if _, err := os.Stat(path); err != nil {
 		return ""
 	}
 	return path
 }
 
-func (m *Manager) restoreVODOriginMPD(rt *Runtime) {
+// restore reads back what a restart in VOD needs that the index rebuild does
+// not: a DASH channel's last origin MPD, with every stored period put back
+// (vodOriginMPD).
+func (v vodAsset) restore(rt *Runtime) {
 	if rt.watcher == nil {
 		return
 	}
-	raw, err := os.ReadFile(m.vodArtifactPath(rt.ID, vodUpstreamFile))
+	raw, err := os.ReadFile(v.path(rt.ID, vodUpstreamFile))
 	if err != nil {
 		slog.Warn("VOD restore: upstream MPD unavailable; using saved manifest fallback", "channel", rt.ID, "err", err)
 		return
@@ -186,7 +220,7 @@ func (m *Manager) restoreVODOriginMPD(rt *Runtime) {
 	}
 	rt.watcher.SetParsedMPD(p, raw)
 	if vod := rt.VODIndex(); vod != nil {
-		merged, warnings := vodOriginMPD(rt.watcher.ParsedMPD(), vod.Snapshot(), m.gwCfg.Store.DataDir, rt.ID)
+		merged, warnings := vodOriginMPD(rt.watcher.ParsedMPD(), vod.Snapshot(), v.dataDir, rt.ID)
 		for _, w := range warnings {
 			slog.Warn("VOD restore: "+w, "channel", rt.ID)
 		}

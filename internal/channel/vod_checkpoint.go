@@ -13,7 +13,7 @@ import (
 	"github.com/a840817a/sluice/internal/store"
 )
 
-// checkpointVODMedia runs only after ingest has stopped. HLS metadata appends
+// checkpointMedia runs only after ingest has stopped. HLS metadata appends
 // are best-effort during live serving, so repair them from the in-memory index
 // where possible, then make the segment directory entries durable.
 //
@@ -26,7 +26,7 @@ import (
 // It does not observe cancellation. It is local disk work inside publication,
 // and publication, once started, completes: Stop joins it rather than leaving
 // a half-committed VOD behind.
-func (m *Manager) checkpointVODMedia(rt *Runtime) []string {
+func (v vodAsset) checkpointMedia(rt *Runtime) []string {
 	// Group in-memory segments by their representation directory once. The
 	// on-disk walk below also groups by directory; scanning every retained
 	// segment for every directory makes a many-representation HLS asset
@@ -50,7 +50,7 @@ func (m *Manager) checkpointVODMedia(rt *Runtime) []string {
 			}
 		})
 	}
-	base := store.PeriodsDir(m.gwCfg.Store.DataDir, rt.ID)
+	base := store.PeriodsDir(v.dataDir, rt.ID)
 	if _, err := os.Stat(base); err != nil {
 		if os.IsNotExist(err) {
 			return nil // no media was ever stored for this channel
@@ -94,7 +94,7 @@ func (m *Manager) checkpointVODMedia(rt *Runtime) []string {
 			warnings = append(warnings, fmt.Sprintf("sync %s: %v", dirs[i], err))
 		}
 	}
-	for _, dir := range []string{m.vodArtifactDir(rt.ID), m.gwCfg.Store.DataDir} {
+	for _, dir := range []string{v.dir(rt.ID), v.dataDir} {
 		if err := store.SyncDir(dir); err != nil {
 			warnings = append(warnings, fmt.Sprintf("sync %s: %v", dir, err))
 		}

@@ -192,7 +192,9 @@ type Manager struct {
 	operationLocks   map[string]*channelOperationLock
 	gwCfg            gocfg.Config // gateway-level config (data dir, worker counts, etc.)
 	presentations    *presentation.Generator
-	runtimes         map[string]*Runtime
+	// vod owns the files a VOD transition writes and a VOD restore reads.
+	vod      vodAsset
+	runtimes map[string]*Runtime
 	// store is where every channel's configuration lives. The manager is the
 	// only writer, and a channel runs only while it is in the store.
 	store      *Store
@@ -206,9 +208,11 @@ type Manager struct {
 // NewManager creates a Manager over the channel configurations in store. gwCfg
 // supplies gateway-level defaults.
 func NewManager(gwCfg gocfg.Config, store *Store) *Manager {
+	presentations := presentation.NewGenerator(gwCfg)
 	return &Manager{
 		gwCfg:          gwCfg,
-		presentations:  presentation.NewGenerator(gwCfg),
+		presentations:  presentations,
+		vod:            vodAsset{dataDir: gwCfg.Store.DataDir, render: presentations},
 		store:          store,
 		runtimes:       make(map[string]*Runtime),
 		suppressVOD:    make(map[string]bool),
@@ -342,7 +346,7 @@ func (m *Manager) restoreVODState(rt *Runtime, id string) {
 	// render "finished" rather than an empty progress bar.
 	rt.enterVOD(rt.Index, false)
 
-	m.restoreVODOriginMPD(rt)
+	m.vod.restore(rt)
 
 	slog.Info("channel restored in VOD mode", "id", id)
 }
