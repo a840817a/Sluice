@@ -60,8 +60,8 @@ func (a *AtomicHeaders) Snapshot() map[string]string {
 	return nil
 }
 
-// ApplyHeaders sets the current header set on req. Every origin request in
-// this codebase goes through it, so rotation reaches segment fetches, manifest
+// ApplyHeaders sets the current header set on req. Origin applies it to every
+// request for a channel's video, so rotation reaches segment fetches, manifest
 // and playlist polls, and AES key requests alike.
 //
 // h may be nil — channels with no origin auth, and most tests, pass nil — and

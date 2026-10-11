@@ -50,7 +50,8 @@ type UpstreamConfig struct {
 	MPDURL string `yaml:"-"`
 	// 是否透傳 X-Forwarded-For 到 license server。
 	ForwardClientIP bool `yaml:"-"`
-	// origin 認證 header，例如 "Authorization: Bearer <token>"
+	// origin 認證 header，例如 "Authorization: Bearer <token>"。每個取得影片
+	// 的請求都會帶（fetch.Origin，ADR-0009），license 請求不帶。
 	AuthHeader string `yaml:"auth_header"`
 	AuthValue  string `yaml:"auth_value"`
 	// dynamic MPD 的 refresh 間隔（static MPD 忽略）

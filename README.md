@@ -235,7 +235,7 @@ admin:
 
 upstream:
   poll_interval: "2s"              # Manifest/playlist refresh interval
-  auth_header: "Authorization"     # Optional auth header sent to the origin
+  auth_header: "Authorization"     # Optional; sent on every video request (ADR-0009)
   auth_value: "Bearer <token>"
 
 worker:
@@ -340,7 +340,7 @@ Optional fields:
 | `hls_key_mode` | `passthrough` (default) or `decrypt`; AES-128 HLS only |
 | `playready_license_url`, `widevine_license_url` | License servers |
 | `enable_playready`, `enable_widevine` | Both default to true |
-| `fetch_headers` | `[{"name":…,"value":…}]` injected into origin manifest/segment requests |
+| `fetch_headers` | `[{"name":…,"value":…}]` injected into every video request: manifest, playlist, segment, init and AES key |
 | `license_headers` | Same shape, injected into DRM license proxy requests |
 | `forward_client_ip` | Pass `X-Forwarded-For` to the license server |
 | `keep_all_segments` | Unbounded DVR window; defaults to true, set `false` for the sliding window |

@@ -148,9 +148,10 @@ func TestDASHFetchHeadersReachManifestAndSegments(t *testing.T) {
 	}
 }
 
-// The gateway-wide Upstream.AuthHeader must still win over a same-named
-// per-channel header, matching how hlsingest.Watcher.fetch orders them.
-func TestGatewayAuthHeaderOverridesChannelHeader(t *testing.T) {
+// The gateway-wide Upstream.AuthHeader goes on every request for the
+// channel's video — the MPD, inits and segments alike (ADR-0009) — and wins
+// over a same-named per-channel header.
+func TestGatewayAuthHeaderReachesEveryVideoRequest(t *testing.T) {
 	rec := newHeaderRecorder()
 	origin := startRecordingDASHOrigin(t, rec)
 
@@ -174,13 +175,13 @@ func TestGatewayAuthHeaderOverridesChannelHeader(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = mgr.Stop("hdr2") })
 
-	waitForOriginRequests(t, rec, "manifest")
+	waitForOriginRequests(t, rec, "manifest", "segment")
 
-	reqs := rec.get("manifest")
-	if len(reqs) == 0 {
-		t.Fatal("origin never received a manifest request")
-	}
-	if got := reqs[0].Get("Authorization"); got != "Bearer gateway" {
-		t.Errorf("Authorization = %q, want the gateway value to win", got)
+	for _, kind := range []string{"manifest", "segment"} {
+		for i, h := range rec.get(kind) {
+			if got := h.Get("Authorization"); got != "Bearer gateway" {
+				t.Errorf("%s request %d: Authorization = %q, want the gateway value", kind, i, got)
+			}
+		}
 	}
 }

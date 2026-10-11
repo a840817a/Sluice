@@ -40,7 +40,9 @@ admin:
 upstream:
   # 上游輪詢間隔（dynamic MPD / HLS live playlist；static 來源忽略）
   poll_interval: "2s"
-  # 送往上游 MPD / playlist / segment 請求的認證 header（選填）
+  # 送往上游的認證 header（選填）：每個取得影片的請求都會帶，
+  # 包括 MPD / playlist / segment / init / AES key，不分 host（ADR-0009）。
+  # license 請求不帶，由 license 設定另外控制。
   # auth_header: "Authorization"
   # auth_value: "Bearer <token>"
   #
