@@ -259,40 +259,93 @@ func Media(periods []index.TimelinePeriod, o MediaOptions) []byte {
 		b.WriteString("#EXT-X-PLAYLIST-TYPE:VOD\n")
 	}
 
-	// keyLine tracks the EXT-X-KEY currently in force so it is re-emitted only
-	// when it actually changes.
-	var keyLine string
-	for i, e := range run {
-		s := e.seg
-		newPeriod := i > 0 && e.periodIdx != run[i-1].periodIdx
-		// The leading discontinuity of the emitted run is meaningless: it
-		// describes a break from a segment the client never saw, and
-		// EXT-X-DISCONTINUITY-SEQUENCE already accounts for it.
-		if (s.Discontinuity || newPeriod) && i > 0 {
-			b.WriteString("#EXT-X-DISCONTINUITY\n")
-		}
-		if p := periods[e.periodIdx]; (i == 0 || newPeriod) && p.InitPath != "" {
-			fmt.Fprintf(&b, "#EXT-X-MAP:URI=%q\n", gwurl.InitURL(base, o.ChannelID, p.PeriodID, o.RepID))
-		}
-		if line := keyLineFor(s, o.KeyProxyBase); line != keyLine {
-			keyLine = line
-			if line != "" {
-				b.WriteString(line + "\n")
-			} else if i > 0 {
-				// Encryption stopped part-way through: players must be told, or
-				// they keep applying the previous key.
-				b.WriteString("#EXT-X-KEY:METHOD=NONE\n")
+	lines := segmentLines{
+		extinf: "#EXTINF:%.6f,\n",
+		uri: func(e playlistEntry) (string, error) {
+			return gwurl.SegmentURL(base, o.ChannelID, periods[e.periodIdx].PeriodID, o.RepID, e.seg.SegNo, segmentExt(e.seg)), nil
+		},
+		initURI: func(e playlistEntry) (string, error) {
+			if p := periods[e.periodIdx]; p.InitPath != "" {
+				return gwurl.InitURL(base, o.ChannelID, p.PeriodID, o.RepID), nil
 			}
-		}
-		fmt.Fprintf(&b, "#EXTINF:%.6f,\n", segmentDuration(s))
-		b.WriteString(gwurl.SegmentURL(base, o.ChannelID, periods[e.periodIdx].PeriodID, o.RepID, s.SegNo, segmentExt(s)) + "\n")
+			return "", nil
+		},
+		keyLine: func(s index.SegmentState) (string, error) { return keyLineFor(s, o.KeyProxyBase), nil },
 	}
+	// The served URIs and key lines cannot fail.
+	_ = lines.write(&b, run)
 
 	if o.VOD {
 		b.WriteString("#EXT-X-ENDLIST\n")
 	}
 
 	return []byte(b.String())
+}
+
+// segmentLines writes the segment section of a media playlist, served or
+// local alike; how a segment, its init and its key are addressed is what
+// differs between the two.
+type segmentLines struct {
+	// extinf formats a segment's duration, as the EXTINF line.
+	extinf string
+	// uri addresses a segment.
+	uri func(playlistEntry) (string, error)
+	// initURI addresses a segment's init, or is "" for a self-contained one.
+	initURI func(playlistEntry) (string, error)
+	// keyLine is the EXT-X-KEY a segment needs, or "" for a clear one.
+	keyLine func(index.SegmentState) (string, error)
+}
+
+// write writes entries, in order, each preceded by the tags that change at
+// it:
+//
+//   - EXT-X-DISCONTINUITY where a period ends, the numbering skips, or the
+//     origin marked a discontinuity. Never before the first entry: that
+//     break is from a segment the reader never saw.
+//   - EXT-X-MAP at the first entry, at a period boundary, and wherever the
+//     init changes. An init is stored clear, so an encryption key in force is
+//     ended first, or a reader would apply it to the init too.
+//   - EXT-X-KEY wherever the key changes, METHOD=NONE when encryption stops,
+//     or a reader would keep applying the previous key.
+func (l segmentLines) write(b *strings.Builder, entries []playlistEntry) error {
+	lastKey, lastInit := "", ""
+	for i, e := range entries {
+		s := e.seg
+		boundary := i > 0 && e.periodIdx != entries[i-1].periodIdx
+		if i > 0 && (boundary || s.SegNo != entries[i-1].seg.SegNo+1 || s.Discontinuity) {
+			b.WriteString("#EXT-X-DISCONTINUITY\n")
+		}
+		init, err := l.initURI(e)
+		if err != nil {
+			return err
+		}
+		if init != "" && (i == 0 || boundary || init != lastInit) {
+			if lastKey != "" {
+				b.WriteString("#EXT-X-KEY:METHOD=NONE\n")
+				lastKey = ""
+			}
+			fmt.Fprintf(b, "#EXT-X-MAP:URI=%q\n", init)
+		}
+		key, err := l.keyLine(s)
+		if err != nil {
+			return err
+		}
+		if key != lastKey {
+			if key == "" {
+				b.WriteString("#EXT-X-KEY:METHOD=NONE\n")
+			} else {
+				b.WriteString(key + "\n")
+			}
+		}
+		uri, err := l.uri(e)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(b, l.extinf, segmentDuration(s))
+		b.WriteString(uri + "\n")
+		lastInit, lastKey = init, key
+	}
+	return nil
 }
 
 // discontinuitiesBefore is the EXT-X-DISCONTINUITY-SEQUENCE of a playlist

@@ -65,47 +65,29 @@ func LocalMedia(periods []index.TimelinePeriod, channelDir string, keys map[stri
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "#EXTM3U\n#EXT-X-VERSION:%d\n#EXT-X-TARGETDURATION:%d\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-MEDIA-SEQUENCE:%d\n", version, ceilMaxDuration(all), entries[0].seg.SegNo)
-	var prev playlistEntry
-	lastKey, lastInit := "", ""
-	for i, e := range entries {
-		s := e.seg
-		boundary := i > 0 && e.periodIdx != prev.periodIdx
-		if i > 0 && (boundary || s.SegNo != prev.seg.SegNo+1 || s.Discontinuity) {
-			b.WriteString("#EXT-X-DISCONTINUITY\n")
-		}
-		if s.InitPath != "" && (i == 0 || boundary || s.InitPath != lastInit) {
+	lines := segmentLines{
+		extinf: "#EXTINF:%.3f,\n",
+		uri:    func(e playlistEntry) (string, error) { return relativeTo(e.seg.Path, channelDir) },
+		initURI: func(e playlistEntry) (string, error) {
 			// Persisted init files are validated clear MP4, even in passthrough mode.
-			if lastKey != "" {
-				b.WriteString("#EXT-X-KEY:METHOD=NONE\n")
-				lastKey = ""
+			if e.seg.InitPath == "" {
+				return "", nil
 			}
-			rel, err := relativeTo(s.InitPath, channelDir)
-			if err != nil {
-				return nil, err
+			return relativeTo(e.seg.InitPath, channelDir)
+		},
+		keyLine: func(s index.SegmentState) (string, error) {
+			if s.KeyURI == "" {
+				return "", nil
 			}
-			fmt.Fprintf(&b, "#EXT-X-MAP:URI=%q\n", rel)
-		}
-		key := ""
-		if s.KeyURI != "" {
 			name, ok := keys[s.KeyURI]
 			if !ok || len(s.IV) != 16 {
-				return nil, fmt.Errorf("local playlist: missing key or invalid IV for segment %d", s.SegNo)
+				return "", fmt.Errorf("local playlist: missing key or invalid IV for segment %d", s.SegNo)
 			}
-			key = fmt.Sprintf("#EXT-X-KEY:METHOD=AES-128,URI=%q,IV=0x%s", name, hex.EncodeToString(s.IV))
-		}
-		if key != lastKey {
-			if key == "" {
-				b.WriteString("#EXT-X-KEY:METHOD=NONE\n")
-			} else {
-				b.WriteString(key + "\n")
-			}
-		}
-		rel, err := relativeTo(s.Path, channelDir)
-		if err != nil {
-			return nil, err
-		}
-		fmt.Fprintf(&b, "#EXTINF:%.3f,\n%s\n", segmentDuration(s), rel)
-		prev, lastInit, lastKey = e, s.InitPath, key
+			return fmt.Sprintf("#EXT-X-KEY:METHOD=AES-128,URI=%q,IV=0x%s", name, hex.EncodeToString(s.IV)), nil
+		},
+	}
+	if err := lines.write(&b, entries); err != nil {
+		return nil, err
 	}
 	b.WriteString("#EXT-X-ENDLIST\n")
 	return []byte(b.String()), nil
