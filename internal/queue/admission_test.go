@@ -262,35 +262,78 @@ func TestPreservingAdmissionPromotionTransfersDeadlinePolicy(t *testing.T) {
 	})
 }
 
-func TestPreservedRequeueCollisionTransfersDeadlinePolicy(t *testing.T) {
-	broker := NewBroker(1)
-	finite := makeTask(1, 9)
-	if !broker.PushPreserving(context.Background(), finite) {
-		t.Fatal("finite task was not admitted")
-	}
-	attempt := broker.Pop()
-	if attempt == nil || attempt.SegmentTask != finite {
-		t.Fatal("could not fetch finite task")
-	}
-
-	live := makeTask(1, 9)
-	live.Deadline = time.Now().Add(time.Hour)
-	broker.Push(live)
-	// As above, expire the live copy without relying on test scheduling.
-	live.Deadline = time.Now().Add(-time.Second)
-	if !attempt.Retry(1, 0) {
-		t.Fatal("finite retry was not requeued")
-	}
-	attempt.Finish()
-
-	if !live.preserve || !live.Deadline.IsZero() {
-		t.Fatal("requeue collision did not transfer finite deadline policy")
-	}
-	task := broker.Pop()
-	if task == nil || task.SegmentTask != live || broker.Dropped() != 0 {
-		t.Fatal("requeue collision left the queued live deadline in effect")
-	}
-	task.Finish()
+// Work pushed again while it is in flight is the same work: it is not queued
+// a second time, and a finite source's copy upgrades the attempt's task when
+// it settles, so a retry keeps the finite deadline policy.
+func TestPushWhileInFlightIsTheSameWork(t *testing.T) {
+	t.Run("a finite copy upgrades a live task in flight", func(t *testing.T) {
+		broker := NewBroker(1)
+		live := makeTask(1, 9)
+		live.Deadline = time.Now().Add(time.Hour)
+		broker.Push(live)
+		attempt := broker.Pop()
+		if attempt == nil {
+			t.Fatal("could not fetch live task")
+		}
+		if !broker.PushPreserving(context.Background(), makeTask(1, 9)) || broker.Len() != 0 {
+			t.Fatalf("finite copy of in-flight work was queued: len %d", broker.Len())
+		}
+		// Expire the live deadline without relying on test scheduling.
+		live.Deadline = time.Now().Add(-time.Second)
+		if !attempt.Retry(1, 0) {
+			t.Fatal("upgraded retry was not requeued")
+		}
+		task := broker.Pop()
+		if task == nil || task.SegmentTask != live || !live.preserve || !live.Deadline.IsZero() || broker.Dropped() != 0 {
+			t.Fatal("retry kept the live deadline policy")
+		}
+		task.Finish()
+	})
+	t.Run("a live copy of a finite task in flight is absorbed", func(t *testing.T) {
+		broker := NewBroker(1)
+		finite := makeTask(1, 9)
+		if !broker.PushPreserving(context.Background(), finite) {
+			t.Fatal("finite task was not admitted")
+		}
+		attempt := broker.Pop()
+		live := makeTask(1, 9)
+		live.Deadline = time.Now().Add(time.Hour)
+		broker.Push(live)
+		if broker.Len() != 0 {
+			t.Fatal("live copy of in-flight work was queued")
+		}
+		if !attempt.Retry(1, 0) {
+			t.Fatal("finite retry was not requeued")
+		}
+		task := broker.Pop()
+		if task == nil || task.SegmentTask != finite || !finite.Deadline.IsZero() || broker.Dropped() != 0 {
+			t.Fatal("finite retry lost its policy")
+		}
+		task.Finish()
+		if !broker.Idle() {
+			t.Fatal("broker not idle after the work settled")
+		}
+	})
+	t.Run("Push reports whether it queued the work", func(t *testing.T) {
+		broker := NewBroker(1)
+		if !broker.Push(makeTask(1, 9)) {
+			t.Fatal("new work was not queued")
+		}
+		if broker.Push(makeTask(1, 9)) {
+			t.Fatal("queued work was queued again")
+		}
+		attempt := broker.Pop()
+		if broker.Push(makeTask(1, 9)) || broker.Len() != 0 {
+			t.Fatal("work in flight was queued again")
+		}
+		attempt.Finish()
+		if !broker.Push(makeTask(1, 9)) || broker.Len() != 1 {
+			t.Fatal("settled work is still treated as in flight")
+		}
+		if broker.Push(makeTask(2, 10)) {
+			t.Fatal("less urgent work was queued into a full queue")
+		}
+	})
 }
 
 func TestPreservingAdmissionStillDropsExpiredWork(t *testing.T) {

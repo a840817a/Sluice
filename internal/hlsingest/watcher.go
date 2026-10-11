@@ -650,7 +650,9 @@ func (w *Watcher) pollVariant(ctx context.Context, v variant) {
 }
 
 // enqueueNew pushes every segment the playlist advertises that has not been
-// enqueued yet, and returns how many were added.
+// enqueued yet, and returns how many of them are new at the live edge: what
+// the playlist advanced by since the last poll. Holes queued again behind the
+// edge do not count, so a playlist that did not change reports zero.
 //
 // A finished playlist is enumerated exactly once — pollVariant returns as soon
 // as it sees EXT-X-ENDLIST — so every segment it names has one chance to be
@@ -703,11 +705,12 @@ func (w *Watcher) enqueueNew(ctx context.Context, v variant, st *variantState, m
 	// a segment we already hold, mirroring the DASH watcher's knownSegs.
 	known := w.knownSpans(v, periodID)
 
-	var added int
+	var advanced, pushed int
 	for _, seg := range m.Segments {
 		durTicks := int64(math.Round(seg.Duration * TSTimescale))
 
 		var startPTS int64
+		backfill := false
 		switch {
 		case !st.seen || seg.SeqNo > st.lastSeq:
 			// A new segment at the live edge: place it on the accumulating
@@ -723,6 +726,7 @@ func (w *Watcher) enqueueNew(ctx context.Context, v variant, st *variantState, m
 			st.ptsAccum += durTicks
 			st.lastSeq = seg.SeqNo
 			st.seen = true
+			advanced++
 
 		default:
 			// seg.SeqNo <= lastSeq: we advanced past this position on an earlier
@@ -740,27 +744,33 @@ func (w *Watcher) enqueueNew(ctx context.Context, v variant, st *variantState, m
 				continue
 			}
 			startPTS = prev.end
-			slog.Info("backfilling HLS gap",
-				"channel", w.channelID, "rep", v.RepID, "seg", seg.SeqNo)
+			backfill = true
 		}
 
 		task := w.buildTask(v, seg, periodID, startPTS, durTicks, deadline)
+		queued := true
 		if m.EndList {
 			if !w.broker.PushPreserving(ctx, task) {
-				return added // context cancelled mid-enumeration
+				return advanced // context cancelled mid-enumeration
 			}
 		} else {
-			w.broker.Push(task)
+			// A segment still downloading looks like a hole here too; the
+			// broker holds it in flight and does not queue it again.
+			queued = w.broker.Push(task)
 		}
-		added++
+		if backfill && queued {
+			slog.Info("backfilling HLS gap",
+				"channel", w.channelID, "rep", v.RepID, "seg", seg.SeqNo)
+		}
+		pushed++
 	}
 
-	if added > 0 {
+	if pushed > 0 {
 		// Make sure the index knows about the period even before the first
 		// segment lands, mirroring what the DASH watcher does.
 		w.ci.Period(periodID)
 	}
-	return added
+	return advanced
 }
 
 // span is a segment's [start, end) presentation range in TSTimescale units.

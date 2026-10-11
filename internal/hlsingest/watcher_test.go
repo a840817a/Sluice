@@ -484,8 +484,9 @@ func TestEnqueueNewBackfillsInteriorGap(t *testing.T) {
 	if _, ok := got[104]; ok {
 		t.Error("already-held segment 104 was re-enqueued")
 	}
-	if added != len(got) {
-		t.Errorf("added=%d but drained %d", added, len(got))
+	// Only 105 is new at the live edge; the backfilled 103 is not progress.
+	if added != 1 {
+		t.Errorf("added=%d, want 1: only 105 advanced the playlist", added)
 	}
 
 	// The backfilled hole must land at its true timeline position (right after

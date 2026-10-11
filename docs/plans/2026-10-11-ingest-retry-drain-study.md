@@ -121,3 +121,14 @@ Pool 送出結果前取消，由 worker 結算；結果成功送出後，由 con
 init 暫存取消也由 consumer 結算。強制 Stop 的結果 channel 中尚未消費工作仍
 隨舊 Runtime 棄用；這次沒有將 Stop 改為正常 drain，也沒有變更 Channel 的
 StopAdmission／AwaitDrain／Join 順序。
+
+## 後續：在途工作也算已接收（2026-10-11）
+
+研究候選 6 時發現：`Broker.Pop` 一取出工作就從去重集合移除，而 DASH 與 HLS
+watcher 只以 index 中已存的 segment 判斷「已知」。下載比輪詢慢、後面的 segment
+又先存好時，watcher 把下載中的 segment 當成洞重推，broker 再收下一份，同一個
+segment 因此被重複下載（探測：HLS 2 次、DASH 3 次）。現在 broker 以 `inFlight`
+記錄每個未結算的 attempt，`Push` 與 `PushPreserving` 把在途工作視為已接收；
+finite 來源在途中送來的副本，於結算時套用其 deadline 政策。上文「`Retry` 包含
+與同 key 的 pending 工作合併」因此不再發生。`Push` 改為回報是否真的排入。
+

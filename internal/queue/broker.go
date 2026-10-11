@@ -17,6 +17,12 @@ type Broker struct {
 	seen    map[string]struct{} // deduplicate by task key
 	maxSize int
 
+	// inFlight holds the completion of every task popped and not yet
+	// settled, by task key. A task in flight is still admitted work: pushing
+	// it again would download it twice, because a source decides what to
+	// queue from what is stored, and a slow download is not stored yet.
+	inFlight map[string]*completion
+
 	// dropped counts tasks abandoned without ever being fetched. Without it, a
 	// channel that sheds load leaves its progress short of the expected total
 	// with nothing to explain the gap. It is an atomic rather than a mu-guarded
@@ -37,18 +43,28 @@ type Broker struct {
 // retries may temporarily exceed this limit by already in-flight work.
 func NewBroker(maxSize int) *Broker {
 	return &Broker{
-		seen:    make(map[string]struct{}),
-		maxSize: maxSize,
+		seen:     make(map[string]struct{}),
+		inFlight: make(map[string]*completion),
+		maxSize:  maxSize,
 	}
 }
 
-// Push enqueues a live task. Duplicate keys are ignored. If the queue is over
-// capacity, the lowest-priority live task is evicted.
-func (b *Broker) Push(t *SegmentTask) {
+// Push enqueues a live task and reports whether it did. It does not when the
+// same work is already queued or in flight, when the task has expired, or
+// when the queue is full of more urgent work; otherwise, over capacity, the
+// lowest-priority live task is evicted to make room.
+func (b *Broker) Push(t *SegmentTask) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	b.pushLocked(t)
+	key := t.Key()
+	if _, ok := b.seen[key]; ok {
+		return false
+	}
+	if _, ok := b.inFlight[key]; ok {
+		return false
+	}
+	return b.pushLocked(t)
 }
 
 // pushLocked reports whether this logical work remains queued.
@@ -56,6 +72,10 @@ func (b *Broker) pushLocked(t *SegmentTask) bool {
 	key := t.Key()
 	if _, ok := b.seen[key]; ok {
 		// Not a drop: the same work is already queued, so nothing is lost.
+		return true
+	}
+	if _, ok := b.inFlight[key]; ok {
+		// Nor is this: the same work is being fetched right now.
 		return true
 	}
 
@@ -109,6 +129,14 @@ func (b *Broker) PushPreserving(ctx context.Context, t *SegmentTask) bool {
 					break
 				}
 			}
+			b.mu.Unlock()
+			return true
+		}
+		if c, ok := b.inFlight[key]; ok {
+			// The same work is being fetched. Its task belongs to the attempt
+			// until it settles, so the upgrade is applied then, before any
+			// retry (completion.settle).
+			c.promote = t
 			b.mu.Unlock()
 			return true
 		}
@@ -179,7 +207,9 @@ func (b *Broker) Pop() *Attempt {
 	if result == nil {
 		return nil
 	}
-	return &Attempt{SegmentTask: result, completion: &completion{broker: b, task: result}}
+	c := &completion{broker: b, task: result}
+	b.inFlight[result.Key()] = c
+	return &Attempt{SegmentTask: result, completion: c}
 }
 
 // Idle reports that this broker has no work anywhere: nothing queued and
@@ -240,17 +270,10 @@ func (b *Broker) requeueLocked(t *SegmentTask, maxRetries int, backoff time.Dura
 	// was already admitted, so move it back to pending without shedding. New
 	// preserving admissions wait while pending >= maxSize; overflow is bounded
 	// by the work already in flight, not the size of the asset.
-	if _, exists := b.seen[t.Key()]; !exists {
-		b.seen[t.Key()] = struct{}{}
-		heap.Push(&b.pq, t)
-	} else {
-		for _, queued := range b.pq {
-			if queued.Key() == t.Key() {
-				promotePreserved(queued, t)
-				break
-			}
-		}
-	}
+	// No copy of it can be queued: while it was in flight, Push and
+	// PushPreserving took the same work as already admitted.
+	b.seen[t.Key()] = struct{}{}
+	heap.Push(&b.pq, t)
 	return true
 }
 
