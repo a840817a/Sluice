@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/a840817a/sluice/internal/queue"
 )
 
 // The channel's headers are read per request, so a rotation reaches the next
@@ -115,5 +117,38 @@ func TestOriginBoundsWhatItReads(t *testing.T) {
 	}
 	if _, err := o.GetRange(t.Context(), c, srv.URL, 5, 4, 0); err == nil {
 		t.Error("an inverted range was requested")
+	}
+}
+
+// The pipeline drops a segment on 410 Gone and backs off briefly on 425 Too
+// Early, so a fetch result must carry the origin's status for media and
+// init requests alike, ranged or not.
+func TestFetchResultCarriesTheOriginStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		code, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/"))
+		w.WriteHeader(code)
+	}))
+	defer srv.Close()
+	f := NewFetcher(nil, nil, 0, 0)
+	for _, code := range []int{http.StatusGone, http.StatusTooEarly} {
+		url := srv.URL + "/" + strconv.Itoa(code)
+		for name, task := range map[string]*queue.SegmentTask{
+			"segment":     {URL: url},
+			"ranged":      {URL: url, RangeStart: 0, RangeEnd: 9},
+			"init":        {URL: srv.URL + "/200", InitURL: url},
+			"ranged init": {URL: srv.URL + "/200", InitURL: url, InitRangeEnd: 9},
+		} {
+			isInit := strings.Contains(name, "init")
+			results := []Result{f.Fetch(t.Context(), task, isInit)}
+			if isInit {
+				// Ingest fetches inits through Pool.FetchInit.
+				results = append(results, f.fetchInit(t.Context(), task))
+			}
+			for _, r := range results {
+				if r.Err == nil || r.StatusCode != code {
+					t.Errorf("%s answered %d: StatusCode %d, err %v", name, code, r.StatusCode, r.Err)
+				}
+			}
+		}
 	}
 }
