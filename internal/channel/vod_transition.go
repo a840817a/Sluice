@@ -127,6 +127,7 @@ func (t *vodTransition) publish(finalMPD *imdp.ParsedMPD) vodOutcome {
 		rt.modes.Fail()
 		return vodFailed
 	}
+	warnings = append(warnings, a.periodWarnings...)
 	warnings = append(warnings, a.persistDASHManifests()...)
 	m.mu.RLock()
 	cb := m.onVODReady
@@ -146,6 +147,9 @@ func (t *vodTransition) publish(finalMPD *imdp.ParsedMPD) vodOutcome {
 		}
 	}
 	recordVODWarnings(rt, warnings)
+	if a.originMPD != nil {
+		rt.vodMPD.Store(a.originMPD)
+	}
 	rt.enterVOD(vodCI, true)
 	rt.configMu.Unlock()
 	slog.Info("channel VOD ready", "id", rt.ID)

@@ -77,6 +77,7 @@ type Runtime struct {
 	// HTTP handlers read them concurrently, so they are atomics rather than
 	// plain fields.
 	vodIndex          atomic.Pointer[index.ChannelIndex] // non-nil after a successful VOD transition
+	vodMPD            atomic.Pointer[imdp.ParsedMPD]     // DASH: what ParsedMPD returns once VOD (vodOriginMPD)
 	finalDuration     atomic.Int64                       // time.Duration: mediaPresentationDuration from finalMPD
 	staticIngestStart atomic.Pointer[time.Time]          // set when a static origin is first detected
 }
@@ -157,8 +158,12 @@ func (rt *Runtime) autoVODAllowed() bool {
 func (rt *Runtime) IsHLSSource() bool { return rt.hls != nil }
 
 // ParsedMPD returns the most recently fetched origin MPD, or nil for HLS
-// channels, which have no MPD at all.
+// channels, which have no MPD at all. Once the channel is VOD it is that MPD
+// with every period the VOD index holds put back (vodOriginMPD).
 func (rt *Runtime) ParsedMPD() *imdp.ParsedMPD {
+	if p := rt.vodMPD.Load(); p != nil {
+		return p
+	}
 	if rt.watcher == nil {
 		return nil
 	}

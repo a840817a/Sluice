@@ -38,6 +38,10 @@ type vodArtifacts struct {
 	snapshot index.Snapshot
 	rawMPD   []byte
 	keys     *hlskey.Cache
+	// originMPD is what the VOD serves its DASH manifests from, and
+	// periodWarnings name the periods it had to leave out (vodOriginMPD).
+	originMPD      *imdp.ParsedMPD
+	periodWarnings []string
 }
 
 // captureVODArtifacts freezes the candidate index the VOD transition just
@@ -50,14 +54,22 @@ func (m *Manager) captureVODArtifacts(rt *Runtime, candidate *index.ChannelIndex
 		return vodArtifacts{}, errors.New("missing VOD index")
 	}
 	sv := rt.servingAs(ModeVOD, candidate)
+	snapshot := candidate.Snapshot()
+	originMPD, periodWarnings := vodOriginMPD(sv.ParsedMPD, snapshot, m.gwCfg.Store.DataDir, rt.ID)
+	if originMPD != sv.ParsedMPD {
+		sv.ParsedMPD = originMPD
+		sv.Tracks = rt.tracks(originMPD)
+	}
 
 	a := vodArtifacts{
-		id:       rt.ID,
-		dir:      m.vodArtifactDir(rt.ID),
-		render:   m.presentations,
-		serving:  sv,
-		snapshot: candidate.Snapshot(),
-		rawMPD:   append([]byte(nil), rt.ParsedMPDBytes()...),
+		id:             rt.ID,
+		dir:            m.vodArtifactDir(rt.ID),
+		render:         m.presentations,
+		serving:        sv,
+		snapshot:       snapshot,
+		rawMPD:         append([]byte(nil), rt.ParsedMPDBytes()...),
+		originMPD:      originMPD,
+		periodWarnings: periodWarnings,
 	}
 	a.keys = rt.keys
 	return a, nil
@@ -173,4 +185,11 @@ func (m *Manager) restoreVODOriginMPD(rt *Runtime) {
 		return
 	}
 	rt.watcher.SetParsedMPD(p, raw)
+	if vod := rt.VODIndex(); vod != nil {
+		merged, warnings := vodOriginMPD(rt.watcher.ParsedMPD(), vod.Snapshot(), m.gwCfg.Store.DataDir, rt.ID)
+		for _, w := range warnings {
+			slog.Warn("VOD restore: "+w, "channel", rt.ID)
+		}
+		rt.vodMPD.Store(merged)
+	}
 }

@@ -137,12 +137,22 @@ func Generate(
 	xmlns := "urn:mpeg:dash:schema:mpd:2011"
 	m.XMLNS = &xmlns
 
+	// layout places a VOD's periods one after another (vodPeriodLayout); nil
+	// keeps every period at the start its origin gave it.
+	var layout map[string]time.Duration
+	var layoutEnd time.Duration
+	if cfg.VODMode {
+		layout, layoutEnd = vodPeriodLayout(orig, snap)
+	}
+
 	for _, origPeriod := range orig.Periods {
 		period := &gompeg.Period{}
 		if origPeriod.ID != "" {
 			period.ID = &origPeriod.ID
 		}
-		if origPeriod.Start >= 0 {
+		if start, ok := layout[origPeriod.ID]; ok {
+			period.Start = xsdDurationPtr(start)
+		} else if origPeriod.Start >= 0 {
 			period.Start = xsdDurationPtr(origPeriod.Start)
 		}
 		// In VOD mode the origin's static MPD may only reflect the last live
@@ -165,6 +175,10 @@ func Generate(
 		if len(period.AdaptationSets) > 0 {
 			m.Period = append(m.Period, period)
 		}
+	}
+
+	if layoutEnd > 0 {
+		m.MediaPresentationDuration = xsdDurationPtr(layoutEnd)
 	}
 
 	encoded, err := m.Encode()
@@ -643,19 +657,64 @@ func injectNamespaces(b []byte) []byte {
 	return []byte(s)
 }
 
+// vodPeriodLayout returns where each period of a multi-period VOD starts,
+// and where the last one ends.
+//
+// A VOD's periods can come from MPDs the origin served at different times
+// (ADR-0008), and a period an origin restart started usually carries the same
+// start as the one it ended. Each period therefore starts at the start its
+// origin gave it, or where the period before it ends if that is later, and
+// lasts as long as its stored segments span (periodSpan). With fewer than two
+// periods it returns nil: one period keeps its origin start, and vodDuration
+// already measures it.
+func vodPeriodLayout(orig *imdp.ParsedMPD, snap index.Snapshot) (map[string]time.Duration, time.Duration) {
+	if len(orig.Periods) < 2 {
+		return nil, 0
+	}
+	starts := make(map[string]time.Duration, len(orig.Periods))
+	var end time.Duration
+	for _, p := range orig.Periods {
+		start := max(p.Start, end)
+		starts[p.ID] = start
+		end = start + periodSpan(snap, p.ID)
+	}
+	return starts, end
+}
+
+// periodSpan is how long period periodID's stored segments last, measured
+// as vodDuration measures a whole channel.
+func periodSpan(snap index.Snapshot, periodID string) time.Duration {
+	return segmentSpan(func(fn func(index.RepRef, []index.SegmentState)) {
+		snap.ForEachRep(func(ref index.RepRef, published []index.SegmentState) {
+			if ref.PeriodID == periodID {
+				fn(ref, published)
+			}
+		})
+	})
+}
+
 // vodDuration computes total content duration from the channel index by
 // calculating (maxEndPTS - minStartPTS) / timescale per timescale group and
 // returning the longest span. This correctly handles live streams where PTS
 // values are large absolute timestamps — using maxEndPTS alone would yield
 // decades; the span gives the actual recording length.
 func vodDuration(orig *imdp.ParsedMPD, snap index.Snapshot) time.Duration {
+	if d := segmentSpan(snap.ForEachRep); d > 0 {
+		return d
+	}
+	return orig.MediaPresentationDuration
+}
+
+// segmentSpan is the longest span, per timescale, from the earliest start to
+// the latest end of the segments forEach visits, or 0 if none has timing.
+func segmentSpan(forEach func(func(index.RepRef, []index.SegmentState))) time.Duration {
 	type span struct {
 		start, end int64
 		set        bool
 	}
 	spans := make(map[uint32]*span)
 
-	snap.ForEachRep(func(_ index.RepRef, published []index.SegmentState) {
+	forEach(func(_ index.RepRef, published []index.SegmentState) {
 		for _, seg := range published {
 			if seg.Timescale == 0 || seg.EndPTS == 0 {
 				continue
@@ -681,10 +740,6 @@ func vodDuration(orig *imdp.ParsedMPD, snap index.Snapshot) time.Duration {
 				maxDurSec = d
 			}
 		}
-	}
-
-	if maxDurSec <= 0 {
-		return orig.MediaPresentationDuration
 	}
 	return time.Duration(maxDurSec * float64(time.Second))
 }

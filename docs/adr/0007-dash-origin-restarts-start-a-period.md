@@ -15,5 +15,5 @@ An origin period the watcher sees for the first time maps to its latest generati
 
 - A restart that keeps its numbering is caught only by the `availabilityStartTime` check, and only while the gateway runs: the previous value is not persisted. The same holds for a restart whose new numbering has already passed the old live edge by the time the gateway sees it, which needs the gateway to have been down for that long.
 - An origin whose own Period ID ends in `.r` and a number, such as "p0.r1", is read as a restart of "p0". No origin is known to name periods this way.
-- A DASH manifest lists only the periods of the origin's current MPD, so after a restart it serves the newest generation. The HLS playlist lists every period the gateway holds, in order, with a discontinuity between them.
+- A live DASH manifest lists only the periods of the origin's current MPD, so after a restart it serves the newest generation. A VOD names every period the gateway stored (ADR-0008). The HLS playlist lists every period the gateway holds, in order, with a discontinuity between them.
 - Static MPDs are never treated as restarted.

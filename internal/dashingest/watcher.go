@@ -17,6 +17,7 @@ import (
 	imdp "github.com/a840817a/sluice/internal/mpd"
 	"github.com/a840817a/sluice/internal/progress"
 	"github.com/a840817a/sluice/internal/queue"
+	"github.com/a840817a/sluice/internal/store"
 	"github.com/a840817a/sluice/internal/validate"
 )
 
@@ -47,7 +48,11 @@ type Watcher struct {
 	generations map[string]int
 	// lastAST is the availabilityStartTime of the last dynamic MPD processed.
 	lastAST time.Time
-	client  *http.Client
+	// savedPeriods maps each gateway period whose origin MPD this watcher has
+	// saved to the representations that copy lists (periodContents), so a
+	// period's copy is rewritten only when the origin changes what it carries.
+	savedPeriods map[string]string
+	client       *http.Client
 }
 
 // SetProgress attaches the channel's progress counters. Must be called before Run.
@@ -65,14 +70,15 @@ func NewWatcher(cfg config.Config, channelID string, headers fetch.Headers, ci *
 	lk, _ := snapshotTrackedSegments(channelID, ci)
 
 	return &Watcher{
-		cfg:         cfg,
-		ci:          ci,
-		broker:      broker,
-		channelID:   channelID,
-		headers:     headers,
-		lastKnown:   lk,
-		generations: make(map[string]int),
-		client:      &http.Client{Timeout: 10 * time.Second},
+		cfg:          cfg,
+		ci:           ci,
+		broker:       broker,
+		channelID:    channelID,
+		headers:      headers,
+		lastKnown:    lk,
+		generations:  make(map[string]int),
+		savedPeriods: make(map[string]string),
+		client:       &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
@@ -231,11 +237,14 @@ func (w *Watcher) processMPD(ctx context.Context, p *imdp.ParsedMPD) {
 	w.mu.Lock()
 	w.adoptPeriods(p, presentMax)
 	w.lastMPD = p
+	toSave := w.periodsToSave(p)
+	raw := w.lastMPDBytes
 	snapshot := make(map[string]uint64, len(w.lastKnown))
 	for k, v := range w.lastKnown {
 		snapshot[k] = v
 	}
 	w.mu.Unlock()
+	w.savePeriodMPDs(toSave, raw)
 
 	// Prefer MPD-level BaseURL over computed directory URL.
 	baseURL := mpdDirURL(w.cfg.Upstream.MPDURL)
@@ -334,6 +343,64 @@ func (w *Watcher) adoptPeriods(p *imdp.ParsedMPD, presentMax map[string]uint64) 
 				"channel", w.channelID, "origin_period", origin, "period", id)
 		}
 		period.ID = id
+	}
+}
+
+// periodsToSave returns the gateway periods of p whose saved origin MPD is
+// missing or lists other representations than p does, and records p's as
+// saved.
+//
+// Caller holds w.mu.
+func (w *Watcher) periodsToSave(p *imdp.ParsedMPD) map[string]string {
+	var out map[string]string
+	for _, period := range p.Periods {
+		contents := periodContents(period)
+		if w.savedPeriods[period.ID] == contents {
+			continue
+		}
+		w.savedPeriods[period.ID] = contents
+		if out == nil {
+			out = make(map[string]string)
+		}
+		out[period.ID] = contents
+	}
+	return out
+}
+
+// periodContents names the AdaptationSets and representations a period lists.
+func periodContents(period *imdp.ParsedPeriod) string {
+	var b strings.Builder
+	for _, as := range period.AdaptationSets {
+		b.WriteString(as.ID)
+		for _, rep := range as.Representations {
+			b.WriteString("/" + rep.ID)
+		}
+		b.WriteString(";")
+	}
+	return b.String()
+}
+
+// savePeriodMPDs writes raw, the origin MPD that lists periods, into each
+// period's directory. A VOD transition reads the copy back to describe a
+// period the origin's last MPD no longer lists: one that rolled off it, or
+// the gateway period an origin restart ended (ADR-0008).
+//
+// A failed write is logged and retried on the next MPD; the copy is a
+// fallback for the VOD manifests, not something ingest depends on.
+func (w *Watcher) savePeriodMPDs(periods map[string]string, raw []byte) {
+	if len(periods) == 0 || len(raw) == 0 || w.cfg.Store.DataDir == "" {
+		return
+	}
+	for id, contents := range periods {
+		path := store.PeriodOriginMPDPath(w.cfg.Store.DataDir, w.channelID, id)
+		if err := store.Write(path, raw); err != nil {
+			slog.Warn("save period origin MPD failed", "channel", w.channelID, "period", id, "err", err)
+			w.mu.Lock()
+			if w.savedPeriods[id] == contents {
+				delete(w.savedPeriods, id)
+			}
+			w.mu.Unlock()
+		}
 	}
 }
 

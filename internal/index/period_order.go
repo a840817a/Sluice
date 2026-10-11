@@ -92,6 +92,13 @@ func RestartGeneration(id, originID string) (int, bool) {
 	return gen, base == originID
 }
 
+// OriginPeriodID returns the origin's Period ID behind gateway period id: id
+// itself, unless RestartPeriodID started it after an origin restart.
+func OriginPeriodID(id string) string {
+	base, _ := splitRestartPeriodID(id)
+	return base
+}
+
 // comparePeriodIDs orders two period IDs with no document to go by: decimal
 // numbers numerically and before anything else, the rest as strings.
 func comparePeriodIDs(a, b string) int {

@@ -71,6 +71,17 @@ func PeriodsDir(dataDir, channelID string) string {
 	return filepath.Join(dataDir, channelID, periodsDirName)
 }
 
+// OriginMPDFileName is the copy of the origin MPD a period directory keeps.
+const OriginMPDFileName = "origin.mpd"
+
+// PeriodOriginMPDPath is where a DASH channel keeps the last origin MPD that
+// listed period periodID, so the period can still be described once the
+// origin's MPD no longer lists it. ScanChannel skips it, as it skips every
+// plain file in a period directory.
+func PeriodOriginMPDPath(dataDir, channelID, periodID string) string {
+	return filepath.Join(PeriodsDir(dataDir, channelID), pathseg.Encode(periodID), OriginMPDFileName)
+}
+
 // asDirName returns the directory name that combines mediaType and asID,
 // e.g. "video_0", "audio_1", "audio_2". Using a compound name avoids
 // ambiguity between asID ("0") and repID ("720p") when rebuilding from disk.
