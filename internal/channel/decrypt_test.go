@@ -3,9 +3,11 @@ package channel
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/a840817a/sluice/internal/cenc"
+	gocfg "github.com/a840817a/sluice/internal/config"
 	"github.com/a840817a/sluice/internal/dashdecrypt"
 	imdp "github.com/a840817a/sluice/internal/mpd"
 	"github.com/a840817a/sluice/internal/presentation"
@@ -115,5 +117,33 @@ func TestParsedMPDUnchangedWithoutRegistry(t *testing.T) {
 	p := parseFixtureMPD(t)
 	if got := (&Runtime{}).withoutDecryptedCP(p); got != p {
 		t.Error("a passthrough channel's MPD was copied")
+	}
+}
+
+// A channel whose interrupted conversion cannot be recovered without losing
+// a copy of an AdaptationSet does not start: ingest would write into the
+// live directory and the copy moved aside would then be at risk.
+func TestStartFailsWhenStagingUnrecoverable(t *testing.T) {
+	dataDir := t.TempDir()
+	channelDir := filepath.Join(dataDir, "c")
+	for _, dir := range []string{
+		filepath.Join(channelDir, "periods", "p0", "audio_1", "a0"),
+		filepath.Join(channelDir, dashdecrypt.StagingDirName, "p0", "audio_1.old", "a0"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := newTestManager(t, gocfg.Config{Store: gocfg.StoreConfig{DataDir: dataDir}})
+	rt, err := m.startForTest(context.Background(), "c", Config{
+		MPDURL: "http://127.0.0.1:1/manifest.mpd", KeyMode: KeyModeDecrypt,
+		ContentKeys: []string{"10101010101010101010101010101010:00112233445566778899aabbccddeeff"}, Enabled: true,
+	})
+	if err == nil || rt != nil || m.Get("c") != nil {
+		m.StopAll()
+		t.Fatalf("start = %v, %v; want an error and no running channel", rt, err)
+	}
+	if _, err := os.Stat(filepath.Join(channelDir, dashdecrypt.StagingDirName, "p0", "audio_1.old")); err != nil {
+		t.Errorf("the copy moved aside is gone: %v", err)
 	}
 }

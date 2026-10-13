@@ -109,6 +109,7 @@ func (g *Generator) DASH(ch Channel, snap index.Snapshot) ([]byte, error) {
 		FinalDuration:               ch.FinalDuration,
 		StaticIngesting:             ch.StaticIngesting,
 		StaticIngestStart:           ch.StaticIngestStart,
+		URLVersion:                  ch.URLVersion,
 	}
 	return manifest.Generate(p, snap, cfg)
 }

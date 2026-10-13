@@ -54,6 +54,7 @@ func (g *Generator) Media(ch Channel, repID string) ([]byte, error) {
 		// pointing at this gateway's proxy. Decrypt-on-ingest channels store
 		// cleartext and carry no key material, so nothing is emitted for them.
 		KeyProxyBase: keyProxyURL(g.baseURL, ch.ID),
+		URLVersion:   ch.URLVersion,
 	}), nil
 }
 

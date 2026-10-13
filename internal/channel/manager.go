@@ -16,9 +16,11 @@ import (
 	"github.com/a840817a/sluice/internal/hlskey"
 	"github.com/a840817a/sluice/internal/index"
 	imdp "github.com/a840817a/sluice/internal/mpd"
+	"github.com/a840817a/sluice/internal/pipeline"
 	"github.com/a840817a/sluice/internal/presentation"
 	"github.com/a840817a/sluice/internal/progress"
 	"github.com/a840817a/sluice/internal/queue"
+	"github.com/a840817a/sluice/internal/store"
 )
 
 // Runtime holds the live state for one running channel.
@@ -33,6 +35,13 @@ type Runtime struct {
 	// every other channel. ParsedMPD reads it through decryptView.
 	decrypt     *dashdecrypt.Registry
 	decryptView atomic.Pointer[decryptedView]
+	// processor stores the channel's media while it ingests; nil for a
+	// channel started in VOD, which ingests nothing.
+	processor *pipeline.Processor
+	// mediaMu is held by whoever rewrites stored media while the processor
+	// is not running: the VOD transition from its rebuild to its exports,
+	// and the final phase of a conversion (exclusiveMedia).
+	mediaMu sync.Mutex
 	// keys caches AES-128 content keys for HLS channels; nil for DASH channels.
 	// Other packages reach what these three know through Source, Serving's
 	// Tracks and ResolveKey, never directly.
@@ -282,6 +291,14 @@ func (m *Manager) start(parentCtx context.Context, id string, cfg Config) (*Runt
 	}
 	m.mu.RUnlock()
 
+	// A conversion a crash interrupted is finished or undone before the
+	// index is rebuilt, so it sees whole AdaptationSet directories. One that
+	// cannot be keeps the channel down: ingest would write into a directory
+	// whose other copy recovery has not dared to remove.
+	if err := dashdecrypt.RecoverStaging(store.ChannelDir(m.gwCfg.Store.DataDir, id)); err != nil {
+		return nil, fmt.Errorf("recover interrupted decryption: %w", err)
+	}
+
 	// Consume the mark left by RestoreToLive. Without it the restore is futile:
 	// the origin is normally still finished, so the source would complete
 	// cleanly again within seconds and put the channel straight back into VOD.
@@ -332,8 +349,13 @@ func (m *Manager) start(parentCtx context.Context, id string, cfg Config) (*Runt
 		m.restoreVODState(rt, id)
 	}
 
+	if !cfg.IsVOD {
+		rt.processor = pl.processor
+	}
+
 	m.mu.Lock()
 	m.runtimes[id] = rt
+	m.launchConversions(lifecycleCtx, rt)
 
 	// VOD channels are fully served from disk; no ingest goroutines needed.
 	if cfg.IsVOD {

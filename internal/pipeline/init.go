@@ -57,6 +57,15 @@ type initGate struct {
 	// whose deadline has passed.
 	now  func() time.Time
 	tick <-chan time.Time
+	// exclusive delivers work to run between deliveries (Processor.Exclusive).
+	exclusive <-chan exclusiveWork
+}
+
+// exclusiveWork is a function to run on the gate's goroutine, and where its
+// result goes.
+type exclusiveWork struct {
+	fn   func() error
+	done chan<- error
 }
 
 // run reads results until they close or ctx ends, and returns only after
@@ -150,6 +159,12 @@ func (g *initGate) run(ctx context.Context, results <-chan fetch.Result) {
 			}
 		case <-g.tick:
 			flush()
+		case work := <-g.exclusive:
+			if ctx.Err() != nil {
+				work.done <- ErrStopped
+				continue
+			}
+			work.done <- work.fn()
 		case res, ok := <-in:
 			if !ok {
 				return

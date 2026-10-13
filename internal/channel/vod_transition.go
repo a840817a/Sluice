@@ -87,6 +87,11 @@ func (t *vodTransition) publish(finalMPD *imdp.ParsedMPD) vodOutcome {
 		rt.finalDuration.Store(int64(finalMPD.MediaPresentationDuration))
 	}
 
+	// A conversion of stored media waits until the exports are written, so
+	// the rebuild and every artifact see each AdaptationSet whole.
+	rt.mediaMu.Lock()
+	defer rt.mediaMu.Unlock()
+
 	// Every exit below records this attempt's warnings.
 	warnings := m.vod.checkpointMedia(rt)
 

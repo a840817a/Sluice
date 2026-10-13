@@ -89,8 +89,9 @@ func (m *Manager) AddContentKeys(ctx context.Context, id string, keys []string) 
 }
 
 // onKeysAdded tells the running channel that keys were added to its
-// configuration. AdaptationSets decided from now on can use them; one
-// already stored encrypted stays so.
+// configuration. AdaptationSets decided from now on can use them, and the
+// channel's conversion goroutine converts those already stored encrypted
+// that the keys complete (runConversions).
 func (rt *Runtime) onKeysAdded(keys []cenc.Key) {
 	if rt.decrypt != nil {
 		rt.decrypt.AddKeys(keys)

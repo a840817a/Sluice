@@ -59,6 +59,17 @@ func InitTemplatePath(channelID, periodID, repID string) string {
 	return fmt.Sprintf("v1/channels/%s/init/%s/%s.mp4", channelID, pathseg.Encode(periodID), repID)
 }
 
+// Versioned returns u with version v as its query, or u itself for version
+// 0. The segment and init handlers ignore the query: it only gives a
+// representation whose stored files were rewritten URLs that no cache has
+// seen, so a player cannot be served the bytes it replaced.
+func Versioned(u string, v uint64) string {
+	if v == 0 {
+		return u
+	}
+	return u + "?c=" + strconv.FormatUint(v, 10)
+}
+
 // --- Absolute URLs ---------------------------------------------------------
 //
 // base is a configured gateway base URL; each function normalizes it, so

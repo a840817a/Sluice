@@ -107,14 +107,14 @@ func parseASDirName(name string) (mediaType, asID string, ok bool) {
 	if !ok {
 		return "", "", false
 	}
-	return mediaType, idFromDir(enc), true
+	return mediaType, IDFromDirName(enc), true
 }
 
-// idFromDir returns the ID a directory name stands for. A name the encoding
-// never produces is one written before the encoding existed (ADR-0006), when
-// the raw ID was the directory name; it is read back as that ID so a channel
-// stored then still rebuilds.
-func idFromDir(name string) string {
+// IDFromDirName returns the ID a directory name stands for. A name the
+// encoding never produces is one written before the encoding existed
+// (ADR-0006), when the raw ID was the directory name; it is read back as that
+// ID so a channel stored then still rebuilds.
+func IDFromDirName(name string) string {
 	if id, ok := pathseg.Decode(name); ok {
 		return id
 	}
@@ -204,7 +204,7 @@ func ScanChannel(dataDir, channelID string) ([]PeriodDir, error) {
 		if !pe.IsDir() {
 			continue
 		}
-		period := PeriodDir{ID: idFromDir(pe.Name())}
+		period := PeriodDir{ID: IDFromDirName(pe.Name())}
 		periodPath := filepath.Join(base, pe.Name())
 		asEntries, err := os.ReadDir(periodPath)
 		if err != nil {
@@ -230,7 +230,7 @@ func ScanChannel(dataDir, channelID string) ([]PeriodDir, error) {
 					loc := RepLocation{
 						DataDir: dataDir, ChannelID: channelID,
 						PeriodID: period.ID, MediaType: mediaType, ASID: asID,
-						RepID: idFromDir(re.Name()),
+						RepID: IDFromDirName(re.Name()),
 					}
 					if actual := filepath.Join(asPath, re.Name()); actual != loc.Dir() {
 						loc.scannedDir = actual

@@ -173,8 +173,12 @@ func (pr *initPreparer) prepareOnce(ctx context.Context, task *queue.SegmentTask
 // finishInit persists data, the init of task's representation as the origin
 // serves it, at path. On a DASH decrypt channel the registry first decides
 // what to store: data, or its clear form. Every other channel stores data.
+//
+// The init is stored under the registry's HoldInit, so a conversion of the
+// AdaptationSet cannot swap its directory between the decision and the write.
 func (pr *initPreparer) finishInit(ctx context.Context, task *queue.SegmentTask, path string, data []byte) (uint32, error) {
 	if pr.decrypt != nil {
+		defer pr.decrypt.HoldInit(dashdecrypt.ASKey{PeriodID: task.PeriodID, ASID: task.ASID})()
 		var err error
 		data, err = pr.decrypt.PrepareInit(ctx, task, data, pr.asHeld(task), pr.fetchSibling(task))
 		if err != nil {

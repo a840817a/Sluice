@@ -51,6 +51,9 @@ type GeneratorConfig struct {
 	// StaticIngestStart is the wall-clock time when static ingestion began.
 	// Used as AvailabilityStartTime so clients have a stable time anchor.
 	StaticIngestStart time.Time
+	// URLVersion is the version (gwurl.Versioned) of the segment and init
+	// URLs of a period's representation. Nil versions none.
+	URLVersion func(periodID, repID string) uint64
 	// Now is the wall clock used for publishTime. The zero value means
 	// time.Now().UTC(), which is what every production caller wants; tests set
 	// it so that generating the same input twice yields identical bytes.
@@ -274,8 +277,7 @@ func buildRepresentation(
 
 	// Build segment template pointing to gateway paths. The URL shape, including
 	// why DASH advertises zero-padded segment numbers, lives in gwurl.
-	mediaPath := gwurl.SegmentTemplatePath(cfg.ChannelID, origPeriod.ID, origRep.ID)
-	initPath := gwurl.InitTemplatePath(cfg.ChannelID, origPeriod.ID, origRep.ID)
+	mediaPath, initPath := templatePaths(cfg, origPeriod.ID, origRep.ID)
 
 	st := &gompeg.SegmentTemplate{
 		Media:          &mediaPath,
@@ -332,6 +334,18 @@ func buildRepresentation(
 	return rep, st, nil
 }
 
+// templatePaths are the SegmentTemplate media and initialization attributes
+// of a period's representation.
+func templatePaths(cfg GeneratorConfig, periodID, repID string) (media, init string) {
+	media = gwurl.SegmentTemplatePath(cfg.ChannelID, periodID, repID)
+	init = gwurl.InitTemplatePath(cfg.ChannelID, periodID, repID)
+	if cfg.URLVersion != nil {
+		v := cfg.URLVersion(periodID, repID)
+		media, init = gwurl.Versioned(media, v), gwurl.Versioned(init, v)
+	}
+	return media, init
+}
+
 // buildRepFromSegmentList synthesises a gateway SegmentTemplate for a
 // representation whose origin uses SegmentList. The segments are already
 // stored on disk under the normal numbered layout, so the output template
@@ -354,8 +368,7 @@ func buildRepFromSegmentList(
 		return nil, nil, nil // not ready yet
 	}
 
-	mediaPath := gwurl.SegmentTemplatePath(cfg.ChannelID, origPeriod.ID, origRep.ID)
-	initPath := gwurl.InitTemplatePath(cfg.ChannelID, origPeriod.ID, origRep.ID)
+	mediaPath, initPath := templatePaths(cfg, origPeriod.ID, origRep.ID)
 	st := &gompeg.SegmentTemplate{
 		Media:          &mediaPath,
 		Initialization: &initPath,

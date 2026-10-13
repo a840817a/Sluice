@@ -338,7 +338,7 @@ Optional fields:
 | `title` | Display name in the admin UI |
 | `source_type` | `dash` (default) or `hls` |
 | `key_mode` | `passthrough` (default) or `decrypt`. Set at creation only; an edit that names a different mode is rejected with 400. The old name `hls_key_mode` is still accepted and is rewritten to `key_mode` on the next save. For DASH, `decrypt` decrypts `cenc`/`cbcs` AdaptationSets whose every KID has a content key; any other stays encrypted, and `decrypt_warnings` in the channel status says why |
-| `content_keys` | `["<32 hex KID>:<32 hex key>", …]`; DASH with `key_mode` `decrypt` only, at least one, one per KID. Admin responses show `content_key_ids` instead of the keys. An edit never changes them; add more with `POST /admin/api/channels/{id}/keys` and `{"content_keys":[…]}` (409 if a KID is already stored, nothing is added) |
+| `content_keys` | `["<32 hex KID>:<32 hex key>", …]`; DASH with `key_mode` `decrypt` only, at least one, one per KID. Admin responses show `content_key_ids` instead of the keys. An edit never changes them; add more with `POST /admin/api/channels/{id}/keys` and `{"content_keys":[…]}` (409 if a KID is already stored, nothing is added). An AdaptationSet already stored encrypted that the new keys complete is converted to clear in the background, live or VOD; its segment and init URLs then carry `?c=1` so no cache serves the old ciphertext, and a player that loaded it encrypted must reload |
 | `playready_license_url`, `widevine_license_url` | License servers |
 | `enable_playready`, `enable_widevine` | Both default to true |
 | `fetch_headers` | `[{"name":…,"value":…}]` injected into every video request: manifest, playlist, segment, init and AES key |

@@ -62,6 +62,17 @@ type MediaOptions struct {
 	// publishing the key server's URL instead would hand clients a credential
 	// the gateway was meant to broker.
 	KeyProxyBase string
+	// URLVersion is the version (gwurl.Versioned) of the representation's
+	// segment and init URLs in a period. Nil versions none.
+	URLVersion func(periodID, repID string) uint64
+}
+
+// version is o's URL version for period periodID.
+func (o MediaOptions) version(periodID string) uint64 {
+	if o.URLVersion == nil {
+		return 0
+	}
+	return o.URLVersion(periodID, o.RepID)
 }
 
 // playlistEntry is one segment as the playlist numbers it.
@@ -262,11 +273,12 @@ func Media(periods []index.TimelinePeriod, o MediaOptions) []byte {
 	lines := segmentLines{
 		extinf: "#EXTINF:%.6f,\n",
 		uri: func(e playlistEntry) (string, error) {
-			return gwurl.SegmentURL(base, o.ChannelID, periods[e.periodIdx].PeriodID, o.RepID, e.seg.SegNo, segmentExt(e.seg)), nil
+			p := periods[e.periodIdx]
+			return gwurl.Versioned(gwurl.SegmentURL(base, o.ChannelID, p.PeriodID, o.RepID, e.seg.SegNo, segmentExt(e.seg)), o.version(p.PeriodID)), nil
 		},
 		initURI: func(e playlistEntry) (string, error) {
 			if p := periods[e.periodIdx]; p.InitPath != "" {
-				return gwurl.InitURL(base, o.ChannelID, p.PeriodID, o.RepID), nil
+				return gwurl.Versioned(gwurl.InitURL(base, o.ChannelID, p.PeriodID, o.RepID), o.version(p.PeriodID)), nil
 			}
 			return "", nil
 		},

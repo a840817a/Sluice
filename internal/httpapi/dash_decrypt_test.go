@@ -355,26 +355,27 @@ func TestDASHDecryptMissingKeyKeepsAdaptationSetEncrypted(t *testing.T) {
 	}
 }
 
+// liveCENC makes the fixtures' MPD a live one that lists the first two
+// segments of each track, or all of them.
+func liveCENC(firstTwo bool) func(string) string {
+	return func(mpd string) string {
+		mpd = strings.Replace(mpd, `type="static"`, `type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z" `+
+			`minimumUpdatePeriod="PT1S" timeShiftBufferDepth="PT1H"`, 1)
+		mpd = strings.Replace(mpd, ` mediaPresentationDuration="PT2.000S"`, "", 1)
+		if firstTwo {
+			mpd = strings.Replace(mpd, `<S d="6144" r="3"/>`, `<S d="6144" r="1"/>`, 1)
+			mpd = strings.Replace(mpd, `<S d="23552"/>
+          <S d="24576"/>
+          <S d="768"/>`, "", 1)
+		}
+		return mpd
+	}
+}
+
 // A restarted channel reads back which AdaptationSets it decrypted, so the
 // segments it ingests after the restart are decrypted too.
 func TestDASHDecryptSurvivesRestart(t *testing.T) {
-	// A live origin that first lists the first two segments of each track,
-	// then all of them.
-	live := func(firstTwo bool) func(string) string {
-		return func(mpd string) string {
-			mpd = strings.Replace(mpd, `type="static"`, `type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z" `+
-				`minimumUpdatePeriod="PT1S" timeShiftBufferDepth="PT1H"`, 1)
-			mpd = strings.Replace(mpd, ` mediaPresentationDuration="PT2.000S"`, "", 1)
-			if firstTwo {
-				mpd = strings.Replace(mpd, `<S d="6144" r="3"/>`, `<S d="6144" r="1"/>`, 1)
-				mpd = strings.Replace(mpd, `<S d="23552"/>
-          <S d="24576"/>
-          <S d="768"/>`, "", 1)
-			}
-			return mpd
-		}
-	}
-	o := startCENCOrigin(t, "cenc", live(true))
+	o := startCENCOrigin(t, "cenc", liveCENC(true))
 	dataDir := t.TempDir()
 	mgr, h := newCENCChannel(t, o, dataDir, cencVideoKey, cencAudioKey)
 
@@ -401,7 +402,7 @@ func TestDASHDecryptSurvivesRestart(t *testing.T) {
 		t.Fatalf("decrypted AdaptationSet has no %s: %v", dashdecrypt.StateFileName, err)
 	}
 
-	o.setEdit(live(false))
+	o.setEdit(liveCENC(false))
 	if err := mgr.Restart(context.Background(), "c"); err != nil {
 		t.Fatal(err)
 	}

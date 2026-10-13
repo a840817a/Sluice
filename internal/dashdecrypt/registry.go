@@ -11,7 +11,9 @@
 // The decision is stored in the AdaptationSet's directory as decrypt.json,
 // which holds each encrypted representation's cenc.TrackProtection and never
 // a key. The file exists exactly when the AdaptationSet is decrypted: it is
-// written before the first clear init, and read back when the channel starts.
+// written before the first clear init, or, for an AdaptationSet first stored
+// as ciphertext, swapped in with the files Convert rewrote once its keys
+// arrived. It is read back when the channel starts.
 //
 // Content keys never appear in a log line, a warning or an error.
 package dashdecrypt
@@ -53,6 +55,10 @@ type asState struct {
 	// Reps holds the protection of each encrypted representation. A clear
 	// representation of a decrypted AdaptationSet has no entry.
 	Reps map[string]cenc.TrackProtection `json:"reps"`
+	// URLVersion is set when a conversion rewrote files players could have
+	// cached as ciphertext (Registry.URLVersion), and 0 for an AdaptationSet
+	// decrypted from its first file.
+	URLVersion uint64 `json:"url_version,omitempty"`
 }
 
 // FetchInit fetches the init segment ref locates from the origin.
@@ -77,9 +83,17 @@ type Registry struct {
 	warnings map[warningKey]Warning
 	// seen is every KID an init of this channel has carried.
 	seen map[cenc.KID]bool
+	// failed holds the AdaptationSets whose conversion failed since keys
+	// were last added; Convertible leaves them out.
+	failed map[ASKey]bool
+	// wake is Wake's channel.
+	wake chan struct{}
 
 	locksMu sync.Mutex
 	locks   map[ASKey]*sync.Mutex
+	// initLocks keep a conversion's swap from overlapping the storing of an
+	// init of the same AdaptationSet (HoldInit).
+	initLocks map[ASKey]*sync.RWMutex
 }
 
 type warningKey struct {
@@ -98,7 +112,10 @@ func NewRegistry(dataDir, channelID string, keys cenc.KeySet) *Registry {
 		kept:      make(map[ASKey]bool),
 		warnings:  make(map[warningKey]Warning),
 		seen:      make(map[cenc.KID]bool),
+		failed:    make(map[ASKey]bool),
+		wake:      make(chan struct{}, 1),
 		locks:     make(map[ASKey]*sync.Mutex),
+		initLocks: make(map[ASKey]*sync.RWMutex),
 	}
 	for kid, k := range keys {
 		r.keys[kid] = k
@@ -107,13 +124,17 @@ func NewRegistry(dataDir, channelID string, keys cenc.KeySet) *Registry {
 }
 
 // AddKeys gives the registry more keys. AdaptationSets decided from now on
-// can use them; one already stored as ciphertext stays so.
+// can use them, and one already stored as ciphertext can be converted
+// (Convertible), including one whose conversion failed before; Wake says
+// so.
 func (r *Registry) AddKeys(keys []cenc.Key) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	for _, k := range keys {
 		r.keys[k.KID] = k.Value
 	}
+	clear(r.failed)
+	r.mu.Unlock()
+	r.nudge()
 }
 
 // Generation identifies the current set of decrypted AdaptationSets.
@@ -156,6 +177,35 @@ func (r *Registry) ASLock(as ASKey) func() {
 	r.locksMu.Unlock()
 	l.Lock()
 	return l.Unlock
+}
+
+// HoldInit keeps a conversion of as from swapping its directory until the
+// returned function is called. Whoever stores an init of as holds it from
+// PrepareInit until the init is written, so the init lands in the directory
+// the decision was made for.
+func (r *Registry) HoldInit(as ASKey) func() {
+	l := r.initLock(as)
+	l.RLock()
+	return l.RUnlock
+}
+
+// excludeInits waits for every HoldInit of as to end and holds off new ones
+// until the returned function is called.
+func (r *Registry) excludeInits(as ASKey) func() {
+	l := r.initLock(as)
+	l.Lock()
+	return l.Unlock
+}
+
+func (r *Registry) initLock(as ASKey) *sync.RWMutex {
+	r.locksMu.Lock()
+	defer r.locksMu.Unlock()
+	l := r.initLocks[as]
+	if l == nil {
+		l = new(sync.RWMutex)
+		r.initLocks[as] = l
+	}
+	return l
 }
 
 // Load reads the decision of every AdaptationSet stored on disk: a
@@ -261,7 +311,8 @@ func (r *Registry) reclearInit(path string) {
 //     and fails otherwise, so the AdaptationSet never mixes the two;
 //   - one that already stores media or inits (held is true, or a
 //     representation directory of it is not empty), or that this run
-//     already decided to keep, gets orig;
+//     already decided to keep, gets orig, and Wake delivers when orig's
+//     KID has a key, since the stored AdaptationSet may be convertible;
 //   - a new one gets every representation's init (fetch, for those of
 //     task.ASInits other than task's own) and is decrypted when every KID has
 //     a key and every scheme is supported: decrypt.json is written before the
@@ -286,6 +337,13 @@ func (r *Registry) PrepareInit(ctx context.Context, task *queue.SegmentTask, ori
 	loc := location(r.dataDir, r.channelID, task)
 	if kept || held || repDirsHoldFiles(loc.ASDir()) {
 		r.keep(key, []repInit{{repID: task.RepID, data: orig}})
+		// Stored as ciphertext, but perhaps convertible now.
+		r.mu.RLock()
+		d := decide([]repInit{{repID: task.RepID, data: orig}}, r.keys)
+		r.mu.RUnlock()
+		if d.warning == nil && len(d.reps) > 0 {
+			r.nudge()
+		}
 		return orig, nil
 	}
 
@@ -351,7 +409,7 @@ func (r *Registry) addRep(key ASKey, task *queue.SegmentTask, st asState, orig [
 	if !ok {
 		return nil // a clear representation needs no entry
 	}
-	next := asState{Reps: make(map[string]cenc.TrackProtection, len(st.Reps)+1)}
+	next := asState{Reps: make(map[string]cenc.TrackProtection, len(st.Reps)+1), URLVersion: st.URLVersion}
 	for id, p := range st.Reps {
 		next.Reps[id] = p
 	}

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -78,6 +79,30 @@ type Processor struct {
 	// prog records ingest progress for the admin UI. Nil is valid and means
 	// "record nothing" — every Counters method tolerates a nil receiver.
 	prog *progress.Counters
+	// exclusive carries Exclusive's work to Run, and stopped is closed when
+	// Run returns.
+	exclusive chan exclusiveWork
+	stopped   chan struct{}
+}
+
+// ErrStopped is Exclusive's error once the processor has stopped.
+var ErrStopped = errors.New("processor stopped")
+
+// Exclusive runs fn on the goroutine that stores and expires media, between
+// two segments, so nothing the processor writes or removes changes while it
+// runs; init preparation is not covered. It returns fn's error, ErrStopped
+// once Run has returned or is returning, or ctx's error if ctx ends before
+// fn starts. Before Run starts it waits.
+func (p *Processor) Exclusive(ctx context.Context, fn func() error) error {
+	done := make(chan error, 1)
+	select {
+	case p.exclusive <- exclusiveWork{fn: fn, done: done}:
+		return <-done
+	case <-p.stopped:
+		return ErrStopped
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // SetProgress attaches the channel's progress counters. Must be called before Run.
@@ -98,6 +123,8 @@ func NewProcessor(cfg config.Config, channelID string, ci *index.ChannelIndex, b
 		inits:      inits,
 		warmedKeys: make(map[string]bool),
 		keyCtx:     context.Background(),
+		exclusive:  make(chan exclusiveWork),
+		stopped:    make(chan struct{}),
 	}
 }
 
@@ -120,6 +147,7 @@ func (p *Processor) SetDecryptor(r *dashdecrypt.Registry) { p.inits.decrypt = r 
 func (p *Processor) Run(ctx context.Context, pool *fetch.Pool) {
 	p.keyCtx = ctx
 	p.inits.download = pool.Fetcher()
+	defer close(p.stopped)
 	defer p.warmWG.Wait()
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
@@ -135,8 +163,9 @@ func (p *Processor) Run(ctx context.Context, pool *fetch.Pool) {
 			p.prog.RecordSegmentError(StageInit, err.Error(), res.Task.RepID, res.Task.SegNo)
 			slog.Warn("segment abandoned: init is not ready", "rep", res.Task.RepID, "seg", res.Task.SegNo, "err", err)
 		},
-		now:  time.Now,
-		tick: ticker.C,
+		now:       time.Now,
+		tick:      ticker.C,
+		exclusive: p.exclusive,
 	}
 	gate.run(ctx, pool.Results())
 }
