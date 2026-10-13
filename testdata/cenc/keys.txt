@@ -1,0 +1,4 @@
+# Test keys for the fixtures in this directory. Not secret: never use them for real content.
+# kid:key (32 hex : 32 hex), the form content_keys takes.
+10101010101010101010101010101010:00112233445566778899aabbccddeeff
+20202020202020202020202020202020:ffeeddccbbaa99887766554433221100
