@@ -471,6 +471,10 @@ func (w *Watcher) discoverSegmentBaseTasks(
 
 		for _, as := range period.AdaptationSets {
 			asBase := resolveBaseURL(periodBase, as.BaseURL)
+			// As in DiscoverTasks, every task of the AdaptationSet locates
+			// the init of each of its representations.
+			asStart := len(tasks)
+			var asInits []queue.InitRef
 
 			for _, rep := range as.Representations {
 				sb := rep.EffectiveSegmentBase(as)
@@ -538,6 +542,9 @@ func (w *Watcher) discoverSegmentBaseTasks(
 					}
 				}
 
+				asInits = append(asInits, queue.InitRef{
+					RepID: rep.ID, InitURL: initURL, InitRangeStart: initRangeStart, InitRangeEnd: initRangeEnd,
+				})
 				rk := repKey(w.channelID, period.ID, as.ID, rep.ID)
 				for i, entry := range entries {
 					segNo := uint64(i + 1) // 1-based segment numbering
@@ -568,6 +575,9 @@ func (w *Watcher) discoverSegmentBaseTasks(
 						Timescale:      timescale,
 					})
 				}
+			}
+			for _, t := range tasks[asStart:] {
+				t.ASInits = asInits
 			}
 		}
 	}

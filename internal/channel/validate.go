@@ -8,11 +8,6 @@ import (
 	"github.com/a840817a/sluice/internal/cenc"
 )
 
-// dashDecryptEnabled gates DASH channels in decrypt mode until the ingest
-// pipeline can decrypt them. Until then such a channel would store ciphertext
-// and claim it was cleartext.
-var dashDecryptEnabled = false
-
 // Validate runs the checks every write path applies to a channel config.
 //
 // These are domain invariants, not HTTP concerns: what counts as a usable
@@ -23,9 +18,6 @@ var dashDecryptEnabled = false
 func (c Config) Validate() error {
 	if err := c.ValidateUpdate(); err != nil {
 		return err
-	}
-	if c.canonicalSourceType() == SourceDASH && c.canonicalKeyMode() == KeyModeDecrypt && !dashDecryptEnabled {
-		return errors.New("DASH decrypt is not supported yet")
 	}
 	return c.validateContentKeys()
 }

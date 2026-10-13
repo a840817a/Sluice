@@ -20,46 +20,38 @@ func TestValidateContentKeyRules(t *testing.T) {
 	cases := []struct {
 		name    string
 		cfg     Config
-		gate    bool   // dashDecryptEnabled during the case
 		wantErr string // substring; "" means accepted
 	}{
-		{"dash decrypt is gated", Config{MPDURL: url, KeyMode: KeyModeDecrypt, ContentKeys: []string{testKeyA}},
-			false, "DASH decrypt is not supported yet"},
-		{"empty source type counts as dash and is gated", Config{MPDURL: url, KeyMode: KeyModeDecrypt},
-			false, "DASH decrypt is not supported yet"},
+		{"empty source type counts as dash", Config{MPDURL: url, KeyMode: KeyModeDecrypt},
+			"needs at least one key"},
 		{"dash decrypt with a key", Config{MPDURL: url, KeyMode: KeyModeDecrypt, ContentKeys: []string{testKeyA}},
-			true, ""},
+			""},
 		{"dash decrypt with two keys", Config{MPDURL: url, SourceType: SourceDASH, KeyMode: KeyModeDecrypt,
-			ContentKeys: []string{testKeyA, testKeyB}}, true, ""},
+			ContentKeys: []string{testKeyA, testKeyB}}, ""},
 		{"dash decrypt with upper-case hex", Config{MPDURL: url, KeyMode: KeyModeDecrypt,
-			ContentKeys: []string{strings.ToUpper(testKeyA)}}, true, ""},
-		{"dash decrypt needs a key", Config{MPDURL: url, KeyMode: KeyModeDecrypt},
-			true, "needs at least one key"},
+			ContentKeys: []string{strings.ToUpper(testKeyA)}}, ""},
 		{"dash decrypt malformed key", Config{MPDURL: url, KeyMode: KeyModeDecrypt, ContentKeys: []string{"abc"}},
-			true, "content_keys[0]"},
+			"content_keys[0]"},
 		{"dash decrypt short hex", Config{MPDURL: url, KeyMode: KeyModeDecrypt,
-			ContentKeys: []string{testKeyA, "0011:2233"}}, true, "content_keys[1]"},
+			ContentKeys: []string{testKeyA, "0011:2233"}}, "content_keys[1]"},
 		{"duplicate KID with a different key", Config{MPDURL: url, KeyMode: KeyModeDecrypt,
-			ContentKeys: []string{testKeyA, testKeyAOtherValue}}, true, "duplicate KID"},
+			ContentKeys: []string{testKeyA, testKeyAOtherValue}}, "duplicate KID"},
 		{"duplicate KID differing only in case", Config{MPDURL: url, KeyMode: KeyModeDecrypt,
-			ContentKeys: []string{testKeyA, strings.ToUpper(testKeyA)}}, true, "duplicate KID"},
+			ContentKeys: []string{testKeyA, strings.ToUpper(testKeyA)}}, "duplicate KID"},
 		{"dash passthrough with keys", Config{MPDURL: url, KeyMode: KeyModePassthrough, ContentKeys: []string{testKeyA}},
-			true, "only allowed for a dash source with key_mode decrypt"},
+			"only allowed for a dash source with key_mode decrypt"},
 		{"dash default mode with keys", Config{MPDURL: url, ContentKeys: []string{testKeyA}},
-			true, "only allowed for a dash source with key_mode decrypt"},
+			"only allowed for a dash source with key_mode decrypt"},
 		{"hls decrypt with keys", Config{MPDURL: url, SourceType: SourceHLS, KeyMode: KeyModeDecrypt,
-			ContentKeys: []string{testKeyA}}, true, "only allowed for a dash source with key_mode decrypt"},
+			ContentKeys: []string{testKeyA}}, "only allowed for a dash source with key_mode decrypt"},
 		{"hls passthrough with keys", Config{MPDURL: url, SourceType: SourceHLS, KeyMode: KeyModePassthrough,
-			ContentKeys: []string{testKeyA}}, true, "only allowed for a dash source with key_mode decrypt"},
+			ContentKeys: []string{testKeyA}}, "only allowed for a dash source with key_mode decrypt"},
 		{"hls decrypt without keys stays valid", Config{MPDURL: url, SourceType: SourceHLS, KeyMode: KeyModeDecrypt},
-			false, ""},
-		{"dash passthrough stays valid", Config{MPDURL: url, KeyMode: KeyModePassthrough}, false, ""},
+			""},
+		{"dash passthrough stays valid", Config{MPDURL: url, KeyMode: KeyModePassthrough}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			old := dashDecryptEnabled
-			dashDecryptEnabled = tc.gate
-			defer func() { dashDecryptEnabled = old }()
 			err := tc.cfg.Validate()
 			if tc.wantErr == "" {
 				if err != nil {

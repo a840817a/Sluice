@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/a840817a/sluice/internal/cenc"
 	"github.com/a840817a/sluice/internal/config"
+	"github.com/a840817a/sluice/internal/dashdecrypt"
 	"github.com/a840817a/sluice/internal/hlskey"
 	"github.com/a840817a/sluice/internal/index"
 	"github.com/a840817a/sluice/internal/metrics"
@@ -111,6 +113,22 @@ func (in *Intake) Store(ctx context.Context, task *queue.SegmentTask, data []byt
 			return Outcome{Stage: StageDecrypt, Err: err}
 		}
 		data = plain
+	}
+	// A DASH decrypt channel decrypts the media of an AdaptationSet its
+	// registry decrypted, in place, for the same reason.
+	if task.Format == queue.FormatFMP4 && in.inits.decrypt != nil {
+		as := dashdecrypt.ASKey{PeriodID: task.PeriodID, ASID: task.ASID}
+		if tp, key, ok := in.inits.decrypt.Lookup(as, task.RepID); ok {
+			if err := cenc.DecryptSegment(data, tp, key); err != nil {
+				slog.Warn("segment decryption failed",
+					"rep", task.RepID,
+					"seg", task.SegNo,
+					"err", err,
+				)
+				in.inits.decrypt.RecordSegmentFailure(as, task.RepID, task.SegNo, err)
+				return Outcome{Stage: StageDecrypt, Err: err}
+			}
+		}
 	}
 
 	// Validate the media segment and establish its start time.

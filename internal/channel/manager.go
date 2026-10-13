@@ -9,6 +9,7 @@ import (
 	"time"
 
 	gocfg "github.com/a840817a/sluice/internal/config"
+	"github.com/a840817a/sluice/internal/dashdecrypt"
 	"github.com/a840817a/sluice/internal/dashingest"
 	"github.com/a840817a/sluice/internal/fetch"
 	"github.com/a840817a/sluice/internal/hlsingest"
@@ -28,6 +29,10 @@ type Runtime struct {
 	watcher *dashingest.Watcher
 	// hls is the HLS ingest watcher; nil for DASH channels.
 	hls *hlsingest.Watcher
+	// decrypt is the registry of a DASH channel in key mode decrypt, nil for
+	// every other channel. ParsedMPD reads it through decryptView.
+	decrypt     *dashdecrypt.Registry
+	decryptView atomic.Pointer[decryptedView]
 	// keys caches AES-128 content keys for HLS channels; nil for DASH channels.
 	// Other packages reach what these three know through Source, Serving's
 	// Tracks and ResolveKey, never directly.
@@ -161,17 +166,24 @@ func (rt *Runtime) IsHLSSource() bool { return rt.hls != nil }
 // ParsedMPD returns the most recently fetched origin MPD, or nil for HLS
 // channels, which have no MPD at all. Once the channel is VOD it is that MPD
 // with every period the VOD index holds put back (vodOriginMPD).
+//
+// On a DASH decrypt channel the AdaptationSets it decrypted carry no
+// ContentProtection (withoutDecryptedCP). Every manifest, playlist and track
+// list is built from what this returns, so none of them signals protection
+// for content stored clear.
 func (rt *Runtime) ParsedMPD() *imdp.ParsedMPD {
 	if p := rt.vodMPD.Load(); p != nil {
-		return p
+		return rt.withoutDecryptedCP(p)
 	}
 	if rt.watcher == nil {
 		return nil
 	}
-	return rt.watcher.ParsedMPD()
+	return rt.withoutDecryptedCP(rt.watcher.ParsedMPD())
 }
 
-// ParsedMPDBytes returns the raw origin MPD XML, or nil for HLS channels.
+// ParsedMPDBytes returns the raw origin MPD XML, or nil for HLS channels. It
+// still carries every ContentProtection: it is saved for a VOD restart to
+// parse again, and never served.
 func (rt *Runtime) ParsedMPDBytes() []byte {
 	if rt.watcher == nil {
 		return nil
@@ -297,6 +309,7 @@ func (m *Manager) start(parentCtx context.Context, id string, cfg Config) (*Runt
 		watcher:      pl.watcher,
 		hls:          pl.hls,
 		keys:         pl.keys,
+		decrypt:      pl.decrypt,
 		Source:       pl.source,
 		Progress:     pl.progress,
 		Broker:       pl.broker,

@@ -9,7 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/a840817a/sluice/internal/cenc"
 	gocfg "github.com/a840817a/sluice/internal/config"
+	"github.com/a840817a/sluice/internal/dashdecrypt"
 	"github.com/a840817a/sluice/internal/dashingest"
 	"github.com/a840817a/sluice/internal/fetch"
 	"github.com/a840817a/sluice/internal/hlsingest"
@@ -48,6 +50,8 @@ type ingestPipeline struct {
 	watcher *dashingest.Watcher
 	hls     *hlsingest.Watcher
 	keys    *hlskey.Cache
+	// decrypt exists only for a DASH channel in key mode decrypt.
+	decrypt *dashdecrypt.Registry
 }
 
 // channelGatewayConfig merges gateway defaults with this channel's settings.
@@ -161,6 +165,10 @@ func (p *ingestPipeline) attachSource(id string, cfg Config, chGwCfg gocfg.Confi
 		w.SetProgress(p.progress)
 		p.watcher = w
 		p.source = dashSource{w}
+		if cfg.DecryptOnIngest() {
+			p.decrypt = newDecryptRegistry(chGwCfg.Store.DataDir, id, cfg)
+			p.processor.SetDecryptor(p.decrypt)
+		}
 		return
 	}
 
@@ -176,6 +184,26 @@ func (p *ingestPipeline) attachSource(id string, cfg Config, chGwCfg gocfg.Confi
 	p.keys = hlskey.NewCache(nil, p.origin, hlskey.KeyStorePath(chGwCfg.Store.DataDir, id))
 	p.source = hlsSource{w: hw, keys: p.keys}
 	p.processor.SetKeyFetcher(p.keys)
+}
+
+// newDecryptRegistry builds a DASH decrypt channel's registry and reads back
+// the decisions stored on disk. It runs after the index is restored and
+// before any ingest, so no media is stored before the registry knows what
+// is decrypted.
+func newDecryptRegistry(dataDir, id string, cfg Config) *dashdecrypt.Registry {
+	keys := make(cenc.KeySet, len(cfg.ContentKeys))
+	parsed, err := parseContentKeys(cfg.ContentKeys)
+	if err != nil {
+		slog.Error("stored content keys unusable; decrypting nothing", "channel", id, "err", err)
+	}
+	for _, k := range parsed {
+		keys[k.KID] = k.Value
+	}
+	reg := dashdecrypt.NewRegistry(dataDir, id, keys)
+	if err := reg.Load(); err != nil {
+		slog.Warn("decrypt state could not be read", "channel", id, "err", err)
+	}
+	return reg
 }
 
 // ingestControl is the VOD transition's seam onto a channel's ingest: the three

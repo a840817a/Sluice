@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/a840817a/sluice/internal/config"
+	"github.com/a840817a/sluice/internal/dashdecrypt"
 	"github.com/a840817a/sluice/internal/fetch"
 	"github.com/a840817a/sluice/internal/index"
 	"github.com/a840817a/sluice/internal/progress"
@@ -38,6 +39,9 @@ type initPreparer struct {
 	// only reuses inits already on disk.
 	download initDownloader
 	prog     *progress.Counters
+	// decrypt decides which inits of a DASH decrypt channel are stored
+	// clear. Nil for every other channel, whose inits are stored as fetched.
+	decrypt *dashdecrypt.Registry
 
 	mu sync.Mutex
 	// timescales holds only validated, persisted init timescales, keyed by
@@ -115,7 +119,7 @@ func (pr *initPreparer) prepareOnce(ctx context.Context, task *queue.SegmentTask
 			data, err := fetch.ReadAtMost(f, limit)
 			_ = f.Close()
 			if err == nil && ctx.Err() == nil {
-				if ts, err := persistInit(path, data); err == nil {
+				if ts, err := pr.finishInit(ctx, task, path, data); err == nil {
 					return ts, nil
 				}
 			}
@@ -136,7 +140,7 @@ func (pr *initPreparer) prepareOnce(ctx context.Context, task *queue.SegmentTask
 		if err == nil {
 			if err = ctx.Err(); err == nil {
 				var ts uint32
-				ts, err = persistInit(path, res.Data)
+				ts, err = pr.finishInit(ctx, task, path, res.Data)
 				if err == nil {
 					return ts, nil
 				}
@@ -163,6 +167,49 @@ func (pr *initPreparer) prepareOnce(ctx context.Context, task *queue.SegmentTask
 			return 0, ctx.Err()
 		case <-timer.C:
 		}
+	}
+}
+
+// finishInit persists data, the init of task's representation as the origin
+// serves it, at path. On a DASH decrypt channel the registry first decides
+// what to store: data, or its clear form. Every other channel stores data.
+func (pr *initPreparer) finishInit(ctx context.Context, task *queue.SegmentTask, path string, data []byte) (uint32, error) {
+	if pr.decrypt != nil {
+		var err error
+		data, err = pr.decrypt.PrepareInit(ctx, task, data, pr.asHeld(task), pr.fetchSibling(task))
+		if err != nil {
+			return 0, fmt.Errorf("prepare init for decryption: %w", err)
+		}
+	}
+	return persistInit(path, data)
+}
+
+// asHeld reports whether the index holds a segment of any representation of
+// task's AdaptationSet, wherever on disk it lies.
+func (pr *initPreparer) asHeld(task *queue.SegmentTask) bool {
+	held := false
+	pr.ci.ForEachRep(func(ref index.RepRef, rep *index.RepresentationState) {
+		if held || ref.PeriodID != task.PeriodID || ref.ASID != task.ASID {
+			return
+		}
+		p, c, e := rep.StatusCounts()
+		held = p+c+e > 0
+	})
+	return held
+}
+
+// fetchSibling fetches the init of another representation of task's
+// AdaptationSet with the init downloader.
+func (pr *initPreparer) fetchSibling(task *queue.SegmentTask) dashdecrypt.FetchInit {
+	return func(ctx context.Context, ref queue.InitRef) ([]byte, error) {
+		if pr.download == nil {
+			return nil, errors.New("no init downloader")
+		}
+		sibling := *task
+		sibling.RepID = ref.RepID
+		sibling.InitURL, sibling.InitRangeStart, sibling.InitRangeEnd = ref.InitURL, ref.InitRangeStart, ref.InitRangeEnd
+		res := pr.download.FetchInit(ctx, &sibling)
+		return res.Data, res.Err
 	}
 }
 

@@ -70,6 +70,13 @@ function collectRefs(root) {
  * this replaces came from inventing a denominator for it — so the fix is to stop
  * dividing rather than to divide more carefully.
  */
+/** One decrypt warning as text: kind, where, message, and the KIDs it names. */
+function describeDecryptWarning(w) {
+  const where = w.adaptation_set ? ` (period ${w.period || '—'}, AS ${w.adaptation_set})` : '';
+  const kids = w.kids && w.kids.length ? ` [${w.kids.join(', ')}]` : '';
+  return `${w.kind}${where}: ${w.message}${kids}`;
+}
+
 function renderProgress(refs, status) {
   const p = status.progress;
   const mode = status.mode || 'live';
@@ -84,6 +91,14 @@ function renderProgress(refs, status) {
       ? 'VOD 建立失敗，過程中的問題'
       : 'VOD 已完成，但重啟後可能缺少部分資料';
     patchText(refs.vodWarning, `${lead}：${vodWarnings.join('；')}`);
+  }
+
+  // A DASH decrypt channel says what it keeps encrypted, and why it is not
+  // served as HLS, in every mode.
+  const decryptWarnings = status.running ? status.decrypt_warnings || [] : [];
+  patchHidden(refs.decryptWarning, decryptWarnings.length === 0);
+  if (decryptWarnings.length) {
+    patchText(refs.decryptWarning, `解密警告：${decryptWarnings.map(describeDecryptWarning).join('；')}`);
   }
 
   if (!status.running || !p) {

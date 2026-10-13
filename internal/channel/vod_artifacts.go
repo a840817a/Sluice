@@ -95,6 +95,11 @@ func (v vodAsset) capture(rt *Runtime, candidate *index.ChannelIndex) (vodArtifa
 	sv := rt.servingAs(ModeVOD, candidate)
 	snapshot := candidate.Snapshot()
 	originMPD, periodWarnings := vodOriginMPD(sv.ParsedMPD, snapshot, v.dataDir, rt.ID)
+	// A period put back from its saved origin MPD still carries the
+	// ContentProtection of AdaptationSets this channel decrypted.
+	if rt.decrypt != nil {
+		originMPD = stripDecryptedCP(originMPD, rt.decrypt.IsDecrypted)
+	}
 	if originMPD != sv.ParsedMPD {
 		sv.ParsedMPD = originMPD
 		sv.Tracks = rt.tracks(originMPD)

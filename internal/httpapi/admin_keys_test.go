@@ -26,8 +26,8 @@ const (
 func keyValue(k string) string { _, v, _ := strings.Cut(k, ":"); return v }
 func keyKID(k string) string   { kid, _, _ := strings.Cut(k, ":"); return kid }
 
-// dashDecryptChannel is a stored DASH channel in decrypt mode. It is written
-// straight to the store because the create endpoint still refuses the mode.
+// dashDecryptChannel is a stored DASH channel in decrypt mode. Tests write it
+// straight to the store when the channel need not run.
 func dashDecryptChannel(keys ...string) ch.Config {
 	return ch.Config{
 		MPDURL:      "http://127.0.0.1:1/live.mpd",
@@ -121,9 +121,6 @@ func TestAdminCreateAcceptsLegacyHLSKeyMode(t *testing.T) {
 		"names disagree": {"id": "bad", "mpd_url": "http://127.0.0.1:1/m.m3u8", "source_type": "hls",
 			"hls_key_mode": "decrypt", "key_mode": "passthrough"},
 		"unknown value": {"id": "bad", "mpd_url": "http://127.0.0.1:1/m.m3u8", "hls_key_mode": "sample-aes"},
-		// DASH decrypt is gated off for now.
-		"dash decrypt not yet supported": {"id": "bad", "mpd_url": "http://127.0.0.1:1/m.mpd",
-			"key_mode": "decrypt", "content_keys": []string{keyA}},
 		"keys on an hls channel": {"id": "bad", "mpd_url": "http://127.0.0.1:1/m.m3u8", "source_type": "hls",
 			"content_keys": []string{keyA}},
 	} {
@@ -137,6 +134,46 @@ func TestAdminCreateAcceptsLegacyHLSKeyMode(t *testing.T) {
 	}
 	if admin.manager.HasChannel("bad") {
 		t.Error("a rejected create left a channel behind")
+	}
+}
+
+// Creating a DASH decrypt channel checks its keys: at least one, each
+// "kid:key" in hex, no KID twice. The error never echoes a key value.
+func TestAdminCreateDASHDecryptChecksKeys(t *testing.T) {
+	admin := newTestAdminServer(t)
+	t.Cleanup(admin.manager.StopAll)
+	create := func(id string, keys []string) *httptest.ResponseRecorder {
+		return adminExec(admin, http.MethodPost, "/admin/api/channels", map[string]any{
+			"id": id, "mpd_url": "http://127.0.0.1:1/m.mpd", "key_mode": "decrypt", "content_keys": keys,
+		}, nil)
+	}
+
+	for name, keys := range map[string][]string{
+		"no keys":           nil,
+		"malformed key":     {keyA, "0011:" + keyValue(keyB)},
+		"key not hex":       {keyKID(keyA) + ":" + strings.Repeat("zz", 16)},
+		"duplicate KID":     {keyA, keyAAgain},
+		"duplicate in case": {keyA, strings.ToUpper(keyA)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := create("bad", keys)
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("got %d %s, want 400", w.Code, w.Body.String())
+			}
+			assertNoKeyValues(t, "error body", w.Body.String(), append(keys, keyA, keyB, keyAAgain)...)
+		})
+	}
+	if admin.manager.HasChannel("bad") {
+		t.Error("a rejected create left a channel behind")
+	}
+
+	w := create("good", []string{keyA, keyB})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create with two keys: %d %s", w.Code, w.Body.String())
+	}
+	assertNoKeyValues(t, "create response", w.Body.String(), keyA, keyB)
+	if got := storedKeys(t, admin, "good"); !slices.Equal(got, []string{keyA, keyB}) {
+		t.Errorf("stored keys = %d entries, want the two given", len(got))
 	}
 }
 

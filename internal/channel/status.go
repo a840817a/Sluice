@@ -2,7 +2,10 @@ package channel
 
 // Channel status: what the manager reports about its configured channels.
 
-import "github.com/a840817a/sluice/internal/index"
+import (
+	"github.com/a840817a/sluice/internal/dashdecrypt"
+	"github.com/a840817a/sluice/internal/index"
+)
 
 // ChannelInfo is one configured channel: its stored configuration and what it
 // is doing now.
@@ -75,6 +78,10 @@ type ChannelStatus struct {
 	// VODWarnings lists restart-safety steps that failed while this channel
 	// completed as VOD. Absent when there were none.
 	VODWarnings []string `json:"vod_warnings,omitempty"`
+	// DecryptWarnings says, for a DASH channel in key mode decrypt, what is
+	// stored encrypted and why, and why the channel is not served as HLS.
+	// Absent when there is nothing to say.
+	DecryptWarnings []dashdecrypt.Warning `json:"decrypt_warnings,omitempty"`
 }
 
 // SourceStatus reports the origin's end-of-stream signal, which is what
@@ -167,5 +174,6 @@ func buildStatus(rt *Runtime) ChannelStatus {
 	if w := rt.vodWarnings.Load(); w != nil {
 		s.VODWarnings = *w
 	}
+	s.DecryptWarnings = rt.decryptWarnings(sv.ParsedMPD, sv.Tracks.ServesHLS)
 	return s
 }

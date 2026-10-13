@@ -152,6 +152,10 @@ func (l RepLocation) Dir() string {
 	)
 }
 
+// ASDir is the directory of the representation's AdaptationSet, which holds
+// the directories of all its representations.
+func (l RepLocation) ASDir() string { return filepath.Dir(l.Dir()) }
+
 // SegmentPath is the path of media segment segNo stored with extension ext
 // (ExtFMP4, ExtTS or ExtVTT).
 func (l RepLocation) SegmentPath(segNo uint64, ext string) string {

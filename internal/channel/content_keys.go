@@ -89,5 +89,10 @@ func (m *Manager) AddContentKeys(ctx context.Context, id string, keys []string) 
 }
 
 // onKeysAdded tells the running channel that keys were added to its
-// configuration. Nothing consumes them until DASH decryption is wired in.
-func (rt *Runtime) onKeysAdded(keys []cenc.Key) {}
+// configuration. AdaptationSets decided from now on can use them; one
+// already stored encrypted stays so.
+func (rt *Runtime) onKeysAdded(keys []cenc.Key) {
+	if rt.decrypt != nil {
+		rt.decrypt.AddKeys(keys)
+	}
+}

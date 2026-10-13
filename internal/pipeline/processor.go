@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/a840817a/sluice/internal/config"
+	"github.com/a840817a/sluice/internal/dashdecrypt"
 	"github.com/a840817a/sluice/internal/fetch"
 	"github.com/a840817a/sluice/internal/index"
 	"github.com/a840817a/sluice/internal/metrics"
@@ -106,6 +107,10 @@ func (p *Processor) SetKeyFetcher(k KeyFetcher) {
 	p.keys = k
 	p.intake.SetKeyFetcher(k)
 }
+
+// SetDecryptor attaches the registry of a DASH channel in key mode decrypt.
+// Must be called before Run.
+func (p *Processor) SetDecryptor(r *dashdecrypt.Registry) { p.inits.decrypt = r }
 
 // Run starts consuming Results from pool until ctx is cancelled.
 //

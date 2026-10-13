@@ -69,6 +69,24 @@ type HLSFields struct {
 	DecryptOnIngest bool
 }
 
+// InitRef locates one representation's init segment at the origin: what a
+// task's InitURL and init byte range say for that representation.
+type InitRef struct {
+	RepID          string
+	InitURL        string
+	InitRangeStart uint64
+	InitRangeEnd   uint64
+}
+
+// DASHFields are the parts of a task that only a DASH source populates.
+type DASHFields struct {
+	// ASInits locates the init segment of every representation of the task's
+	// AdaptationSet, this one's included. Decrypting an AdaptationSet during
+	// ingest needs every representation's key ID before its first init is
+	// stored. Tasks of one AdaptationSet share the slice; nobody modifies it.
+	ASInits []InitRef
+}
+
 // SegmentTask describes a single segment that needs to be fetched.
 type SegmentTask struct {
 	ChannelID string
@@ -87,6 +105,8 @@ type SegmentTask struct {
 
 	// HLSFields groups the parts only an HLS source populates.
 	HLSFields
+	// DASHFields groups the parts only a DASH source populates.
+	DASHFields
 
 	// Byte range for HTTP Range requests (SegmentBase / SegmentList byte-range).
 	// Both zero means full-file download.

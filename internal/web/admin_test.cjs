@@ -190,3 +190,34 @@ test('add-keys form posts the lines and shows the server error on the card', asy
   assert.equal(h.calls.length, 2, 'blank input sends nothing');
   assert.equal(box.hidden, false);
 });
+
+function progressHarness() {
+  const ctx = vm.createContext({ fmt: {}, playerURL: () => '' });
+  vm.runInContext(source('cards'), ctx);
+  const refs = new Proxy({}, {
+    get: (target, key) => target[key] ||= { textContent: '', hidden: false, className: '', classList: { toggle() {} } },
+  });
+  return { ctx, refs };
+}
+
+test('decrypt warnings show on the card in every mode, and only while running', () => {
+  const h = progressHarness();
+  const warnings = [
+    { period: '', adaptation_set: '1', kind: 'missing_key', kids: ['2020'], message: 'no content key held for these KIDs' },
+    { period: '', kind: 'key_unmatched', kids: ['3030'], message: 'no init segment of this channel uses these keys' },
+  ];
+  h.ctx.renderProgress(h.refs, { running: true, mode: 'live', decrypt_warnings: warnings });
+  assert.equal(h.refs.decryptWarning.hidden, false);
+  assert.match(h.refs.decryptWarning.textContent, /missing_key \(period —, AS 1\): no content key held for these KIDs \[2020\]/);
+  assert.match(h.refs.decryptWarning.textContent, /key_unmatched: .*\[3030\]/);
+  assert.equal(h.refs.vodWarning.hidden, true, 'decrypt warnings are not VOD warnings');
+
+  h.ctx.renderProgress(h.refs, { running: true, mode: 'vod', decrypt_warnings: [warnings[0]] });
+  assert.equal(h.refs.decryptWarning.hidden, false);
+  assert.doesNotMatch(h.refs.decryptWarning.textContent, /key_unmatched/);
+
+  h.ctx.renderProgress(h.refs, { running: true, mode: 'live' });
+  assert.equal(h.refs.decryptWarning.hidden, true);
+  h.ctx.renderProgress(h.refs, { running: false, decrypt_warnings: warnings });
+  assert.equal(h.refs.decryptWarning.hidden, true);
+});

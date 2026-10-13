@@ -86,6 +86,8 @@ func DiscoverTasks(
 		initRangeEnd   uint64
 		// fallback URLs derived from alternative <BaseURL> elements
 		fallbackURLs []string
+		// asInits locates every init of the entry's AdaptationSet.
+		asInits []queue.InitRef
 	}
 	var entries []entry
 
@@ -95,6 +97,10 @@ func DiscoverTasks(
 
 		for _, as := range period.AdaptationSets {
 			asBase := resolveURL(periodBase, as.BaseURL)
+			// Every entry of this AdaptationSet gets the init of every one of
+			// its representations, including those with no entry this pass.
+			asStart := len(entries)
+			var asInits []queue.InitRef
 
 			for _, rep := range as.Representations {
 				repKey := repKey(channelID, period.ID, as.ID, rep.ID)
@@ -104,6 +110,7 @@ func DiscoverTasks(
 				if tmpl != nil {
 					repBase := resolveURL(asBase, rep.BaseURL)
 					initURL := resolveURL(repBase, tmpl.InitURL(rep.ID))
+					asInits = append(asInits, queue.InitRef{RepID: rep.ID, InitURL: initURL})
 
 					// Build fallback URLs from alt BaseURL elements (multi-CDN).
 					var fallbacks []string
@@ -173,6 +180,11 @@ func DiscoverTasks(
 					initURL = repBase
 					initRS, initRE, _ = parseByteRange(sl.InitRange)
 				}
+				if initURL != "" {
+					asInits = append(asInits, queue.InitRef{
+						RepID: rep.ID, InitURL: initURL, InitRangeStart: initRS, InitRangeEnd: initRE,
+					})
+				}
 
 				for i, seg := range sl.Segments {
 					segNo := sl.StartNumber + uint64(i)
@@ -214,6 +226,9 @@ func DiscoverTasks(
 					})
 				}
 			}
+			for i := asStart; i < len(entries); i++ {
+				entries[i].asInits = asInits
+			}
 		}
 	}
 
@@ -250,6 +265,7 @@ func DiscoverTasks(
 			Deadline:       deadline,
 			Duration:       e.duration,
 			Timescale:      e.timescale,
+			DASHFields:     queue.DASHFields{ASInits: e.asInits},
 		})
 	}
 
