@@ -277,7 +277,7 @@ func TestVODCompletionWaitsForPassthroughKey(t *testing.T) {
 			t.Cleanup(m.StopAll)
 			done := make(chan struct{})
 			m.SetOnVODReady(func(*Runtime) { close(done) })
-			rt, err := m.startForTest(context.Background(), "keys", Config{SourceType: SourceHLS, HLSKeyMode: KeyModePassthrough, MPDURL: origin.URL + "/master.m3u8", Enabled: true})
+			rt, err := m.startForTest(context.Background(), "keys", Config{SourceType: SourceHLS, KeyMode: KeyModePassthrough, MPDURL: origin.URL + "/master.m3u8", Enabled: true})
 			if err != nil {
 				t.Fatal(err)
 			}

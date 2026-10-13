@@ -16,7 +16,7 @@ func TestConfigValidate(t *testing.T) {
 		{"valid hls passthrough", Config{
 			MPDURL:     "https://example.com/index.m3u8",
 			SourceType: SourceHLS,
-			HLSKeyMode: KeyModePassthrough,
+			KeyMode:    KeyModePassthrough,
 		}, ""},
 		{"empty source type and key mode default", Config{
 			MPDURL: "http://example.com/live.mpd",
@@ -31,9 +31,9 @@ func TestConfigValidate(t *testing.T) {
 			SourceType: "rtmp",
 		}, `source_type must be "dash" or "hls"`},
 		{"bad key mode", Config{
-			MPDURL:     "http://example.com/live.mpd",
-			HLSKeyMode: "sample-aes",
-		}, `hls_key_mode must be "passthrough" or "decrypt"`},
+			MPDURL:  "http://example.com/live.mpd",
+			KeyMode: "sample-aes",
+		}, `key_mode must be "passthrough" or "decrypt"`},
 	}
 
 	for _, tc := range cases {

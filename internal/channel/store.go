@@ -121,6 +121,7 @@ func (s *Store) Delete(id string) error {
 func cloneConfig(cfg Config) Config {
 	cfg.FetchHeaders = slices.Clone(cfg.FetchHeaders)
 	cfg.LicenseHeaders = slices.Clone(cfg.LicenseHeaders)
+	cfg.ContentKeys = slices.Clone(cfg.ContentKeys)
 	if cfg.EnablePlayReady != nil {
 		cfg.EnablePlayReady = BoolPtr(*cfg.EnablePlayReady)
 	}
@@ -141,7 +142,16 @@ func (s *Store) load() error {
 	if err != nil {
 		return fmt.Errorf("channel store read: %w", err)
 	}
-	return json.Unmarshal(data, &s.channels)
+	if err := json.Unmarshal(data, &s.channels); err != nil {
+		return err
+	}
+	// Files written before key_mode existed name it hls_key_mode.
+	for id, cfg := range s.channels {
+		if err := cfg.NormalizeKeyAlias(); err != nil {
+			return fmt.Errorf("channel store: channel %q: %w", id, err)
+		}
+	}
+	return nil
 }
 
 // commit persists a candidate before publishing it to readers. The caller

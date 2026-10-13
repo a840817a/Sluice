@@ -45,6 +45,10 @@ func (a *AdminServer) handleCreateChannel(w http.ResponseWriter, r *http.Request
 	if req.ID == "" {
 		req.ID = uuid.New().String()
 	}
+	if err := req.Config.NormalizeKeyAlias(); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err := req.Config.Validate(); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -97,16 +101,25 @@ func (a *AdminServer) handleUpdateChannel(w http.ResponseWriter, r *http.Request
 		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.NormalizeKeyAlias(); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// An edit never changes content keys; whatever was sent is ignored.
+	cfg.ContentKeys = nil
+	if err := cfg.ValidateUpdate(); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	result, err := a.manager.UpdateConfig(a.ctx, id, cfg)
 	if err != nil {
-		if errors.Is(err, ch.ErrChannelNotFound) {
+		switch {
+		case errors.Is(err, ch.ErrChannelNotFound):
 			writeErr(w, http.StatusNotFound, "channel not found")
-		} else {
+		case errors.Is(err, ch.ErrKeyModeImmutable), errors.Is(err, ch.ErrInvalidConfig):
+			writeErr(w, http.StatusBadRequest, err.Error())
+		default:
 			writeErr(w, http.StatusInternalServerError, err.Error())
 		}
 		return
@@ -115,6 +128,41 @@ func (a *AdminServer) handleUpdateChannel(w http.ResponseWriter, r *http.Request
 		ID: id, Restarted: result.Restarted,
 		RestartFields: result.RestartFields,
 	})
+}
+
+// handleAddKeys adds content keys to a DASH decrypt channel. It is all or
+// nothing: a KID the channel already holds is a 409 and nothing is stored.
+// The response names KIDs, never key values.
+//
+// POST /admin/api/channels/{channelID}/keys
+func (a *AdminServer) handleAddKeys(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "channelID")
+	if !a.manager.HasChannel(id) {
+		writeErr(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	var req struct {
+		ContentKeys []string `json:"content_keys"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	added, err := a.manager.AddContentKeys(a.ctx, id, req.ContentKeys)
+	if err != nil {
+		switch {
+		case errors.Is(err, ch.ErrChannelNotFound):
+			writeErr(w, http.StatusNotFound, "channel not found")
+		case errors.Is(err, ch.ErrContentKeyExists):
+			writeErr(w, http.StatusConflict, err.Error())
+		case errors.Is(err, ch.ErrInvalidContentKeys), errors.Is(err, ch.ErrKeysNotApplicable):
+			writeErr(w, http.StatusBadRequest, err.Error())
+		default:
+			writeErr(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string][]string{"added_kids": added})
 }
 
 // handleRestartChannel stops and starts a channel with its stored config,

@@ -1,5 +1,11 @@
 package channel
 
+import (
+	"fmt"
+
+	"github.com/a840817a/sluice/internal/cenc"
+)
+
 // Header represents a single HTTP header name/value pair.
 type Header struct {
 	Name  string `json:"name"`
@@ -16,10 +22,11 @@ const (
 	SourceHLS = "hls"
 )
 
-// HLS AES-128 handling modes.
+// Key modes: what the gateway does with encrypted content.
 const (
-	// KeyModePassthrough stores segments encrypted and proxies key requests.
-	// It is the default, and the meaning of an empty HLSKeyMode.
+	// KeyModePassthrough stores segments encrypted. For HLS AES-128 it also
+	// proxies key requests; for DASH the license proxy serves the players. It
+	// is the default, and the meaning of an empty KeyMode.
 	KeyModePassthrough = "passthrough"
 	// KeyModeDecrypt decrypts segments during ingest and stores cleartext.
 	KeyModeDecrypt = "decrypt"
@@ -33,11 +40,20 @@ type Config struct {
 	Title string `json:"title,omitempty"`
 	// SourceType selects the source protocol: "dash" (or empty) or "hls".
 	SourceType string `json:"source_type,omitempty"`
-	// HLSKeyMode selects how AES-128 encrypted HLS sources are handled:
-	// "passthrough" (or empty) keeps segments encrypted on disk and rewrites
-	// EXT-X-KEY to the gateway's key proxy; "decrypt" decrypts during ingest and
-	// republishes in the clear.
-	HLSKeyMode string `json:"hls_key_mode,omitempty"`
+	// KeyMode selects how encrypted sources are handled: "passthrough" (or
+	// empty) keeps segments encrypted on disk (for HLS AES-128 it rewrites
+	// EXT-X-KEY to the gateway's key proxy); "decrypt" decrypts during ingest and
+	// republishes in the clear. It is set when the channel is created and never
+	// changes afterwards.
+	KeyMode string `json:"key_mode,omitempty"`
+	// LegacyHLSKeyMode is the old JSON name of KeyMode, still accepted when
+	// loading channels.json and in admin requests. NormalizeKeyAlias folds it
+	// into KeyMode and empties it, so nothing is ever written under the old name.
+	LegacyHLSKeyMode string `json:"hls_key_mode,omitempty"`
+	// ContentKeys are "kid:key" pairs (32 hex digits each) for decrypting a DASH
+	// source. Only DASH channels in decrypt mode carry them. They are secrets:
+	// responses show ContentKeyIDs instead (see PublicConfig).
+	ContentKeys []string `json:"content_keys,omitempty"`
 	// MPDURL is the source URL. Despite the name it holds the HLS
 	// playlist URL for HLS channels too; the field keeps its original name and
 	// JSON tag so existing stored configs and the admin UI stay valid.
@@ -100,19 +116,62 @@ func (c Config) canonicalSourceType() string {
 	return c.SourceType
 }
 
-// canonicalHLSKeyMode resolves the empty value to its documented default, for
+// canonicalKeyMode resolves the empty value to its documented default, for
 // the same reason as canonicalSourceType.
-func (c Config) canonicalHLSKeyMode() string {
-	if c.HLSKeyMode == "" {
+func (c Config) canonicalKeyMode() string {
+	if c.KeyMode == "" {
 		return KeyModePassthrough
 	}
-	return c.HLSKeyMode
+	return c.KeyMode
 }
 
-// DecryptOnIngest reports whether encrypted HLS segments should be decrypted
+// NormalizeKeyAlias folds the legacy "hls_key_mode" name into KeyMode. Both
+// names given with different values is an error. It is a method rather than a
+// custom UnmarshalJSON because the admin's create request embeds Config, and a
+// promoted UnmarshalJSON would swallow the request's own fields.
+func (c *Config) NormalizeKeyAlias() error {
+	if c.LegacyHLSKeyMode == "" {
+		return nil
+	}
+	if c.KeyMode != "" && c.KeyMode != c.LegacyHLSKeyMode {
+		return fmt.Errorf("key_mode %q conflicts with hls_key_mode %q", c.KeyMode, c.LegacyHLSKeyMode)
+	}
+	c.KeyMode = c.LegacyHLSKeyMode
+	c.LegacyHLSKeyMode = ""
+	return nil
+}
+
+// DecryptOnIngest reports whether encrypted segments should be decrypted
 // before being stored. Defaults to false (passthrough) so segments keep their
 // origin protection unless the operator opts out of it.
-func (c Config) DecryptOnIngest() bool { return c.HLSKeyMode == KeyModeDecrypt }
+func (c Config) DecryptOnIngest() bool { return c.KeyMode == KeyModeDecrypt }
+
+// ContentKeyIDs lists the KIDs (lower-case hex) of the stored content keys, in
+// stored order. Entries that do not parse are skipped.
+func (c Config) ContentKeyIDs() []string {
+	var out []string
+	for _, s := range c.ContentKeys {
+		if k, err := cenc.ParseKey(s); err == nil {
+			out = append(out, k.KID.String())
+		}
+	}
+	return out
+}
+
+// PublicConfig is a Config as the admin API shows it: content key values are
+// replaced by their KIDs.
+type PublicConfig struct {
+	Config
+	ContentKeyIDs []string `json:"content_key_ids,omitempty"`
+}
+
+// Public returns c with its key values removed.
+func (c Config) Public() PublicConfig {
+	ids := c.ContentKeyIDs()
+	c = cloneConfig(c)
+	c.ContentKeys = nil
+	return PublicConfig{Config: c, ContentKeyIDs: ids}
+}
 
 // PlayReadyEnabled returns true unless the channel explicitly disables
 // PlayReady. This preserves behavior for configs created before the flag

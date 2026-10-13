@@ -18,7 +18,6 @@ const CHECKBOXES = [
 const RESTART_FIELDS = {
   source_type: '來源類型',
   mpd_url: '來源 URL',
-  hls_key_mode: 'HLS AES-128 處理',
   keep_all_segments: '保留所有片段',
 };
 
@@ -63,6 +62,16 @@ function loadHeaders(containerId, headers) {
   (headers || []).forEach(h => addHeaderRow(containerId, h.name, h.value));
 }
 
+/** Splits a textarea of one key per line into a list, dropping blank lines. */
+function parseKeyLines(text) {
+  return String(text || '').split('\n').map(l => l.trim()).filter(Boolean);
+}
+
+/** Whether the form's source and key mode are the ones that take content keys. */
+function takesKeys(form) {
+  return form.elements['source_type'].value === 'dash' && form.elements['key_mode'].value === 'decrypt';
+}
+
 /** Builds the request body shared by the add and edit forms. */
 function formBody(form, { keepEmptyHeaders }) {
   const body = {};
@@ -70,6 +79,11 @@ function formBody(form, { keepEmptyHeaders }) {
     if (keepEmptyHeaders || v) body[k] = v;
   }
   body.enabled = true;
+  // The textarea holds one kid:key per line and the API wants a list. Keys only
+  // apply to a DASH source that decrypts, so text left in a hidden box is dropped.
+  delete body.content_keys;
+  const keys = parseKeyLines(form.elements['content_keys'] && form.elements['content_keys'].value);
+  if (keys.length && takesKeys(form)) body.content_keys = keys;
   CHECKBOXES.forEach(name => {
     if (form.elements[name]) body[name] = form.elements[name].checked;
   });
@@ -84,7 +98,7 @@ function formBody(form, { keepEmptyHeaders }) {
  * rest of this file relies on (`addFetchHeaders`, `editSourceType`, ...) are
  * derived here from the prefix.
  */
-function mountFields(form, prefix, { showRestart }) {
+function mountFields(form, prefix, { showRestart, editing = false }) {
   const tpl = document.getElementById('channelFieldsTpl');
   const frag = tpl.content.cloneNode(true);
 
@@ -93,6 +107,10 @@ function mountFields(form, prefix, { showRestart }) {
     'source-url': `${prefix}SourceURL`,
     'fetch-headers': `${prefix}FetchHeaders`,
     'license-headers': `${prefix}LicenseHeaders`,
+    'key-mode': `${prefix}KeyMode`,
+    'key-mode-hint': `${prefix}KeyModeHint`,
+    'keys-field': `${prefix}KeysField`,
+    'drm-section': `${prefix}DrmSection`,
   };
   frag.querySelectorAll('[data-role]').forEach(el => {
     el.id = ids[el.dataset.role];
@@ -101,6 +119,14 @@ function mountFields(form, prefix, { showRestart }) {
   frag.querySelectorAll('[data-add-header]').forEach(btn => {
     btn.dataset.addHeader = btn.previousElementSibling.id;
   });
+  if (editing) {
+    // The key mode is fixed at creation and keys are added from the channel
+    // card, so an edit shows the mode read-only (a disabled field is not
+    // submitted) and has no key input.
+    frag.querySelector('[data-role="key-mode"]').disabled = true;
+    frag.querySelector('[data-role="key-mode-hint"]').hidden = false;
+    frag.querySelector('[data-role="keys-field"]').remove();
+  }
   if (showRestart) {
     frag.querySelectorAll('[data-restart]').forEach(el => { el.hidden = false; });
   }
@@ -110,15 +136,27 @@ function mountFields(form, prefix, { showRestart }) {
   form.querySelector('[data-fields]').prepend(frag);
 }
 
-/** Swaps the URL hint so the expected format is obvious for the chosen protocol. */
-function bindSourceHint(prefix) {
-  const sourceType = document.getElementById(`${prefix}SourceType`);
-  const sourceURL = document.getElementById(`${prefix}SourceURL`);
-  sourceType.addEventListener('change', () => {
-    sourceURL.placeholder = sourceType.value === 'hls'
-      ? 'https://cdn.example.com/master.m3u8'
-      : 'https://cdn.example.com/stream.mpd';
+/**
+ * Shows only the fields that apply to the chosen source and key mode: the URL
+ * hint follows the protocol, DRM licence servers are meaningless for HLS, and
+ * content keys exist only for DASH that decrypts.
+ */
+function applyVisibility(prefix) {
+  const sourceType = document.getElementById(`${prefix}SourceType`).value;
+  const keyMode = document.getElementById(`${prefix}KeyMode`).value;
+  document.getElementById(`${prefix}SourceURL`).placeholder = sourceType === 'hls'
+    ? 'https://cdn.example.com/master.m3u8'
+    : 'https://cdn.example.com/stream.mpd';
+  document.getElementById(`${prefix}DrmSection`).hidden = sourceType === 'hls';
+  const keysField = document.getElementById(`${prefix}KeysField`);
+  if (keysField) keysField.hidden = !(sourceType === 'dash' && keyMode === 'decrypt');
+}
+
+function bindVisibility(prefix) {
+  ['SourceType', 'KeyMode'].forEach(name => {
+    document.getElementById(`${prefix}${name}`).addEventListener('change', () => applyVisibility(prefix));
   });
+  applyVisibility(prefix);
 }
 
 // ── drawers ─────────────────────────────────────────────────────────────────
@@ -164,7 +202,7 @@ export function closeAdd() {
 function initAddForm() {
   const form = document.getElementById('addForm');
   mountFields(form, 'add', { showRestart: false });
-  bindSourceHint('add');
+  bindVisibility('add');
 
   document.getElementById('openAdd').addEventListener('click', openAdd);
   document.getElementById('addOverlay').addEventListener('click', e => {
@@ -189,6 +227,7 @@ function initAddForm() {
       showMsg(`頻道「${(d && (d.title || d.id)) || ''}」已建立`, 'ok');
       if (session === addSession) {
         form.reset();
+        applyVisibility('add');
         clearHeaders('addFetchHeaders');
         clearHeaders('addLicenseHeaders');
         closeAdd();
@@ -216,7 +255,6 @@ function currentEditValues() {
   return {
     source_type: f.elements['source_type'].value,
     mpd_url: f.elements['mpd_url'].value,
-    hls_key_mode: f.elements['hls_key_mode'].value,
     keep_all_segments: f.elements['keep_all_segments'].checked,
   };
 }
@@ -227,7 +265,6 @@ function refreshRestartNote() {
   const orig = {
     source_type: editingCfg.source_type || 'dash',
     mpd_url: editingCfg.mpd_url || '',
-    hls_key_mode: editingCfg.hls_key_mode || 'passthrough',
     // Absent means "keep": the same default the gateway applies, so merely
     // opening the modal must not read as a change.
     keep_all_segments: editingCfg.keep_all_segments !== false,
@@ -264,7 +301,7 @@ export function openEdit(id) {
   });
   // Configs written before HLS support have no source_type and mean DASH.
   f.elements['source_type'].value = cfg.source_type || 'dash';
-  f.elements['hls_key_mode'].value = cfg.hls_key_mode || 'passthrough';
+  f.elements['key_mode'].value = cfg.key_mode || 'passthrough';
   f.elements['keep_all_segments'].checked = cfg.keep_all_segments !== false;
   f.elements['enable_playready'].checked = cfg.enable_playready !== false;
   f.elements['enable_widevine'].checked = cfg.enable_widevine !== false;
@@ -272,6 +309,7 @@ export function openEdit(id) {
   loadHeaders('editFetchHeaders', cfg.fetch_headers);
   loadHeaders('editLicenseHeaders', cfg.license_headers);
 
+  applyVisibility('edit');
   refreshRestartNote();
   openDrawer('editOverlay');
 }
@@ -287,8 +325,8 @@ export function closeEdit() {
 function initEditModal() {
   const overlay = document.getElementById('editOverlay');
   const form = document.getElementById('editForm');
-  mountFields(form, 'edit', { showRestart: true });
-  bindSourceHint('edit');
+  mountFields(form, 'edit', { showRestart: true, editing: true });
+  bindVisibility('edit');
 
   overlay.addEventListener('click', e => {
     if (e.target === e.currentTarget) closeEdit();
@@ -384,6 +422,36 @@ export async function restoreToLive(id) {
   }
 }
 
+/**
+ * Submits the card's "add keys" form. Failures (a KID already stored is a 409)
+ * are shown on the card as well as in the toast, because the toast clears itself
+ * and the operator still has the rejected text in front of them.
+ */
+async function submitKeys(form) {
+  const card = form.closest('[data-channel-id]');
+  if (!card || form.dataset.busy) return;
+  const id = card.dataset.channelId;
+  const box = form.querySelector('[data-f="keysError"]');
+  const keys = parseKeyLines(form.elements['content_keys'].value);
+  const fail = text => { box.textContent = text; box.hidden = false; showMsg(text, 'err'); };
+  if (!keys.length) { fail('請輸入至少一組 kid:key'); return; }
+
+  box.hidden = true;
+  form.dataset.busy = '1';
+  setSubmitting(form, true);
+  try {
+    const d = await api.addKeys(id, keys);
+    form.elements['content_keys'].value = '';
+    showMsg(`已新增 ${((d && d.added_kids) || keys).length} 把 key`, 'ok');
+    onChanged();
+  } catch (err) {
+    fail(err.message);
+  } finally {
+    delete form.dataset.busy;
+    setSubmitting(form, false);
+  }
+}
+
 // ── init ────────────────────────────────────────────────────────────────────
 
 export function initForms() {
@@ -400,6 +468,13 @@ export function initForms() {
   document.addEventListener('click', e => {
     if (e.target.closest('[data-action="close-edit"]')) closeEdit();
     if (e.target.closest('[data-action="close-add"]')) closeAdd();
+  });
+
+  document.addEventListener('submit', e => {
+    const form = e.target.closest && e.target.closest('[data-keys-form]');
+    if (!form) return;
+    e.preventDefault();
+    submitKeys(form);
   });
 
   document.addEventListener('keydown', e => {

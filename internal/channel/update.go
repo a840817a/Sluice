@@ -33,12 +33,12 @@ func RestartRequired(old, next Config, mode ChannelMode) []string {
 		}
 	}
 
-	// Selects the ingest driver, the decrypt-on-ingest policy, whether the key
-	// cache persists to disk, and the processor's publish mode. Wrong for a VOD
+	// Selects the ingest driver, the processor's publish mode. Wrong for a VOD
 	// channel too: the segments already on disk were stored under the old
 	// policy, so reinterpreting them live would break playback.
 	add(old.canonicalSourceType() != next.canonicalSourceType(), "source_type")
-	add(old.canonicalHLSKeyMode() != next.canonicalHLSKeyMode(), "hls_key_mode")
+	// key_mode is absent on purpose: it is set at creation and mergedOperatorConfig
+	// keeps the stored value, so an edit can never change it.
 
 	// Frozen into the watcher at construction.
 	add(!vod && old.MPDURL != next.MPDURL, "mpd_url")

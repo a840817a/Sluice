@@ -10,7 +10,7 @@ func base() Config {
 	return Config{
 		Title:               "t",
 		SourceType:          SourceDASH,
-		HLSKeyMode:          KeyModePassthrough,
+		KeyMode:             KeyModePassthrough,
 		MPDURL:              "http://example.com/a.mpd",
 		PlayReadyLicenseURL: "http://drm.example.com/pr",
 		WidevineLicenseURL:  "http://drm.example.com/wv",
@@ -43,7 +43,6 @@ func TestRestartRequired(t *testing.T) {
 
 		// Frozen into long-lived state at Start.
 		{"source type", func(c *Config) { c.SourceType = SourceHLS }, []string{"source_type"}, []string{"source_type"}},
-		{"key mode", func(c *Config) { c.HLSKeyMode = KeyModeDecrypt }, []string{"hls_key_mode"}, []string{"hls_key_mode"}},
 		{"is vod", func(c *Config) { c.IsVOD = true }, []string{"is_vod"}, []string{"is_vod"}},
 
 		// Ingest-only: inert once the channel is serving from disk in VOD mode.
@@ -98,19 +97,16 @@ func TestRestartRequiredTreatsNilBoolAsEnabled(t *testing.T) {
 	}
 }
 
-// An empty SourceType means "dash" and an empty HLSKeyMode means "passthrough".
-// The admin UI normalises both when it loads a channel and submits the explicit
-// value, so treating "" as different from its default would restart every
-// channel created before those fields existed on its first save — the exact
-// interruption this whole feature is meant to avoid.
+// An empty SourceType means "dash". The admin UI normalises it when it loads a
+// channel and submits the explicit value, so treating "" as different from its
+// default would restart every channel created before the field existed on its
+// first save — the exact interruption this whole feature is meant to avoid.
 func TestRestartRequiredTreatsEmptyAsDefault(t *testing.T) {
 	stored := base()
 	stored.SourceType = ""
-	stored.HLSKeyMode = ""
 
 	submitted := base()
 	submitted.SourceType = SourceDASH
-	submitted.HLSKeyMode = KeyModePassthrough
 
 	if got := RestartRequired(stored, submitted, ModeLive); len(got) != 0 {
 		t.Errorf("empty→explicit default reported %v, want no restart", got)
@@ -133,7 +129,6 @@ func TestRestartRequiredTreatsEmptyAsDefault(t *testing.T) {
 func TestVODBlockersAreSubsetOfLive(t *testing.T) {
 	mutations := []func(*Config){
 		func(c *Config) { c.SourceType = SourceHLS },
-		func(c *Config) { c.HLSKeyMode = KeyModeDecrypt },
 		func(c *Config) { c.MPDURL = "http://other" },
 		func(c *Config) { c.KeepAllSegments = BoolPtr(false) },
 		func(c *Config) { c.IsVOD = true },

@@ -71,6 +71,11 @@ export function restoreToLive(id) {
   return request(`${BASE}/${encodeURIComponent(id)}/restore-to-live`, { method: 'POST' });
 }
 
+/** Adds "kid:key" strings to a DASH decrypt channel; resolves to {added_kids}. */
+export function addKeys(id, keys) {
+  return request(`${BASE}/${encodeURIComponent(id)}/keys`, { method: 'POST', body: { content_keys: keys } });
+}
+
 /** Public player URL for a channel. */
 export function playerURL(id) {
   return `/player/${encodeURIComponent(id)}`;

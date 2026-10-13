@@ -7,7 +7,7 @@ import "github.com/a840817a/sluice/internal/index"
 // ChannelInfo is one configured channel: its stored configuration and what it
 // is doing now.
 type ChannelInfo struct {
-	Config Config        `json:"config"`
+	Config PublicConfig  `json:"config"`
 	Status ChannelStatus `json:"status"`
 }
 
@@ -23,7 +23,7 @@ func (m *Manager) Channels() map[string]ChannelInfo {
 
 	out := make(map[string]ChannelInfo, len(stored))
 	for id, cfg := range stored {
-		out[id] = ChannelInfo{Config: cfg, Status: channelStatus(id, cfg, running[id])}
+		out[id] = ChannelInfo{Config: cfg.Public(), Status: channelStatus(id, cfg, running[id])}
 	}
 	return out
 }
@@ -44,7 +44,7 @@ func (m *Manager) Channel(id string) (ChannelInfo, bool) {
 	if !ok {
 		return ChannelInfo{}, false
 	}
-	return ChannelInfo{Config: cfg, Status: channelStatus(id, cfg, m.Get(id))}, true
+	return ChannelInfo{Config: cfg.Public(), Status: channelStatus(id, cfg, m.Get(id))}, true
 }
 
 // channelStatus is the status of a configured channel: rt's, or a stopped one

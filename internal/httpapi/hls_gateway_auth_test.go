@@ -43,7 +43,7 @@ func TestGatewayAuthHeaderReachesHLSKeyAndSegments(t *testing.T) {
 	mgr := newTestManager(t, cfg)
 	if _, err := createChannel(mgr, context.Background(), "enc", ch.Config{
 		SourceType: ch.SourceHLS,
-		HLSKeyMode: ch.KeyModeDecrypt,
+		KeyMode:    ch.KeyModeDecrypt,
 		MPDURL:     front.URL + "/master.m3u8",
 		Enabled:    true,
 	}); err != nil {

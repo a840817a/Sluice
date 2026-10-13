@@ -112,6 +112,7 @@ func NewRouter(
 		r.Delete("/admin/api/channels/{channelID}", admin.handleDeleteChannel)
 		r.Get("/admin/api/channels/{channelID}/status", admin.handleChannelStatus)
 		r.Post("/admin/api/channels/{channelID}/restart", admin.handleRestartChannel)
+		r.Post("/admin/api/channels/{channelID}/keys", admin.handleAddKeys)
 		r.Post("/admin/api/channels/{channelID}/transition-to-vod", admin.handleTransitionToVOD)
 		r.Post("/admin/api/channels/{channelID}/restore-to-live", admin.handleRestoreToLive)
 	})

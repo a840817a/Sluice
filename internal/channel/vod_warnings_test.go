@@ -78,7 +78,7 @@ func requireVODWithWarning(t *testing.T, m *Manager, rt *Runtime, done <-chan st
 func TestVODCompletesWhenPassthroughKeyIsUnavailable(t *testing.T) {
 	origin := encryptedHLSOrigin(t, true, http.NotFound)
 	m, st, _ := warningsManager(t)
-	cfg := Config{SourceType: SourceHLS, HLSKeyMode: KeyModePassthrough, MPDURL: origin.URL + "/master.m3u8", Enabled: true}
+	cfg := Config{SourceType: SourceHLS, KeyMode: KeyModePassthrough, MPDURL: origin.URL + "/master.m3u8", Enabled: true}
 	if err := st.Put("keys", cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestHotEditDoesNotWaitForVODKeyCheckpoint(t *testing.T) {
 		}
 	})
 	m, st, _ := warningsManager(t)
-	cfg := Config{SourceType: SourceHLS, HLSKeyMode: KeyModePassthrough, MPDURL: origin.URL + "/master.m3u8", Enabled: true}
+	cfg := Config{SourceType: SourceHLS, KeyMode: KeyModePassthrough, MPDURL: origin.URL + "/master.m3u8", Enabled: true}
 	if err := st.Put("edit", cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestVODKeyCheckpointIsBounded(t *testing.T) {
 		<-r.Context().Done()
 	})
 	m, st, _ := warningsManager(t)
-	cfg := Config{SourceType: SourceHLS, HLSKeyMode: KeyModePassthrough, MPDURL: origin.URL + "/master.m3u8", Enabled: true}
+	cfg := Config{SourceType: SourceHLS, KeyMode: KeyModePassthrough, MPDURL: origin.URL + "/master.m3u8", Enabled: true}
 	if err := st.Put("slow", cfg); err != nil {
 		t.Fatal(err)
 	}

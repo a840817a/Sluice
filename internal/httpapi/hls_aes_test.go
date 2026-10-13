@@ -5,10 +5,13 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -100,7 +103,7 @@ func startChannelWithKeyMode(t *testing.T, originURL, keyMode string) *Server {
 	mgr := newTestManager(t, cfg)
 	if _, err := createChannel(mgr, context.Background(), "enc", ch.Config{
 		SourceType: ch.SourceHLS,
-		HLSKeyMode: keyMode,
+		KeyMode:    keyMode,
 		MPDURL:     originURL + "/master.m3u8",
 		Enabled:    true,
 	}); err != nil {
@@ -158,6 +161,30 @@ func TestAES128DecryptMode(t *testing.T) {
 	// Cleartext TS starts with the sync byte; ciphertext almost never would.
 	if got[0] != 0x47 {
 		t.Errorf("stored segment is not cleartext TS (first byte 0x%02x)", got[0])
+	}
+}
+
+// TestAES128DecryptModePersistsKey: decrypt mode still writes the key it
+// fetched to keys.json (ADR 0003), so a restart can resume ingest without the
+// key server. The key proxy keeps refusing it (TestKeyProxyDisabledInDecryptMode).
+func TestAES128DecryptModePersistsKey(t *testing.T) {
+	origin := startEncryptedOrigin(t, 2, true, nil)
+	srv := startChannelWithKeyMode(t, origin.URL, ch.KeyModeDecrypt)
+	waitForEncPlaylist(t, srv, 2)
+
+	path := hlskey.KeyStorePath(srv.cfg.Store.DataDir, "enc")
+	var data []byte
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var err error
+		if data, err = os.ReadFile(path); err == nil && len(data) > 0 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !bytes.Contains(data, []byte(hex.EncodeToString(aesTestKey))) &&
+		!bytes.Contains(data, []byte(base64.StdEncoding.EncodeToString(aesTestKey))) {
+		t.Errorf("keys.json at %s does not hold the fetched key: %q", path, data)
 	}
 }
 
@@ -275,7 +302,7 @@ func TestKeyFetchedOnceAcrossManySegments(t *testing.T) {
 func encChannelConfig(originURL string) ch.Config {
 	return ch.Config{
 		SourceType: ch.SourceHLS,
-		HLSKeyMode: ch.KeyModePassthrough,
+		KeyMode:    ch.KeyModePassthrough,
 		MPDURL:     originURL + "/master.m3u8",
 		Enabled:    true,
 	}

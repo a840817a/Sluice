@@ -302,6 +302,13 @@ function renderCard(card, id, cfg, status) {
   patchHidden(refs.vodBtn, !(status.running && (mode === 'live' || mode === 'vod_failed')));
   patchHidden(refs.restoreBtn, !(status.running && mode === 'vod'));
 
+  // Keys can be added to a DASH channel that decrypts; the list shows KIDs only.
+  const kids = cfg.content_key_ids || [];
+  const takesKeys = (cfg.source_type || 'dash') === 'dash' && cfg.key_mode === 'decrypt';
+  patchHidden(refs.keysBox, !takesKeys);
+  patchText(refs.keysSummary, `Content keys（${kids.length}）`);
+  patchText(refs.keyIds, kids.join('\n'));
+
   renderProgress(refs, status);
   renderTracks(card, status.tracks);
 }

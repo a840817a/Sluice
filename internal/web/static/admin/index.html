@@ -67,6 +67,17 @@
       </button>
     </div>
 
+    <details class="ch-keys" data-f="keysBox" hidden>
+      <summary data-f="keysSummary">Content keys</summary>
+      <p class="ch-key-ids mono" data-f="keyIds"></p>
+      <form class="ch-keys-form" data-keys-form>
+        <textarea name="content_keys" class="mono" rows="2" spellcheck="false" autocomplete="off"
+          placeholder="補 key：每行一組 kid:key（各 32 位十六進位）"></textarea>
+        <p class="ch-seg-err" data-f="keysError" role="alert" hidden></p>
+        <button type="submit" class="btn">補上 key</button>
+      </form>
+    </details>
+
     <details class="ch-tracks" data-f="tracksBox" hidden>
       <summary data-f="tracksSummary">每軌明細</summary>
       <div class="tracks-scroll">
@@ -116,12 +127,19 @@
         </select>
       </div>
       <div class="field">
-        <label>HLS AES-128 處理<span class="tag restart" data-restart hidden>需重啟</span></label>
-        <select name="hls_key_mode">
-          <option value="passthrough">維持加密（代理金鑰）</option>
+        <label>加密內容處理</label>
+        <select name="key_mode" data-role="key-mode">
+          <option value="passthrough">維持加密（HLS 代理金鑰 / DASH 授權代理）</option>
           <option value="decrypt">入庫時解密（明文重發）</option>
         </select>
+        <span class="hint" data-role="key-mode-hint" hidden>建立後不可更改。</span>
       </div>
+    </div>
+    <div class="field full" data-role="keys-field" hidden>
+      <label>Content keys <span class="req">*</span></label>
+      <textarea name="content_keys" class="mono" rows="3" spellcheck="false" autocomplete="off"
+        placeholder="每行一組 kid:key（各 32 位十六進位）"></textarea>
+      <span class="hint">建立後只顯示 KID；之後可在頻道卡片補上新的 key，已存在的 KID 無法更改。</span>
     </div>
     <div class="field full">
       <label>來源 URL <span class="req">*</span><span class="tag restart" data-restart hidden>需重啟</span></label>
@@ -129,7 +147,7 @@
     </div>
   </div>
 
-  <div class="fsec">
+  <div class="fsec" data-role="drm-section">
     <div class="sec-label">DRM 授權</div>
     <div class="grid-2">
       <div class="field">

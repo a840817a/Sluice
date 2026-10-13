@@ -259,7 +259,7 @@ func TestStopCancelsInFlightKeyFetch(t *testing.T) {
 	if _, err := m.startForTest(context.Background(), "ch1", Config{
 		SourceType: SourceHLS,
 		MPDURL:     origin.URL + "/master.m3u8",
-		HLSKeyMode: KeyModePassthrough,
+		KeyMode:    KeyModePassthrough,
 		Enabled:    true,
 	}); err != nil {
 		t.Fatalf("start: %v", err)

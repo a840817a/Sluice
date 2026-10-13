@@ -258,6 +258,19 @@ progress.prog-bar.done::-moz-progress-bar { background: var(--track-fill-done); 
   background: var(--live-bg); border: 1px solid var(--live-border); color: var(--live-text);
   font-size: 12.5px; overflow-wrap: anywhere;
 }
+.ch-keys { font-size: 12.5px; }
+.ch-key-ids { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-faint); margin: 6px 0; }
+.ch-keys-form { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.ch-keys-form { width: 100%; }
+.ch-keys-form textarea, .field textarea {
+  width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 13px;
+  padding: 8px 12px; resize: vertical;
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--surface-2); color: var(--text);
+}
+.ch-keys-form textarea:focus, .field textarea:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(56, 189, 248, .18);
+}
 .ch-seg-err { font-size: 11.5px; color: var(--text-faint); overflow-wrap: anywhere; }
 
 /* ── Live pulse ── */

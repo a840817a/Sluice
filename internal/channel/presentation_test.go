@@ -33,12 +33,12 @@ func TestResolveKeyRefusesWhatItMustNot(t *testing.T) {
 		{"HLS without a key cache", &Runtime{hls: &hlsingest.Watcher{}}, ErrNoKeyProxy},
 		{"decrypt on ingest", func() *Runtime {
 			rt := &Runtime{hls: &hlsingest.Watcher{}, keys: keys}
-			rt.setConfig(Config{HLSKeyMode: KeyModeDecrypt})
+			rt.setConfig(Config{KeyMode: KeyModeDecrypt})
 			return rt
 		}(), ErrNoKeyProxy},
 		{"key ID never issued", func() *Runtime {
 			rt := &Runtime{hls: &hlsingest.Watcher{}, keys: keys}
-			rt.setConfig(Config{HLSKeyMode: KeyModePassthrough})
+			rt.setConfig(Config{KeyMode: KeyModePassthrough})
 			return rt
 		}(), ErrUnknownKey},
 	} {

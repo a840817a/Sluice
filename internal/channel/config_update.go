@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 )
 
 var (
@@ -15,6 +16,12 @@ var (
 	ErrChannelExists   = errors.New("channel already exists")
 	// ErrInvalidChannelID: the ID does not match validChannelID.
 	ErrInvalidChannelID = errors.New("channel id must match [a-zA-Z0-9_-]{1,64}")
+	// ErrKeyModeImmutable: an edit asked for a key_mode other than the one the
+	// channel was created with.
+	ErrKeyModeImmutable = errors.New("key_mode cannot be changed after the channel is created")
+	// ErrInvalidConfig: an edit would leave the channel's stored settings
+	// inconsistent.
+	ErrInvalidConfig = errors.New("invalid channel configuration")
 )
 
 // validChannelID is the shape of every channel ID the manager accepts. The ID
@@ -34,9 +41,15 @@ type UpdateResult struct {
 // mergedOperatorConfig replaces the fields an operator owns while retaining
 // gateway-owned IsVOD at the instant Store.Update commits. RestoreToLive is
 // the sole operation allowed to force IsVOD back to false.
+//
+// KeyMode and ContentKeys are not an edit's to change: the mode is fixed at
+// creation and keys are only ever added through AddContentKeys.
 func mergedOperatorConfig(requested, current Config, restoreLive bool) Config {
 	next := cloneConfig(requested)
 	next.Enabled = true
+	next.KeyMode = current.KeyMode
+	next.LegacyHLSKeyMode = ""
+	next.ContentKeys = slices.Clone(current.ContentKeys)
 	if !restoreLive {
 		next.IsVOD = current.IsVOD
 	}
@@ -124,8 +137,17 @@ func (m *Manager) RestoreToLive(ctx context.Context, id string) error {
 func (m *Manager) UpdateConfig(ctx context.Context, id string, requested Config) (UpdateResult, error) {
 	defer m.lockOperation(id)()
 
-	if _, ok := m.store.Get(id); !ok {
+	stored, ok := m.store.Get(id)
+	if !ok {
 		return UpdateResult{}, ErrChannelNotFound
+	}
+	if requested.KeyMode != "" && requested.KeyMode != stored.canonicalKeyMode() {
+		return UpdateResult{}, ErrKeyModeImmutable
+	}
+	// What would be stored must still be consistent: a source_type edit can
+	// strand content keys on a channel that no longer takes them.
+	if err := mergedOperatorConfig(requested, stored, false).validateContentKeys(); err != nil {
+		return UpdateResult{}, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
 
 	m.mu.RLock()
