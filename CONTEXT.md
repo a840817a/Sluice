@@ -66,7 +66,14 @@ _Avoid_: State, status
 ## Encryption
 
 **Key mode**:
-How a channel handles AES-128 HLS content: Passthrough keeps ciphertext on disk and serves keys through the key proxy; Decrypt removes the encryption during ingest.
+How a channel handles encrypted content, fixed when it is created: Passthrough keeps ciphertext on disk (for AES-128 HLS, serving keys through the key proxy); Decrypt removes the encryption during ingest. For DASH, Decrypt needs content keys.
+
+**Content key**:
+A KID:key pair an operator supplies for a DASH channel in Decrypt mode, so ingest can decrypt the AdaptationSets that use that KID.
+_Avoid_: License key, CEK
+
+**Decrypt warning**:
+A reason a DASH AdaptationSet in a Decrypt channel is not decrypted, or the channel is not served as HLS, reported in the channel status.
 
 **Key proxy**:
 The gateway endpoint that serves content keys to players in place of the origin.

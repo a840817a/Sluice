@@ -10,6 +10,7 @@ A DASH and HLS live stream gateway that ingests from an origin, caches segments 
 - **No remuxing** — HLS segments are passed through byte-for-byte; `.ts` in, `.ts` out
 - **Cross-protocol output** — Any clear fMP4 channel serves both `manifest.mpd` and `master.m3u8` from the same files on disk (see [Output formats](#output-formats))
 - **AES-128 HLS** — Per-channel passthrough (ciphertext on disk, keys brokered by the gateway) or decrypt-on-ingest
+- **CENC DASH** — Per-channel passthrough, or decrypt-on-ingest with operator-supplied content keys (see [DASH decrypt mode](#dash-decrypt-mode))
 - **A/V barrier** — Holds DASH segments until audio and video are temporally aligned before publishing
 - **Sliding window** — Configurable `timeShiftBufferDepth` with safe-edge buffer
 - **Multi-CDN fallback** — Rotates through `<BaseURL>` elements on fetch failure with exponential backoff
@@ -55,6 +56,7 @@ Output follows the source, except that fMP4 can be served as either protocol:
 |--------|----------------|---------------|
 | DASH, clear fMP4 | ✅ | ✅ |
 | DASH, encrypted | ✅ | ❌ (HLS DRM signalling is out of scope) |
+| DASH, decrypt mode, every AdaptationSet decrypted | ✅ | ✅ |
 | HLS, fMP4/CMAF | ✅ | ✅ |
 | HLS, MPEG-TS | ❌ (would require remuxing) | ✅ |
 
@@ -297,6 +299,7 @@ Endpoints that do not apply to a channel return 404 — see [Output formats](#ou
 | `GET` | `/admin/api/channels/{channelID}/status` | Real-time ingest progress, per-track breakdown, and representation status |
 | `POST` | `/admin/api/channels/{channelID}/transition-to-vod` | Trigger live→VOD transition |
 | `POST` | `/admin/api/channels/{channelID}/restore-to-live` | Bring a VOD channel back to live ingest |
+| `POST` | `/admin/api/channels/{channelID}/keys` | Add content keys for new KIDs to a DASH decrypt channel |
 
 #### Ingest Progress
 
@@ -337,14 +340,20 @@ Optional fields:
 |-------|-------------|
 | `title` | Display name in the admin UI |
 | `source_type` | `dash` (default) or `hls` |
-| `key_mode` | `passthrough` (default) or `decrypt`. Set at creation only; an edit that names a different mode is rejected with 400. The old name `hls_key_mode` is still accepted and is rewritten to `key_mode` on the next save. For DASH, `decrypt` decrypts `cenc`/`cbcs` AdaptationSets whose every KID has a content key; any other stays encrypted, and `decrypt_warnings` in the channel status says why |
-| `content_keys` | `["<32 hex KID>:<32 hex key>", …]`; DASH with `key_mode` `decrypt` only, at least one, one per KID. Admin responses show `content_key_ids` instead of the keys. An edit never changes them; add more with `POST /admin/api/channels/{id}/keys` and `{"content_keys":[…]}` (409 if a KID is already stored, nothing is added). An AdaptationSet already stored encrypted that the new keys complete is converted to clear in the background, live or VOD; its segment and init URLs then carry `?c=1` so no cache serves the old ciphertext, and a player that loaded it encrypted must reload |
+| `key_mode` | `passthrough` (default) or `decrypt`. Set at creation only; an edit that names a different mode is rejected with 400. The old name `hls_key_mode` is still accepted and is rewritten to `key_mode` on the next save. For DASH, see [DASH decrypt mode](#dash-decrypt-mode) |
+| `content_keys` | `["<32 hex KID>:<32 hex key>", …]`; DASH with `key_mode` `decrypt` only, at least one, one per KID. Admin responses show `content_key_ids` instead of the keys. An edit never changes them; add more with `POST /admin/api/channels/{id}/keys` and `{"content_keys":[…]}` (409 if a KID is already stored, nothing is added) |
 | `playready_license_url`, `widevine_license_url` | License servers |
 | `enable_playready`, `enable_widevine` | Both default to true |
 | `fetch_headers` | `[{"name":…,"value":…}]` injected into every video request: manifest, playlist, segment, init and AES key |
 | `license_headers` | Same shape, injected into DRM license proxy requests |
 | `forward_client_ip` | Pass `X-Forwarded-For` to the license server |
 | `keep_all_segments` | Unbounded DVR window; defaults to true, set `false` for the sliding window |
+
+#### DASH decrypt mode
+
+The gateway decides per Period and AdaptationSet: when every Representation's `tenc` KID has a content key and the scheme is `cenc` or `cbcs`, it stores the init as a clear one and decrypts each segment in place (no remux), and the served manifest drops that AdaptationSet's `ContentProtection`. Any other AdaptationSet stays encrypted. `cens`, `cbc1` and key rotation inside a track are not supported. A wrong key cannot be detected: its segments decrypt to garbage, not to an error.
+
+The channel status lists `decrypt_warnings`, each with a `kind`: `missing_key` (no key for a KID), `unsupported_scheme`, `malformed` (an init or segment could not be read), `key_unmatched` (a key no init uses), `conversion_failed`, and `hls_closed` (an AdaptationSet is still encrypted, so the channel is not served as HLS). Keys added with `POST /admin/api/channels/{id}/keys` that complete an AdaptationSet already stored encrypted convert it to clear in the background, live or VOD. Its segment and init URLs then carry `?c=1` so no cache serves the old ciphertext, and a player that loaded it encrypted must reload. A conversion whose directory swap is stuck halfway blocks the channel's next start until you resolve it by hand; the error names both directories.
 
 ## Disk Layout
 
@@ -354,7 +363,7 @@ Optional fields:
 └── {channelID}/
     ├── manifest.mpd                           # Saved VOD manifest (after transition)
     ├── hls-source.json                        # HLS variants + key registry (HLS only)
-    ├── keys.json                              # Cached AES-128 keys (passthrough only, 0600)
+    ├── keys.json                              # Cached AES-128 keys (HLS, 0600)
     └── periods/
         └── {periodID}/
             └── {mediaType}_{asID}/            # e.g. video_0, audio_1, text_2

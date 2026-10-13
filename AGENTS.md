@@ -29,6 +29,9 @@ covers. The repository directory is still named `mpd` (the project's old name);
   segments, so a bug that reads the wrong one cannot fail an end-to-end test
   unless it disables `keep_all_segments` and ingests more than 120 segments per
   representation. Prefer a table test inside package `channel`.
+- CENC fixtures in `testdata/cenc` come from Bento4 (its README has the
+  commands). Decrypt tests must compare against the `clear/` variant, because
+  a wrong key decrypts without error.
 - Longer procedures (refactor checks, admin UI checks, reproducing a Stop race)
   are in `docs/agents/testing.md`.
 
