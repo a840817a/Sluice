@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/a840817a/sluice/internal/cenc"
@@ -71,7 +72,7 @@ func (r *Registry) nudge() {
 // Convertible lists the stored AdaptationSets without a decrypt.json whose
 // representations' stored inits all carry a KID the registry holds a key for,
 // in a scheme internal/cenc decrypts. An AdaptationSet whose conversion
-// failed is left out until keys are added again.
+// failed is left out until a key that may change that is added (AddKeys).
 func (r *Registry) Convertible() ([]Conversion, error) {
 	periods, err := store.ScanChannel(r.dataDir, r.channelID)
 	if err != nil {
@@ -86,7 +87,7 @@ func (r *Registry) Convertible() ([]Conversion, error) {
 			key := ASKey{PeriodID: p.ID, ASID: as.ID}
 			r.mu.RLock()
 			_, decrypted := r.decrypted[key]
-			failed := r.failed[key]
+			_, failed := r.failed[key]
 			r.mu.RUnlock()
 			dir := as.Reps[0].ASDir()
 			if decrypted || failed {
@@ -127,10 +128,13 @@ func (r *Registry) Convertible() ([]Conversion, error) {
 // interrupted. Only then does the registry treat the AdaptationSet as
 // decrypted, with a new generation and URL version.
 //
-// A failure leaves the AdaptationSet stored as it was, records a
-// conversion_failed warning and removes the staging; the AdaptationSet is
-// not tried again until keys are added. When ctx ends first the conversion
-// is dropped without a warning: the next start tries again.
+// A failure leaves the AdaptationSet stored as it was, records a warning
+// and removes the staging. A stored segment whose samples rotate to KIDs
+// without a key fails it with a missing_key warning naming them, and it is
+// tried again once a key for one of them is added; any other failure is a
+// conversion_failed warning, tried again once any key is added. When ctx
+// ends first the conversion is dropped without a warning: the next start
+// tries again.
 func (r *Registry) Convert(ctx context.Context, c Conversion, exclusive Exclusive) error {
 	paths := stagingPaths(r.dataDir, r.channelID, c.dir)
 	err := r.convert(ctx, c, paths, exclusive)
@@ -148,13 +152,21 @@ func (r *Registry) Convert(ctx context.Context, c Conversion, exclusive Exclusiv
 	if ctx.Err() != nil {
 		return err
 	}
-	r.mu.Lock()
-	r.failed[c.AS] = true
-	r.mu.Unlock()
-	r.record(c.AS, Warning{Kind: KindConversionFailed,
-		Message: fmt.Sprintf("stored AdaptationSet not converted to clear, so it stays encrypted: %v", err)})
 	slog.Warn("AdaptationSet conversion failed", "channel", r.channelID,
 		"period", c.AS.PeriodID, "as", c.AS.ASID, "err", err)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if mk := (*cenc.MissingKeyError)(nil); errors.As(err, &mk) {
+		r.failed[c.AS] = slices.Clone(mk.KIDs)
+		r.markSeen(mk.KIDs)
+		delete(r.warnings, warningKey{as: c.AS, kind: KindConversionFailed})
+		r.recordLocked(c.AS, Warning{Kind: KindMissingKey, KIDs: kidStrings(mk.KIDs),
+			Message: "no content key held for these KIDs, which stored segments use, so the AdaptationSet stays encrypted"})
+		return err
+	}
+	r.failed[c.AS] = nil
+	r.recordLocked(c.AS, Warning{Kind: KindConversionFailed,
+		Message: fmt.Sprintf("stored AdaptationSet not converted to clear, so it stays encrypted: %v", err)})
 	return err
 }
 
@@ -163,10 +175,10 @@ func (r *Registry) Convert(ctx context.Context, c Conversion, exclusive Exclusiv
 // added again.
 func (r *Registry) Refuse(c Conversion, reason string) {
 	r.mu.Lock()
-	r.failed[c.AS] = true
-	r.mu.Unlock()
-	r.record(c.AS, Warning{Kind: KindConversionFailed,
+	r.failed[c.AS] = nil
+	r.recordLocked(c.AS, Warning{Kind: KindConversionFailed,
 		Message: "stored AdaptationSet not converted to clear, so it stays encrypted: " + reason})
+	r.mu.Unlock()
 }
 
 func (r *Registry) convert(ctx context.Context, c Conversion, paths staging, exclusive Exclusive) error {

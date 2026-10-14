@@ -239,6 +239,59 @@ func TestConvertFailureKeepsCiphertext(t *testing.T) {
 	onlyConversion(t, r)
 }
 
+// A conversion that meets a stored segment rotating to a KID without a key
+// leaves the AdaptationSet as stored and reports missing_key for that KID,
+// not conversion_failed. Only adding that KID's key makes it convertible
+// again.
+func TestConvertMissingRotationKey(t *testing.T) {
+	dataDir := t.TempDir()
+	loc := storeCiphertextAudio(t, dataDir, 1)
+	audio, missing := mustKey(t, audioKey), mustKey(t, missingKey)
+	seg2 := rotated(t, audioFixture, "seg-2.m4s", audio, missing)
+	if err := store.Write(loc.SegmentPath(2, store.ExtFMP4), seg2); err != nil {
+		t.Fatal(err)
+	}
+	r := loadedRegistry(t, dataDir, audioKey)
+	c := onlyConversion(t, r)
+
+	if err := r.Convert(context.Background(), c, run); err == nil {
+		t.Fatal("Convert of a segment without its key succeeded")
+	}
+	if got, _ := os.ReadFile(loc.SegmentPath(2, store.ExtFMP4)); !bytes.Equal(got, seg2) {
+		t.Error("segment 2 changed by a failed conversion")
+	}
+	if got, _ := os.ReadFile(loc.InitPath()); !bytes.Equal(got, audioFile(t, "cenc", "init.mp4")) {
+		t.Error("init changed by a failed conversion")
+	}
+	if r.IsDecrypted(c.AS) {
+		t.Error("AdaptationSet decrypted after a failed conversion")
+	}
+	ws := r.Warnings()
+	if len(ws) != 1 || ws[0].Kind != KindMissingKey || ws[0].AdaptationSet != "1" || len(ws[0].KIDs) != 1 || ws[0].KIDs[0] != missing.KID.String() {
+		t.Errorf("warnings = %+v, want only missing_key for %s", ws, missing.KID)
+	}
+
+	r.AddKeys([]cenc.Key{mustKey(t, videoKey)})
+	if pending, _ := r.Convertible(); len(pending) != 0 {
+		t.Errorf("convertible again after an unrelated key: %+v", pending)
+	}
+	r.AddKeys([]cenc.Key{missing})
+	if _, ok := warningOf(r.Warnings(), KindMissingKey); ok {
+		t.Errorf("warnings = %+v, want no missing_key once its key is held", r.Warnings())
+	}
+	if err := r.Convert(context.Background(), onlyConversion(t, r), run); err != nil {
+		t.Fatalf("Convert with the key: %v", err)
+	}
+	got, _ := os.ReadFile(loc.SegmentPath(2, store.ExtFMP4))
+	if !bytes.Equal(mdat(t, got), mdat(t, audioFile(t, "clear", "seg-2.m4s"))) {
+		t.Error("converted segment 2 differs from the clear fixture's")
+	}
+	// Only the unrelated key is left to report.
+	if ws := r.Warnings(); len(ws) != 1 || ws[0].Kind != KindKeyUnmatched {
+		t.Errorf("warnings after the conversion = %+v, want only key_unmatched", ws)
+	}
+}
+
 // A conversion dropped because the channel is stopping leaves no warning.
 func TestConvertDroppedWhenStopping(t *testing.T) {
 	dataDir := t.TempDir()

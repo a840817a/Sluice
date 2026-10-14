@@ -13,7 +13,8 @@ const (
 )
 
 // TrackProtection is how one track of an init segment is encrypted, as read
-// from its tenc, its seig sample group and trex. It holds no key, so it can be persisted.
+// from its tenc, its seig sample group and trex. It holds no key, so it can
+// be persisted.
 type TrackProtection struct {
 	TrackID uint32 `json:"track_id"`
 	// Scheme is the schm scheme type: "cenc" or "cbcs".
@@ -304,8 +305,8 @@ func ReadInitProtection(init []byte) ([]TrackProtection, error) {
 
 // ClearInit rewrites an encrypted init segment as a clear one: every encv or
 // enca sample entry takes its frma original format and loses its sinf, and
-// pssh boxes and seig sample groups (sgpd, sbgp) are dropped. The stsd keeps its entry count and order. A clear
-// init comes back unchanged (as a copy).
+// pssh boxes and seig sample groups (sgpd, sbgp) are dropped. The stsd keeps
+// its entry count and order. A clear init comes back unchanged (as a copy).
 func ClearInit(init []byte) ([]byte, error) {
 	tps, err := ReadInitProtection(init)
 	if err != nil {

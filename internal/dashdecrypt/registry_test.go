@@ -3,6 +3,7 @@ package dashdecrypt
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
@@ -280,8 +281,8 @@ func TestPrepareInitNewRepresentationOfDecryptedAdaptationSet(t *testing.T) {
 	if r.Generation() == gen {
 		t.Error("a refusal did not change the generation")
 	}
-	if got := r.Refused(); !slices.Equal(got, []RefusedRep{{AS: as, RepID: "r1"}}) {
-		t.Errorf("Refused = %+v, want r1", got)
+	if got := r.Retriable([]cenc.KID{mustKey(t, audioKey).KID}); !slices.Equal(got, []RefusedRep{{AS: as, RepID: "r1"}}) {
+		t.Errorf("Retriable = %+v, want r1", got)
 	}
 	if ws := r.Warnings(); len(ws) != 1 || ws[0].Kind != KindMissingKey || !slices.Equal(ws[0].KIDs, []string{audioKID}) {
 		t.Errorf("warnings = %+v, want missing_key for the audio KID", ws)
@@ -414,51 +415,247 @@ func rotationInit(t *testing.T, init []byte, kid cenc.KID) []byte {
 	return out
 }
 
-// A segment whose samples rotate to a KID without a key is withheld: the
-// KID joins the AdaptationSet's missing_key warning and the representation
-// is listed for a retry, until a segment decrypts with that key.
-func TestSegmentRotationToMissingKey(t *testing.T) {
-	r := NewRegistry(t.TempDir(), "c", keySet(t, videoKey, rotKey))
+// rotated returns the clear segment file of fixture rep (variant "clear")
+// encrypted with every sample in the fragment's own seig group under
+// rotation's KID, and the samples outside it under tenc's KID def.
+func rotated(t *testing.T, rep []string, file string, def cenc.Key, rotation cenc.Key) []byte {
+	t.Helper()
+	clear := readFixture(t, append(append([]string{"clear"}, rep...), file)...)
+	i := bytes.Index(clear, []byte("trun"))
+	if i < 0 {
+		t.Fatal("segment has no trun")
+	}
+	index := make([]uint32, binary.BigEndian.Uint32(clear[i+8:]))
+	for n := range index {
+		index[n] = cenctest.LocalBase + 1
+	}
+	seg, err := cenctest.Rotate(clear, cenctest.Rotation{
+		Default: cenctest.Group{Protected: true, IVSize: 16, KID: def.KID},
+		Local:   []cenctest.Group{{Protected: true, IVSize: 8, KID: rotation.KID}},
+		Index:   index,
+		Keys:    map[[16]byte][16]byte{def.KID: def.Value, rotation.KID: rotation.Value},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return seg
+}
+
+var videoRep = []string{"video", "avc1"}
+
+// missingKey's KID appears only in seig sample groups, and no registry
+// holds it at first.
+const missingKey = "50505050505050505050505050505050:505152535455565758595a5b5c5d5e5f"
+
+// segTask is segment n of representation v0 of the video AdaptationSet of
+// period p0.
+func segTask(n uint64) *queue.SegmentTask {
+	t := task("v0")
+	t.SegNo = n
+	return t
+}
+
+func decryptedVideo(t *testing.T, dir string, keys ...string) *Registry {
+	t.Helper()
+	r := NewRegistry(dir, "c", keySet(t, keys...))
 	if _, err := r.PrepareInit(context.Background(), task("v0"), readFixture(t, "cenc", "video", "avc1", "init.mp4"), false, nil); err != nil {
 		t.Fatal(err)
 	}
-	as := ASKey{"p0", "0"}
-	// The extra key is used only by segments, so far by none.
-	if ws := r.Warnings(); len(ws) != 1 || ws[0].Kind != KindKeyUnmatched {
-		t.Fatalf("warnings = %+v, want key_unmatched for the rotation key", ws)
-	}
+	return r
+}
 
-	missing := cenc.KID{0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50}
-	r.RecordSegmentFailure(as, "v0", 7, &cenc.MissingKeyError{KIDs: []cenc.KID{missing}})
-	ws := r.Warnings()
-	if len(ws) != 2 || ws[0].Kind != KindMissingKey || !slices.Equal(ws[0].KIDs, []string{missing.String()}) {
-		t.Fatalf("warnings = %+v, want missing_key for %s", ws, missing)
+func warningOf(ws []Warning, kind string) (Warning, bool) {
+	for _, w := range ws {
+		if w.Kind == kind {
+			return w, true
+		}
 	}
-	if got := r.Withheld(); !slices.Equal(got, []RefusedRep{{AS: as, RepID: "v0"}}) {
-		t.Errorf("Withheld = %+v, want v0", got)
+	return Warning{}, false
+}
+
+// A segment whose samples rotate to a KID without a key is withheld: the
+// KID joins the AdaptationSet's missing_key warning and the representation
+// is retriable for that KID's key, and for no other. Once the key is added
+// the KID leaves the warning at once, though the representation stays
+// retriable until a segment of it decrypts with the key.
+func TestSegmentRotationToMissingKey(t *testing.T) {
+	r := decryptedVideo(t, t.TempDir(), videoKey, rotKey)
+	as := ASKey{"p0", "0"}
+	video, missing := mustKey(t, videoKey), mustKey(t, missingKey)
+	v0 := []RefusedRep{{AS: as, RepID: "v0"}}
+
+	seg := rotated(t, videoRep, "seg-1.m4s", video, missing)
+	err := r.DecryptSegment(segTask(7), seg)
+	if mk := (*cenc.MissingKeyError)(nil); !errors.As(err, &mk) {
+		t.Fatalf("DecryptSegment = %v, want a MissingKeyError", err)
+	}
+	w, ok := warningOf(r.Warnings(), KindMissingKey)
+	if !ok || !slices.Equal(w.KIDs, []string{missing.KID.String()}) || !strings.Contains(w.Message, "v0") {
+		t.Fatalf("warnings = %+v, want missing_key for %s naming v0", r.Warnings(), missing.KID)
+	}
+	if got := r.Retriable([]cenc.KID{missing.KID}); !slices.Equal(got, v0) {
+		t.Errorf("Retriable(missing) = %+v, want v0", got)
+	}
+	if got := r.Retriable([]cenc.KID{rotKID, video.KID}); len(got) != 0 {
+		t.Errorf("Retriable(other KIDs) = %+v, want none", got)
 	}
 	if !r.IsDecrypted(as) {
 		t.Error("a withheld segment undid the decision")
 	}
 
-	// A segment using keys already held changes nothing but key_unmatched.
-	r.SegmentDecrypted(as, []cenc.KID{rotKID})
-	ws = r.Warnings()
-	if len(ws) != 1 || ws[0].Kind != KindMissingKey || len(r.Withheld()) != 1 {
-		t.Errorf("after a segment with held keys: warnings %+v, withheld %+v", ws, r.Withheld())
+	r.AddKeys([]cenc.Key{missing})
+	if _, ok := warningOf(r.Warnings(), KindMissingKey); ok {
+		t.Errorf("warnings = %+v, want no missing_key once its key is held", r.Warnings())
+	}
+	if got := r.Retriable([]cenc.KID{missing.KID}); !slices.Equal(got, v0) {
+		t.Errorf("Retriable(missing) after AddKeys = %+v, want v0 until a segment decrypts", got)
+	}
+	seg = rotated(t, videoRep, "seg-1.m4s", video, missing)
+	if err := r.DecryptSegment(segTask(7), seg); err != nil {
+		t.Fatalf("with the key: %v", err)
+	}
+	if !bytes.Equal(mdat(t, seg), mdat(t, readFixture(t, "clear", "video", "avc1", "seg-1.m4s"))) {
+		t.Error("decrypted samples differ from the clear fixture's")
+	}
+	if got := r.Retriable([]cenc.KID{missing.KID}); len(got) != 0 {
+		t.Errorf("Retriable = %+v, want none once a segment decrypted with the key", got)
+	}
+}
+
+// key_unmatched lists a key used only by segments' own seig sample groups,
+// with a message that says so, until a segment decrypts with it.
+func TestKeyUnmatchedClearsWhenASegmentUsesTheKey(t *testing.T) {
+	r := decryptedVideo(t, t.TempDir(), videoKey, rotKey)
+	w, ok := warningOf(r.Warnings(), KindKeyUnmatched)
+	if !ok || !slices.Equal(w.KIDs, []string{rotKIDHex}) {
+		t.Fatalf("warnings = %+v, want key_unmatched for the rotation key", r.Warnings())
+	}
+	if w.Message != "no init or segment seen so far uses these keys" {
+		t.Errorf("key_unmatched message = %q", w.Message)
+	}
+	seg := rotated(t, videoRep, "seg-1.m4s", mustKey(t, videoKey), mustKey(t, rotKey))
+	if err := r.DecryptSegment(segTask(1), seg); err != nil {
+		t.Fatal(err)
+	}
+	if ws := r.Warnings(); len(ws) != 0 {
+		t.Errorf("warnings = %+v, want none once a segment used the key", ws)
+	}
+}
+
+// The withheld KIDs are kept in decrypt.json, without a key: a restart
+// reports the missing_key warning again and still knows what to retry, and
+// one restarted with the key held has nothing left to report.
+func TestWithheldSurvivesLoad(t *testing.T) {
+	dir := t.TempDir()
+	r := decryptedVideo(t, dir, videoKey)
+	// Stored as ingest would, so Load finds the AdaptationSet.
+	loc := store.RepLocation{DataDir: dir, ChannelID: "c", PeriodID: "p0", MediaType: "video", ASID: "0", RepID: "v0"}
+	if err := store.Write(loc.InitPath(), readFixture(t, "cenc", "video", "avc1", "init.mp4")); err != nil {
+		t.Fatal(err)
+	}
+	video, missing := mustKey(t, videoKey), mustKey(t, missingKey)
+	if err := r.DecryptSegment(segTask(3), rotated(t, videoRep, "seg-1.m4s", video, missing)); err == nil {
+		t.Fatal("decrypted without the key")
+	}
+	raw, err := os.ReadFile(filepath.Join(loc.ASDir(), StateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("505152535455565758595a5b5c5d5e5f")) || bytes.Contains(raw, []byte("00112233445566778899aabbccddeeff")) {
+		t.Errorf("%s holds a key:\n%s", StateFileName, raw)
 	}
 
-	r.AddKeys([]cenc.Key{{KID: missing}})
-	_, keys, _ := r.Lookup(as, "v0")
-	if _, ok := keys(missing); !ok {
-		t.Error("the KeyLookup Lookup returned misses a key added since")
+	restarted := loadedRegistry(t, dir, videoKey)
+	w, ok := warningOf(restarted.Warnings(), KindMissingKey)
+	if !ok || w.AdaptationSet != "0" || !slices.Equal(w.KIDs, []string{missing.KID.String()}) {
+		t.Errorf("after Load: warnings %+v, want missing_key for %s", restarted.Warnings(), missing.KID)
 	}
-	r.SegmentDecrypted(as, []cenc.KID{missing})
-	if ws := r.Warnings(); len(ws) != 0 {
-		t.Errorf("warnings = %+v, want none once the KID decrypted", ws)
+	if got := restarted.Retriable([]cenc.KID{missing.KID}); !slices.Equal(got, []RefusedRep{{AS: ASKey{"p0", "0"}, RepID: "v0"}}) {
+		t.Errorf("after Load: Retriable = %+v, want v0", got)
 	}
-	if got := r.Withheld(); len(got) != 0 {
-		t.Errorf("Withheld = %+v, want none", got)
+
+	withKey := loadedRegistry(t, dir, videoKey, missingKey)
+	if ws := withKey.Warnings(); len(ws) != 0 {
+		t.Errorf("Load with the key held: warnings %+v, want none", ws)
+	}
+	if got := withKey.Retriable([]cenc.KID{missing.KID}); len(got) != 0 {
+		t.Errorf("Load with the key held: Retriable = %+v, want none", got)
+	}
+}
+
+// The missing_key warning of a decrypted AdaptationSet lists a KID while a
+// refused representation or withheld segments still lack its key, whichever
+// came first, and accepting the refused representation keeps what the
+// withheld segments lack.
+func TestMissingKeyWarningTracksEachSource(t *testing.T) {
+	audio := readFixture(t, "cenc", "audio", "und", "mp4a.40.2", "init.mp4")
+	video, missing := mustKey(t, videoKey), mustKey(t, missingKey)
+	as := ASKey{"p0", "0"}
+	kids := func(r *Registry) []string {
+		w, _ := warningOf(r.Warnings(), KindMissingKey)
+		return w.KIDs
+	}
+	both := []string{audioKID, missing.KID.String()}
+
+	for _, withheldFirst := range []bool{true, false} {
+		r := decryptedVideo(t, t.TempDir(), videoKey)
+		withhold := func() {
+			if err := r.DecryptSegment(segTask(3), rotated(t, videoRep, "seg-1.m4s", video, missing)); err == nil {
+				t.Fatal("decrypted without the key")
+			}
+		}
+		refuse := func() {
+			if _, err := r.PrepareInit(context.Background(), task("r1"), audio, false, nil); err == nil {
+				t.Fatal("r1 joined without its key")
+			}
+		}
+		if withheldFirst {
+			withhold()
+			refuse()
+		} else {
+			refuse()
+			withhold()
+		}
+		if got := kids(r); !slices.Equal(got, both) {
+			t.Fatalf("withheld first %v: missing_key KIDs = %v, want %v", withheldFirst, got, both)
+		}
+		if got := r.Retriable([]cenc.KID{mustKey(t, audioKey).KID}); !slices.Equal(got, []RefusedRep{{AS: as, RepID: "r1"}}) {
+			t.Errorf("Retriable(audio) = %+v, want r1 only", got)
+		}
+
+		r.AddKeys([]cenc.Key{mustKey(t, audioKey)})
+		if _, err := r.PrepareInit(context.Background(), task("r1"), audio, false, nil); err != nil {
+			t.Fatalf("r1 with its key: %v", err)
+		}
+		if got := kids(r); !slices.Equal(got, []string{missing.KID.String()}) {
+			t.Errorf("withheld first %v: after r1 joined, missing_key KIDs = %v, want the withheld KID", withheldFirst, got)
+		}
+	}
+}
+
+// A representation refused for want of a key is retriable for that key
+// only; one refused before a restart, whose KIDs this run has not learnt,
+// for any key.
+func TestRetriableRefused(t *testing.T) {
+	dir := t.TempDir()
+	r := decryptedVideo(t, dir, videoKey)
+	loc := store.RepLocation{DataDir: dir, ChannelID: "c", PeriodID: "p0", MediaType: "video", ASID: "0", RepID: "v0"}
+	if err := store.Write(loc.InitPath(), readFixture(t, "cenc", "video", "avc1", "init.mp4")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.PrepareInit(context.Background(), task("r1"), readFixture(t, "cenc", "audio", "und", "mp4a.40.2", "init.mp4"), false, nil); err == nil {
+		t.Fatal("r1 joined without its key")
+	}
+	r1 := []RefusedRep{{AS: ASKey{"p0", "0"}, RepID: "r1"}}
+	other := mustKey(t, missingKey).KID
+	if got := r.Retriable([]cenc.KID{other}); len(got) != 0 {
+		t.Errorf("Retriable(unrelated) = %+v, want none", got)
+	}
+	if got := r.Retriable([]cenc.KID{mustKey(t, audioKey).KID}); !slices.Equal(got, r1) {
+		t.Errorf("Retriable(audio) = %+v, want r1", got)
+	}
+	if got := loadedRegistry(t, dir, videoKey).Retriable([]cenc.KID{other}); !slices.Equal(got, r1) {
+		t.Errorf("after Load: Retriable(unrelated) = %+v, want r1", got)
 	}
 }
 

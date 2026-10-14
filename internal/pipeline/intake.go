@@ -10,9 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/a840817a/sluice/internal/cenc"
 	"github.com/a840817a/sluice/internal/config"
-	"github.com/a840817a/sluice/internal/dashdecrypt"
 	"github.com/a840817a/sluice/internal/hlskey"
 	"github.com/a840817a/sluice/internal/index"
 	"github.com/a840817a/sluice/internal/metrics"
@@ -115,28 +113,18 @@ func (in *Intake) Store(ctx context.Context, task *queue.SegmentTask, data []byt
 		data = plain
 	}
 	// A DASH decrypt channel decrypts the media of an AdaptationSet its
-	// registry decrypted, in place, for the same reason.
+	// registry decrypted, in place, for the same reason. A segment it cannot
+	// decrypt is dropped, since its AdaptationSet is stored clear; one whose
+	// samples rotate to a KID without a key is fetched again once the key is
+	// added (channel onKeysAdded).
 	if task.Format == queue.FormatFMP4 && in.inits.decrypt != nil {
-		as := dashdecrypt.ASKey{PeriodID: task.PeriodID, ASID: task.ASID}
-		if tp, keys, ok := in.inits.decrypt.Lookup(as, task.RepID); ok {
-			var used []cenc.KID
-			lookup := func(kid cenc.KID) ([16]byte, bool) {
-				used = append(used, kid)
-				return keys(kid)
-			}
-			if err := cenc.DecryptSegment(data, tp, lookup); err != nil {
-				slog.Warn("segment decryption failed",
-					"rep", task.RepID,
-					"seg", task.SegNo,
-					"err", err,
-				)
-				// A segment whose samples rotate to a KID without a key is
-				// dropped: its AdaptationSet is stored clear. It is fetched
-				// again once the key is added (channel onKeysAdded).
-				in.inits.decrypt.RecordSegmentFailure(as, task.RepID, task.SegNo, err)
-				return Outcome{Stage: StageDecrypt, Err: err}
-			}
-			in.inits.decrypt.SegmentDecrypted(as, used)
+		if err := in.inits.decrypt.DecryptSegment(task, data); err != nil {
+			slog.Warn("segment decryption failed",
+				"rep", task.RepID,
+				"seg", task.SegNo,
+				"err", err,
+			)
+			return Outcome{Stage: StageDecrypt, Err: err}
 		}
 	}
 

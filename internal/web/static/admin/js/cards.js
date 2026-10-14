@@ -62,6 +62,13 @@ function collectRefs(root) {
 
 // ── progress rendering ──────────────────────────────────────────────────────
 
+/** One decrypt warning as text: kind, where, message, and the KIDs it names. */
+function describeDecryptWarning(w) {
+  const where = w.adaptation_set ? ` (Period ${w.period || '—'}, AdaptationSet ${w.adaptation_set})` : '';
+  const kids = w.kids && w.kids.length ? ` [${w.kids.join(', ')}]` : '';
+  return `${w.kind}${where}: ${w.message}${kids}`;
+}
+
 /**
  * Fills the progress block for one channel.
  *
@@ -70,13 +77,6 @@ function collectRefs(root) {
  * this replaces came from inventing a denominator for it — so the fix is to stop
  * dividing rather than to divide more carefully.
  */
-/** One decrypt warning as text: kind, where, message, and the KIDs it names. */
-function describeDecryptWarning(w) {
-  const where = w.adaptation_set ? ` (Period ${w.period || '—'}, AdaptationSet ${w.adaptation_set})` : '';
-  const kids = w.kids && w.kids.length ? ` [${w.kids.join(', ')}]` : '';
-  return `${w.kind}${where}: ${w.message}${kids}`;
-}
-
 function renderProgress(refs, status) {
   const p = status.progress;
   const mode = status.mode || 'live';

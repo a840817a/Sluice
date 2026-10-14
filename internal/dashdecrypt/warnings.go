@@ -1,6 +1,7 @@
 package dashdecrypt
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"slices"
@@ -24,8 +25,10 @@ const (
 	// KindMalformed: an init or segment could not be read, so the
 	// AdaptationSet stays encrypted or a segment was dropped.
 	KindMalformed = "malformed"
-	// KindKeyUnmatched: a key whose KID none of the channel's inits uses.
-	// Reported only once the channel has read an init.
+	// KindKeyUnmatched: a key whose KID no init or decrypted segment of the
+	// channel has used so far. A key used only by the seig sample groups of
+	// later segments is listed until one of them decrypts with it. Reported
+	// only once the channel has read an init.
 	KindKeyUnmatched = "key_unmatched"
 	// KindConversionFailed: converting an AdaptationSet stored as ciphertext
 	// to clear, once keys were added, failed or was refused, so it stays
@@ -70,7 +73,7 @@ func (r *Registry) Warnings() []Warning {
 		if len(unmatched) > 0 {
 			slices.Sort(unmatched)
 			out = append(out, Warning{Kind: KindKeyUnmatched, KIDs: unmatched,
-				Message: "no init segment of this channel uses these keys"})
+				Message: "no init or segment seen so far uses these keys"})
 		}
 	}
 	return out
@@ -89,6 +92,8 @@ type decision struct {
 	reps map[string]cenc.TrackProtection
 	// warning, when set, says why the AdaptationSet cannot be decrypted.
 	warning *Warning
+	// missing lists the KIDs of a missing_key warning.
+	missing []cenc.KID
 	// kids lists every KID the inits carry.
 	kids []cenc.KID
 }
@@ -99,7 +104,7 @@ type decision struct {
 // each KID its init names (tenc's and those of its seig sample groups).
 func decide(inits []repInit, keys cenc.KeySet) decision {
 	d := decision{reps: make(map[string]cenc.TrackProtection)}
-	var missing []string
+	var missing []cenc.KID
 	var fail *Warning
 	for _, in := range inits {
 		tps, err := cenc.ReadInitProtection(in.data)
@@ -134,8 +139,8 @@ func decide(inits []repInit, keys cenc.KeySet) decision {
 		tp := tps[0]
 		d.reps[in.repID] = tp
 		for _, kid := range tp.KIDs() {
-			if _, ok := keys[kid]; !ok && !slices.Contains(missing, kid.String()) {
-				missing = append(missing, kid.String())
+			if _, ok := keys[kid]; !ok && !slices.Contains(missing, kid) {
+				missing = append(missing, kid)
 			}
 		}
 	}
@@ -143,12 +148,22 @@ func decide(inits []repInit, keys cenc.KeySet) decision {
 	case fail != nil:
 		d.warning = fail
 	case len(missing) > 0:
-		slices.Sort(missing)
-		d.warning = &Warning{Kind: KindMissingKey, KIDs: missing,
+		slices.SortFunc(missing, func(a, b cenc.KID) int { return bytes.Compare(a[:], b[:]) })
+		d.missing = missing
+		d.warning = &Warning{Kind: KindMissingKey, KIDs: kidStrings(missing),
 			Message: "no content key held for these KIDs"}
 	}
 	if d.warning != nil {
 		d.reps = nil
 	}
 	return d
+}
+
+// kidStrings returns kids in hex, as a Warning lists them.
+func kidStrings(kids []cenc.KID) []string {
+	out := make([]string, len(kids))
+	for i, k := range kids {
+		out[i] = k.String()
+	}
+	return out
 }

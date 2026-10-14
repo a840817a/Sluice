@@ -93,14 +93,15 @@ func (m *Manager) AddContentKeys(ctx context.Context, id string, keys []string) 
 // channel's conversion goroutine converts those already stored encrypted
 // that the keys complete (runConversions).
 //
-// A representation whose init was refused for want of a key is tried
-// again: the next poll of a live origin enqueues its segments anew
-// (Watcher.Rediscover), and the processor prepares its init again for any
-// of them because keys were added since it failed (Registry.KeyEpoch). So
-// is a representation whose segments were dropped because their samples
-// rotated to a KID without a key (Registry.Withheld). A channel that
-// fetches nothing more, a stalled live one or a VOD, tries them again only
-// when it is restarted.
+// A representation whose init was refused, or whose segments were dropped
+// because their samples rotated to a KID, for want of one of these keys is
+// tried again (Registry.Retriable): the watcher offers its segments anew
+// (Watcher.Rediscover), and the processor prepares its init again for any of
+// them because keys were added since it failed (Registry.KeyEpoch). A live
+// origin's next poll does so; a static one is enumerated once more while the
+// channel still ingests. A channel that fetches nothing more, a stalled live
+// one or a VOD, tries them again only when ingest runs again: a restart
+// before the VOD transition, or a restore to live after it.
 func (rt *Runtime) onKeysAdded(keys []cenc.Key) {
 	if rt.decrypt == nil {
 		return
@@ -109,9 +110,15 @@ func (rt *Runtime) onKeysAdded(keys []cenc.Key) {
 	if rt.watcher == nil {
 		return
 	}
+	added := make([]cenc.KID, len(keys))
+	for i, k := range keys {
+		added[i] = k.KID
+	}
 	var reps []string
-	for _, r := range append(rt.decrypt.Refused(), rt.decrypt.Withheld()...) {
+	for _, r := range rt.decrypt.Retriable(added) {
 		reps = append(reps, queue.RepKey(rt.ID, r.AS.PeriodID, r.AS.ASID, r.RepID))
 	}
-	rt.watcher.Rediscover(reps)
+	if len(reps) > 0 {
+		rt.watcher.Rediscover(reps)
+	}
 }
