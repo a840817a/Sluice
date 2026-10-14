@@ -152,6 +152,21 @@ func (w *Watcher) Run(ctx context.Context) error {
 	}
 }
 
+// Rediscover makes the next poll enqueue every segment the origin lists for
+// the representations repKeys name (queue.RepKey), as for a representation
+// seen for the first time: their segments were enqueued once and dropped
+// unstored, and something has changed that may let them be stored now. The
+// broker ignores a segment that is still queued or in flight. It is meant
+// for a representation that stores nothing, which a dynamic MPD's gap
+// filling (shouldFetchDynamicSegment) never revisits.
+func (w *Watcher) Rediscover(repKeys []string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, k := range repKeys {
+		delete(w.lastKnown, k)
+	}
+}
+
 // UpstreamType reports the presentation type of the most recently fetched MPD
 // ("dynamic" or "static"), or "" before the first fetch.
 //

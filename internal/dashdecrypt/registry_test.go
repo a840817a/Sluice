@@ -243,21 +243,58 @@ func TestPrepareInitKeepsAdaptationSetWithStoredMedia(t *testing.T) {
 }
 
 // A representation that joins a decrypted AdaptationSet later is decrypted
-// when its key is held, and refused otherwise.
+// when its key is held, and refused otherwise. A refusal changes the
+// generation, is recorded on disk so a restart still knows it, and ends,
+// with its missing_key warning, once an init of the representation is
+// accepted.
 func TestPrepareInitNewRepresentationOfDecryptedAdaptationSet(t *testing.T) {
 	video := readFixture(t, "cenc", "video", "avc1", "init.mp4")
 	audio := readFixture(t, "cenc", "audio", "und", "mp4a.40.2", "init.mp4")
-	r := NewRegistry(t.TempDir(), "c", keySet(t, videoKey))
-	if _, err := r.PrepareInit(context.Background(), task("r0"), video, false, nil); err != nil {
+	dir := t.TempDir()
+	as := ASKey{"p0", "0"}
+	r := NewRegistry(dir, "c", keySet(t, videoKey))
+	clearVideo, err := r.PrepareInit(context.Background(), task("r0"), video, false, nil)
+	if err != nil {
 		t.Fatal(err)
 	}
+	// Stored as ingest would, so Load finds the AdaptationSet.
+	loc := store.RepLocation{DataDir: dir, ChannelID: "c", PeriodID: "p0", MediaType: "video", ASID: "0", RepID: "r0"}
+	if err := store.Write(loc.InitPath(), clearVideo); err != nil {
+		t.Fatal(err)
+	}
+	gen := r.Generation()
 	if _, err := r.PrepareInit(context.Background(), task("r1"), audio, false, nil); err == nil {
 		t.Fatal("a representation without a key joined a decrypted AdaptationSet")
 	}
-	if _, _, ok := r.Lookup(ASKey{"p0", "0"}, "r1"); ok {
+	if _, _, ok := r.Lookup(as, "r1"); ok {
 		t.Error("the refused representation is looked up as decrypted")
 	}
+	if !r.IsRefused(as, "r1") || r.IsRefused(as, "r0") {
+		t.Error("IsRefused does not report exactly the refused representation")
+	}
+	if r.Generation() == gen {
+		t.Error("a refusal did not change the generation")
+	}
+	if got := r.Refused(); !slices.Equal(got, []RefusedRep{{AS: as, RepID: "r1"}}) {
+		t.Errorf("Refused = %+v, want r1", got)
+	}
+	if ws := r.Warnings(); len(ws) != 1 || ws[0].Kind != KindMissingKey || !slices.Equal(ws[0].KIDs, []string{audioKID}) {
+		t.Errorf("warnings = %+v, want missing_key for the audio KID", ws)
+	}
+	restarted := NewRegistry(dir, "c", keySet(t, videoKey))
+	if err := restarted.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if !restarted.IsRefused(as, "r1") {
+		t.Error("a restart forgot the refusal")
+	}
+
+	epoch := r.KeyEpoch()
 	r.AddKeys([]cenc.Key{mustKey(t, audioKey)})
+	if r.KeyEpoch() == epoch {
+		t.Error("AddKeys did not change the key epoch")
+	}
+	gen = r.Generation()
 	got, err := r.PrepareInit(context.Background(), task("r1"), audio, false, nil)
 	if err != nil {
 		t.Fatalf("with its key: %v", err)
@@ -265,8 +302,21 @@ func TestPrepareInitNewRepresentationOfDecryptedAdaptationSet(t *testing.T) {
 	if !isClear(t, got) {
 		t.Error("the joining representation's init is still encrypted")
 	}
-	if _, _, ok := r.Lookup(ASKey{"p0", "0"}, "r1"); !ok {
+	if _, _, ok := r.Lookup(as, "r1"); !ok {
 		t.Error("the joining representation is not decrypted")
+	}
+	if r.IsRefused(as, "r1") || r.Generation() == gen {
+		t.Error("accepting the refused representation did not end its refusal")
+	}
+	if ws := r.Warnings(); len(ws) != 0 {
+		t.Errorf("warnings once accepted = %+v, want none", ws)
+	}
+	restarted = NewRegistry(dir, "c", keySet(t, videoKey, audioKey))
+	if err := restarted.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if restarted.IsRefused(as, "r1") {
+		t.Error("a restart brought back an ended refusal")
 	}
 }
 

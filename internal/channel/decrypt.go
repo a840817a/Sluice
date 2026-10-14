@@ -6,13 +6,14 @@ package channel
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/a840817a/sluice/internal/dashdecrypt"
 	imdp "github.com/a840817a/sluice/internal/mpd"
 )
 
-// decryptedView caches withoutDecryptedCP for one parsed MPD and registry
+// decryptedView caches decryptView for one parsed MPD and registry
 // generation.
 type decryptedView struct {
 	src        *imdp.ParsedMPD
@@ -20,53 +21,77 @@ type decryptedView struct {
 	out        *imdp.ParsedMPD
 }
 
-// withoutDecryptedCP returns p without the ContentProtection of the
-// AdaptationSets rt's registry decrypted, or p itself when the channel has
-// no registry or decrypted none of them. The result is cached until p or
-// the registry's generation changes.
-func (rt *Runtime) withoutDecryptedCP(p *imdp.ParsedMPD) *imdp.ParsedMPD {
+// decryptView returns p as rt serves it: without the ContentProtection of
+// the AdaptationSets rt's registry decrypted, and without the
+// representations it refused (stripDecrypted). It is p itself when the
+// channel has no registry or neither applies. The result is cached until p
+// or the registry's generation changes.
+func (rt *Runtime) decryptView(p *imdp.ParsedMPD) *imdp.ParsedMPD {
 	if p == nil || rt.decrypt == nil {
 		return p
 	}
 	gen := rt.decrypt.Generation()
-	if v := rt.decryptView.Load(); v != nil && v.src == p && v.generation == gen {
+	if v := rt.decryptViewCache.Load(); v != nil && v.src == p && v.generation == gen {
 		return v.out
 	}
-	out := stripDecryptedCP(p, rt.decrypt.IsDecrypted)
-	rt.decryptView.Store(&decryptedView{src: p, generation: gen, out: out})
+	out := stripDecrypted(p, rt.decrypt)
+	rt.decryptViewCache.Store(&decryptedView{src: p, generation: gen, out: out})
 	return out
 }
 
-// stripDecryptedCP returns p with ContentProtections, RawCPs and
-// ParsedContentProtections cleared on every AdaptationSet decrypted reports
-// as decrypted. It copies only the MPD, the periods and the AdaptationSets
-// it changes, and returns p itself when it changes none; p is never
-// modified.
-func stripDecryptedCP(p *imdp.ParsedMPD, decrypted func(dashdecrypt.ASKey) bool) *imdp.ParsedMPD {
+// decryptState is what stripDecrypted asks of a registry.
+type decryptState interface {
+	IsDecrypted(as dashdecrypt.ASKey) bool
+	IsRefused(as dashdecrypt.ASKey, repID string) bool
+}
+
+// stripDecrypted returns p with ContentProtections, RawCPs and
+// ParsedContentProtections cleared on every AdaptationSet st reports as
+// decrypted, and without the representations of those that st reports as
+// refused: their init was never stored, so a player switching to one would
+// find nothing. An AdaptationSet left with no representation is left out.
+// It copies only the MPD, the periods and the AdaptationSets it changes,
+// and returns p itself when it changes none; p is never modified.
+func stripDecrypted(p *imdp.ParsedMPD, st decryptState) *imdp.ParsedMPD {
 	var out *imdp.ParsedMPD
 	for pi, period := range p.Periods {
-		var periodCopy *imdp.ParsedPeriod
-		for ai, as := range period.AdaptationSets {
-			if !hasCP(as) || !decrypted(dashdecrypt.ASKey{PeriodID: period.ID, ASID: as.ID}) {
+		var kept []*imdp.ParsedAdaptationSet
+		changed := false
+		for _, as := range period.AdaptationSets {
+			key := dashdecrypt.ASKey{PeriodID: period.ID, ASID: as.ID}
+			if !st.IsDecrypted(key) {
+				kept = append(kept, as)
 				continue
 			}
-			if out == nil {
-				cp := *p
-				cp.Periods = append([]*imdp.ParsedPeriod(nil), p.Periods...)
-				out = &cp
+			reps := slices.DeleteFunc(slices.Clone(as.Representations), func(r *imdp.ParsedRepresentation) bool {
+				return st.IsRefused(key, r.ID)
+			})
+			if !hasCP(as) && len(reps) == len(as.Representations) {
+				kept = append(kept, as)
+				continue
 			}
-			if periodCopy == nil {
-				cp := *period
-				cp.AdaptationSets = append([]*imdp.ParsedAdaptationSet(nil), period.AdaptationSets...)
-				periodCopy = &cp
-				out.Periods[pi] = periodCopy
+			changed = true
+			if len(reps) == 0 {
+				continue
 			}
 			clearAS := *as
 			clearAS.ContentProtections = nil
 			clearAS.RawCPs = nil
 			clearAS.ParsedContentProtections = nil
-			periodCopy.AdaptationSets[ai] = &clearAS
+			clearAS.Representations = reps
+			kept = append(kept, &clearAS)
 		}
+		if !changed {
+			continue
+		}
+		if out == nil {
+			cp := *p
+			cp.Periods = append([]*imdp.ParsedPeriod(nil), p.Periods...)
+			out = &cp
+		}
+		periodCopy := *period
+		periodCopy.AdaptationSets = kept
+		out.Periods[pi] = &periodCopy
 	}
 	if out == nil {
 		return p

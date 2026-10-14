@@ -4,11 +4,11 @@ package channel
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 
 	"github.com/a840817a/sluice/internal/cenc"
+	"github.com/a840817a/sluice/internal/queue"
 )
 
 var (
@@ -33,7 +33,7 @@ func (m *Manager) AddContentKeys(ctx context.Context, id string, keys []string) 
 	if !ok {
 		return nil, ErrChannelNotFound
 	}
-	if cfg.canonicalSourceType() != SourceDASH || cfg.canonicalKeyMode() != KeyModeDecrypt {
+	if !cfg.IsDASHDecrypt() {
 		return nil, ErrKeysNotApplicable
 	}
 	if len(keys) == 0 {
@@ -67,7 +67,7 @@ func (m *Manager) AddContentKeys(ctx context.Context, id string, keys []string) 
 			}
 		}
 		for _, k := range parsed {
-			c.ContentKeys = append(c.ContentKeys, k.KID.String()+":"+hex.EncodeToString(k.Value[:]))
+			c.ContentKeys = append(c.ContentKeys, k.Format())
 		}
 	})
 	if err != nil {
@@ -92,8 +92,24 @@ func (m *Manager) AddContentKeys(ctx context.Context, id string, keys []string) 
 // configuration. AdaptationSets decided from now on can use them, and the
 // channel's conversion goroutine converts those already stored encrypted
 // that the keys complete (runConversions).
+//
+// A representation whose init was refused for want of a key is tried
+// again: the next poll of a live origin enqueues its segments anew
+// (Watcher.Rediscover), and the processor prepares its init again for any
+// of them because keys were added since it failed (Registry.KeyEpoch). A
+// channel that fetches nothing more, a stalled live one or a VOD, tries it
+// again only when it is restarted.
 func (rt *Runtime) onKeysAdded(keys []cenc.Key) {
-	if rt.decrypt != nil {
-		rt.decrypt.AddKeys(keys)
+	if rt.decrypt == nil {
+		return
 	}
+	rt.decrypt.AddKeys(keys)
+	if rt.watcher == nil {
+		return
+	}
+	var reps []string
+	for _, r := range rt.decrypt.Refused() {
+		reps = append(reps, queue.RepKey(rt.ID, r.AS.PeriodID, r.AS.ASID, r.RepID))
+	}
+	rt.watcher.Rediscover(reps)
 }

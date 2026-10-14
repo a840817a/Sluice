@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +32,8 @@ type gateHarness struct {
 	prepares chan prepareCall
 	cancel   context.CancelFunc
 	stopped  chan struct{}
+	// keyEpoch is the gate's keyEpoch; Add to it to add keys.
+	keyEpoch atomic.Uint64
 
 	mu     sync.Mutex
 	now    time.Time
@@ -73,7 +76,8 @@ func startGate(t *testing.T, limit int) *gateHarness {
 			defer h.mu.Unlock()
 			return h.now
 		},
-		tick: h.tick,
+		tick:     h.tick,
+		keyEpoch: h.keyEpoch.Load,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	h.cancel = cancel
@@ -263,6 +267,31 @@ func TestInitGate(t *testing.T) {
 		h.send(fmp4Task(2, 20*time.Second), nil)
 		h.nextPrepare().done <- nil
 		h.expect("abandon 1: init gone", "deliver 2")
+	})
+
+	t.Run("finite media after keys were added renews a failed init", func(t *testing.T) {
+		h := startGate(t, 4)
+		h.send(fmp4Task(1, 0), nil)
+		h.nextPrepare().done <- gone
+		h.expect("abandon 1: init gone")
+		h.keyEpoch.Add(1)
+		h.send(fmp4Task(2, 0), nil)
+		h.nextPrepare().done <- gone
+		h.expect("abandon 1: init gone", "abandon 2: init gone")
+		// Failed again under the new keys: final until more are added.
+		h.send(fmp4Task(3, 0), nil)
+		h.expect("abandon 1: init gone", "abandon 2: init gone", "abandon 3: init gone")
+		h.noPrepare()
+	})
+
+	t.Run("keys added while an init is prepared renew it if it fails", func(t *testing.T) {
+		h := startGate(t, 4)
+		h.send(fmp4Task(1, 0), nil)
+		call := h.nextPrepare()
+		h.keyEpoch.Add(1)
+		call.done <- gone
+		h.nextPrepare().done <- nil
+		h.expect("deliver 1")
 	})
 
 	t.Run("one init failing does not hold another's media", func(t *testing.T) {

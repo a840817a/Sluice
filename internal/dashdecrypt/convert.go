@@ -256,21 +256,21 @@ func (r *Registry) markConverted(as ASKey, st asState) {
 }
 
 // URLVersion is the version the gateway's URLs of representation repID of
-// period periodID carry, or 0 for none: a representation whose stored files
-// a conversion rewrote is served under new URLs, so no cache serves its
-// ciphertext again.
-func (r *Registry) URLVersion(periodID, repID string) uint64 {
+// AdaptationSet asID of period periodID carry, or 0 for none: a representation
+// whose stored files a conversion rewrote is served under new URLs, so no
+// cache serves its ciphertext again. Two AdaptationSets of a period may use
+// the same representation ID; each has its own version.
+func (r *Registry) URLVersion(periodID, asID, repID string) uint64 {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	for as, st := range r.decrypted {
-		if as.PeriodID != periodID || st.URLVersion == 0 {
-			continue
-		}
-		if _, ok := st.Reps[repID]; ok {
-			return st.URLVersion
-		}
+	st, ok := r.decrypted[ASKey{PeriodID: periodID, ASID: asID}]
+	if !ok {
+		return 0
 	}
-	return 0
+	if _, ok := st.Reps[repID]; !ok {
+		return 0
+	}
+	return st.URLVersion
 }
 
 // staging names the staging entries of one AdaptationSet directory.

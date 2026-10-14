@@ -8,7 +8,7 @@ import (
 )
 
 // Retyped boxes become free boxes of the same size, so nothing after them
-// moves. See ADR 0010.
+// moves. See ADR-0010.
 const freeType = "free"
 
 type subsample struct {

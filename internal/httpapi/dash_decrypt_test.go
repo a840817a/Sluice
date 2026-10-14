@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -52,11 +53,13 @@ var cencReps = []cencRep{
 
 // cencOrigin serves the fixtures of one variant as a DASH origin. Its MPD is
 // the variant's manifest.mpd with the representation IDs shortened and with
-// edit applied; edit can change between requests.
+// edit applied; edit can change between requests. A path stored in extra
+// ("rep/file") is served from there instead.
 type cencOrigin struct {
 	srv     *httptest.Server
 	variant string
 	edit    atomic.Pointer[func(string) string]
+	extra   sync.Map
 }
 
 func startCENCOrigin(t *testing.T, variant string, edit func(string) string) *cencOrigin {
@@ -81,6 +84,10 @@ func startCENCOrigin(t *testing.T, variant string, edit func(string) string) *ce
 		fmt.Fprint(w, mpd)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if b, ok := o.extra.Load(strings.TrimPrefix(r.URL.Path, "/")); ok {
+			w.Write(b.([]byte))
+			return
+		}
 		repID, file, ok := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
 		for _, rep := range cencReps {
 			if ok && rep.id == repID {
@@ -148,14 +155,10 @@ func newCENCChannel(t *testing.T, o *cencOrigin, dataDir string, keys ...string)
 
 func waitVOD(t *testing.T, mgr *ch.Manager) {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
-	for time.Now().Before(deadline) {
-		if rt := mgr.Get("c"); rt != nil && rt.Mode() == ch.ModeVOD {
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatalf("channel never reached VOD")
+	waitFor(t, "the channel to reach VOD", func() bool {
+		rt := mgr.Get("c")
+		return rt != nil && rt.Mode() == ch.ModeVOD
+	})
 }
 
 func segmentURL(rep cencRep, n int) string {

@@ -9,8 +9,8 @@
 // passthrough channel stores it, and the reason is reported as a Warning.
 //
 // The decision is stored in the AdaptationSet's directory as decrypt.json,
-// which holds each encrypted representation's cenc.TrackProtection and never
-// a key. The file exists exactly when the AdaptationSet is decrypted: it is
+// which holds each encrypted representation's cenc.TrackProtection, the
+// representations that joined later and were refused, and never a key. The file exists exactly when the AdaptationSet is decrypted: it is
 // written before the first clear init, or, for an AdaptationSet first stored
 // as ciphertext, swapped in with the files Convert rewrote once its keys
 // arrived. It is read back when the channel starts.
@@ -59,6 +59,11 @@ type asState struct {
 	// cached as ciphertext (Registry.URLVersion), and 0 for an AdaptationSet
 	// decrypted from its first file.
 	URLVersion uint64 `json:"url_version,omitempty"`
+	// Refused lists the representations that joined the AdaptationSet after
+	// its decision and could not be decrypted, so their init was refused
+	// (addRep). They are not served until a later init of theirs is
+	// accepted.
+	Refused []string `json:"refused,omitempty"`
 }
 
 // FetchInit fetches the init segment ref locates from the origin.
@@ -67,9 +72,12 @@ type FetchInit func(ctx context.Context, ref queue.InitRef) ([]byte, error)
 // Registry is one channel's decryption state. It is safe for concurrent use.
 type Registry struct {
 	dataDir, channelID string
-	// generation changes whenever an AdaptationSet becomes decrypted, so a
-	// view derived from the decrypted set can be cached against it.
+	// generation changes whenever an AdaptationSet becomes decrypted or a
+	// representation is refused or accepted (IsRefused), so a view derived
+	// from them can be cached against it.
 	generation atomic.Uint64
+	// keyEpoch counts the AddKeys calls.
+	keyEpoch atomic.Uint64
 
 	mu   sync.RWMutex
 	keys cenc.KeySet
@@ -134,11 +142,47 @@ func (r *Registry) AddKeys(keys []cenc.Key) {
 	}
 	clear(r.failed)
 	r.mu.Unlock()
+	r.keyEpoch.Add(1)
 	r.nudge()
 }
 
-// Generation identifies the current set of decrypted AdaptationSets.
+// KeyEpoch changes each time keys are added. An init whose preparation
+// started under an earlier epoch may have failed for want of a key it can
+// now use.
+func (r *Registry) KeyEpoch() uint64 { return r.keyEpoch.Load() }
+
+// Generation identifies the current set of decrypted AdaptationSets and of
+// refused representations.
 func (r *Registry) Generation() uint64 { return r.generation.Load() }
+
+// IsRefused reports whether representation repID of the decrypted
+// AdaptationSet as had its init refused and none accepted since: it
+// joined after the AdaptationSet was decided, with a KID the channel holds
+// no key for or a scheme it cannot decrypt, so nothing of it is stored.
+func (r *Registry) IsRefused(as ASKey, repID string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return slices.Contains(r.decrypted[as].Refused, repID)
+}
+
+// RefusedRep names one representation IsRefused reports.
+type RefusedRep struct {
+	AS    ASKey
+	RepID string
+}
+
+// Refused lists every representation IsRefused reports.
+func (r *Registry) Refused() []RefusedRep {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []RefusedRep
+	for as, st := range r.decrypted {
+		for _, id := range st.Refused {
+			out = append(out, RefusedRep{AS: as, RepID: id})
+		}
+	}
+	return out
+}
 
 // IsDecrypted reports whether the AdaptationSet as is decrypted.
 func (r *Registry) IsDecrypted(as ASKey) bool {
@@ -393,7 +437,10 @@ func (r *Registry) PrepareInit(ctx context.Context, task *queue.SegmentTask, ori
 }
 
 // addRep adds a representation the decision of decrypted AdaptationSet key
-// did not cover. Caller holds key's AS lock.
+// did not cover. One it cannot decrypt is refused: recorded in
+// decrypt.json, so it stays hidden across a restart, with a warning. One it
+// can is accepted, which ends an earlier refusal and its missing_key
+// warning. Caller holds key's AS lock.
 func (r *Registry) addRep(key ASKey, task *queue.SegmentTask, st asState, orig []byte) error {
 	r.mu.RLock()
 	d := decide([]repInit{{repID: task.RepID, data: orig}}, r.keys)
@@ -401,26 +448,75 @@ func (r *Registry) addRep(key ASKey, task *queue.SegmentTask, st asState, orig [
 	r.mu.Lock()
 	r.markSeen(d.kids)
 	r.mu.Unlock()
+	asDir := location(r.dataDir, r.channelID, task).ASDir()
+	wasRefused := slices.Contains(st.Refused, task.RepID)
 	if d.warning != nil {
-		r.record(key, *d.warning)
-		return fmt.Errorf("representation %s cannot join decrypted AdaptationSet %s: %s", task.RepID, key.ASID, d.warning.Message)
+		// The warning is recorded last, so whoever sees it also sees the
+		// representation hidden.
+		defer r.record(key, *d.warning)
+		refusal := fmt.Errorf("representation %s cannot join decrypted AdaptationSet %s: %s", task.RepID, key.ASID, d.warning.Message)
+		if wasRefused {
+			return refusal
+		}
+		next := st.clone()
+		next.Refused = append(next.Refused, task.RepID)
+		if err := writeState(asDir, next); err != nil {
+			return errors.Join(refusal, err)
+		}
+		r.mu.Lock()
+		r.decrypted[key] = next
+		r.mu.Unlock()
+		r.generation.Add(1)
+		return refusal
 	}
-	tp, ok := d.reps[task.RepID]
-	if !ok {
+	tp, encrypted := d.reps[task.RepID]
+	if !encrypted && !wasRefused {
 		return nil // a clear representation needs no entry
 	}
-	next := asState{Reps: make(map[string]cenc.TrackProtection, len(st.Reps)+1), URLVersion: st.URLVersion}
-	for id, p := range st.Reps {
-		next.Reps[id] = p
+	next := st.clone()
+	if encrypted {
+		next.Reps[task.RepID] = tp
 	}
-	next.Reps[task.RepID] = tp
-	if err := writeState(location(r.dataDir, r.channelID, task).ASDir(), next); err != nil {
+	next.Refused = slices.DeleteFunc(next.Refused, func(id string) bool { return id == task.RepID })
+	if err := writeState(asDir, next); err != nil {
 		return err
 	}
 	r.mu.Lock()
 	r.decrypted[key] = next
+	if wasRefused {
+		r.generation.Add(1)
+		if encrypted {
+			r.dropMissingKID(key, tp.KID)
+		}
+	}
 	r.mu.Unlock()
 	return nil
+}
+
+// dropMissingKID takes kid out of key's missing_key warning, and drops the
+// warning once it names no KID. Caller holds r.mu.
+func (r *Registry) dropMissingKID(key ASKey, kid cenc.KID) {
+	wk := warningKey{as: key, kind: KindMissingKey}
+	w, ok := r.warnings[wk]
+	if !ok {
+		return
+	}
+	w.KIDs = slices.DeleteFunc(slices.Clone(w.KIDs), func(k string) bool { return k == kid.String() })
+	if len(w.KIDs) == 0 {
+		delete(r.warnings, wk)
+		return
+	}
+	r.warnings[wk] = w
+}
+
+// clone returns a copy of st that shares nothing with it.
+func (st asState) clone() asState {
+	out := asState{Reps: make(map[string]cenc.TrackProtection, len(st.Reps)+1), URLVersion: st.URLVersion,
+		Refused: slices.Clone(st.Refused)}
+	for id, p := range st.Reps {
+		out.Reps[id] = p
+	}
+	return out
 }
 
 // keep records that key is stored as the origin produced it, noting the KIDs

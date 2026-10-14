@@ -56,7 +56,7 @@ type Channel struct {
 	// URLVersion is the version (gwurl.Versioned) the segment and init URLs
 	// of a period's representation carry: set for one whose stored files a
 	// DASH decrypt channel rewrote as clear. Nil versions none.
-	URLVersion func(periodID, repID string) uint64
+	URLVersion func(periodID, asID, repID string) uint64
 	// SavedDASH is the served manifest a VOD transition saved, for a DASH VOD
 	// restored without the origin MPD it was rendered from (as a VOD written
 	// by an older gateway can be). It is served as it is.

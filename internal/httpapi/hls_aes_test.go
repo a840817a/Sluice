@@ -165,7 +165,7 @@ func TestAES128DecryptMode(t *testing.T) {
 }
 
 // TestAES128DecryptModePersistsKey: decrypt mode still writes the key it
-// fetched to keys.json (ADR 0003), so a restart can resume ingest without the
+// fetched to keys.json (ADR-0003), so a restart can resume ingest without the
 // key server. The key proxy keeps refusing it (TestKeyProxyDisabledInDecryptMode).
 func TestAES128DecryptModePersistsKey(t *testing.T) {
 	origin := startEncryptedOrigin(t, 2, true, nil)

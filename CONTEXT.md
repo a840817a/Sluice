@@ -36,6 +36,10 @@ _Avoid_: Epoch, discontinuity
 One encoded track of a stream at one quality: a DASH Representation, an HLS variant, or an HLS audio or subtitle rendition.
 _Avoid_: Rep (outside code), variant, rendition, track
 
+**AdaptationSet**:
+The group of Representations of one Period that share a media type and, in a decrypt channel, the unit that content keys and decryption decide on: it is stored clear only when every Representation's key is present. Code calls its key `ASKey`.
+_Avoid_: AS (outside code), track group
+
 **Segment number**:
 A segment's position within its representation, taken from the HLS media sequence or the DASH `$Number$`.
 _Avoid_: Sequence, index

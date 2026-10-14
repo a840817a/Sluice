@@ -355,6 +355,12 @@ The gateway decides per Period and AdaptationSet: when every Representation's `t
 
 The channel status lists `decrypt_warnings`, each with a `kind`: `missing_key` (no key for a KID), `unsupported_scheme`, `malformed` (an init or segment could not be read), `key_unmatched` (a key no init uses), `conversion_failed`, and `hls_closed` (an AdaptationSet is still encrypted, so the channel is not served as HLS). Keys added with `POST /admin/api/channels/{id}/keys` that complete an AdaptationSet already stored encrypted convert it to clear in the background, live or VOD. Its segment and init URLs then carry `?c=1` so no cache serves the old ciphertext, and a player that loaded it encrypted must reload. A conversion whose directory swap is stuck halfway blocks the channel's next start until you resolve it by hand; the error names both directories.
 
+Limits to know about:
+
+- A VOD restored from its saved `manifest.mpd` alone (no `upstream.mpd`, as written by an older gateway) is not converted when keys are added; it gets a `conversion_failed` warning and stays encrypted.
+- A Representation that joins an AdaptationSet already stored clear, with a KID that has no key (or a scheme that cannot be decrypted), is not stored: its init is refused, none of its segments are stored, and it gets a `missing_key` (or `unsupported_scheme`) warning. It is hidden until then: the DASH manifest and the HLS master playlist leave it out, also after a restart. When its key is added, a live channel that is still polling its origin fetches its init and the segments the origin lists again right away; the Representation then appears and the warning clears. A live or static-ingest channel that fetches nothing more (a stalled stream, or a static MPD already enumerated) tries again only when it is restarted while still ingesting; a channel that is already VOD fetches nothing, so the Representation stays hidden.
+- Playback was checked in Chromium with dash.js 4.7.4 and hls.js 1.5.17: `cbcs` with every key, and `cenc` converted after a key was added, over DASH and HLS, including `?c=1` URLs. Whether Safari/AVFoundation accepts the `free` boxes inside `traf` is untested.
+
 ## Disk Layout
 
 ```

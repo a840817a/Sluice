@@ -32,9 +32,10 @@ type Runtime struct {
 	// hls is the HLS ingest watcher; nil for DASH channels.
 	hls *hlsingest.Watcher
 	// decrypt is the registry of a DASH channel in key mode decrypt, nil for
-	// every other channel. ParsedMPD reads it through decryptView.
-	decrypt     *dashdecrypt.Registry
-	decryptView atomic.Pointer[decryptedView]
+	// every other channel. ParsedMPD reads it through decryptView, which
+	// caches its result in decryptViewCache.
+	decrypt          *dashdecrypt.Registry
+	decryptViewCache atomic.Pointer[decryptedView]
 	// processor stores the channel's media while it ingests; nil for a
 	// channel started in VOD, which ingests nothing.
 	processor *pipeline.Processor
@@ -177,17 +178,18 @@ func (rt *Runtime) IsHLSSource() bool { return rt.hls != nil }
 // with every period the VOD index holds put back (vodOriginMPD).
 //
 // On a DASH decrypt channel the AdaptationSets it decrypted carry no
-// ContentProtection (withoutDecryptedCP). Every manifest, playlist and track
-// list is built from what this returns, so none of them signals protection
-// for content stored clear.
+// ContentProtection, and the representations it refused are left out
+// (decryptView). Every manifest, playlist and track list is built from what
+// this returns, so none of them signals protection for content stored clear
+// or lists a representation that has nothing stored.
 func (rt *Runtime) ParsedMPD() *imdp.ParsedMPD {
 	if p := rt.vodMPD.Load(); p != nil {
-		return rt.withoutDecryptedCP(p)
+		return rt.decryptView(p)
 	}
 	if rt.watcher == nil {
 		return nil
 	}
-	return rt.withoutDecryptedCP(rt.watcher.ParsedMPD())
+	return rt.decryptView(rt.watcher.ParsedMPD())
 }
 
 // ParsedMPDBytes returns the raw origin MPD XML, or nil for HLS channels. It

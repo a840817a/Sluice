@@ -156,7 +156,7 @@ func TestConvertCatchesUpBeforeSwap(t *testing.T) {
 	if r.Generation() == gen {
 		t.Error("conversion did not change the generation")
 	}
-	if v := r.URLVersion("p0", "a0"); v != 1 {
+	if v := r.URLVersion("p0", "1", "a0"); v != 1 {
 		t.Errorf("URLVersion = %d, want 1", v)
 	}
 	if _, _, ok := r.Lookup(c.AS, "a0"); !ok {
@@ -167,7 +167,7 @@ func TestConvertCatchesUpBeforeSwap(t *testing.T) {
 	}
 
 	// The URL version survives a restart.
-	if v := loadedRegistry(t, dataDir, audioKey).URLVersion("p0", "a0"); v != 1 {
+	if v := loadedRegistry(t, dataDir, audioKey).URLVersion("p0", "1", "a0"); v != 1 {
 		t.Errorf("URLVersion after Load = %d, want 1", v)
 	}
 }
@@ -421,11 +421,11 @@ func TestRepJoinsAfterConversionKeepsURLVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, rep := range []string{"a0", "a1"} {
-		if v := r.URLVersion("p0", rep); v != 1 {
+		if v := r.URLVersion("p0", "1", rep); v != 1 {
 			t.Errorf("URLVersion of %s = %d, want 1", rep, v)
 		}
 	}
-	if v := loadedRegistry(t, dataDir, audioKey).URLVersion("p0", "a1"); v != 1 {
+	if v := loadedRegistry(t, dataDir, audioKey).URLVersion("p0", "1", "a1"); v != 1 {
 		t.Errorf("URLVersion of a1 after Load = %d, want 1", v)
 	}
 }
@@ -464,5 +464,23 @@ func TestConvertStuckSwapKeepsBothCopies(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(loc.ASDir(), StateFileName)); err != nil {
 		t.Errorf("recovery did not swap the converted AdaptationSet in: %v", err)
+	}
+}
+
+// Two AdaptationSets of one period may use the same representation ID; a
+// version belongs to the AdaptationSet that was converted, not to the ID.
+func TestURLVersionIsPerAdaptationSet(t *testing.T) {
+	r := NewRegistry(t.TempDir(), "c", nil)
+	reps := map[string]cenc.TrackProtection{"x": {}}
+	r.decrypted[ASKey{"p0", "1"}] = asState{Reps: reps, URLVersion: 1}
+	r.decrypted[ASKey{"p0", "2"}] = asState{Reps: reps}
+	if v := r.URLVersion("p0", "1", "x"); v != 1 {
+		t.Errorf("converted AdaptationSet: URLVersion = %d, want 1", v)
+	}
+	if v := r.URLVersion("p0", "2", "x"); v != 0 {
+		t.Errorf("unconverted AdaptationSet: URLVersion = %d, want 0", v)
+	}
+	if v := r.URLVersion("p0", "1", "other"); v != 0 {
+		t.Errorf("unknown representation: URLVersion = %d, want 0", v)
 	}
 }
