@@ -171,14 +171,13 @@ func (r *Registry) Refuse(c Conversion, reason string) {
 
 func (r *Registry) convert(ctx context.Context, c Conversion, paths staging, exclusive Exclusive) error {
 	conv := &converter{ctx: ctx, registry: r, src: c.dir, dst: paths.staged, known: make(map[string]bool),
-		reps: make(map[string]cenc.TrackProtection), keys: make(map[string][16]byte), stamps: make(map[string]fileStamp)}
+		reps: make(map[string]cenc.TrackProtection), stamps: make(map[string]fileStamp)}
 	r.mu.RLock()
 	for _, repID := range c.repIDs {
 		conv.known[repID] = true
 	}
 	for repID, tp := range c.reps {
 		conv.reps[repID] = tp
-		conv.keys[repID] = r.keys[tp.KID]
 	}
 	r.mu.RUnlock()
 
@@ -309,10 +308,9 @@ type converter struct {
 	registry *Registry
 	src, dst string
 	// known is every representation whose files may be converted; reps
-	// holds the encrypted ones, and keys their keys.
+	// holds the encrypted ones. Their keys come from the registry.
 	known map[string]bool
 	reps  map[string]cenc.TrackProtection
-	keys  map[string][16]byte
 	// stamps holds each file converted so far, by path relative to src, as
 	// it was before it was read.
 	stamps map[string]fileStamp
@@ -417,7 +415,7 @@ func (c *converter) convertFile(rel string) error {
 			return err
 		}
 	case isSeg && ext == store.ExtFMP4:
-		if err := cenc.DecryptSegment(data, tp, c.keys[repID]); err != nil {
+		if err := cenc.DecryptSegment(data, tp, c.registry.key); err != nil {
 			return err
 		}
 	}
@@ -445,9 +443,6 @@ func (c *converter) repOf(dir string) (string, error) {
 	}
 	if tp, ok := d.reps[repID]; ok {
 		c.reps[repID] = tp
-		c.registry.mu.RLock()
-		c.keys[repID] = c.registry.keys[tp.KID]
-		c.registry.mu.RUnlock()
 	}
 	c.known[repID] = true
 	return repID, nil

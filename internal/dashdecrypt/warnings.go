@@ -12,11 +12,14 @@ import (
 // Warning kinds.
 const (
 	// KindMissingKey: an AdaptationSet stays encrypted because the channel
-	// holds no key for one of its KIDs, which the warning lists.
+	// holds no key for one of its KIDs, which the warning lists; or, in a
+	// decrypted AdaptationSet, a representation is refused or segments whose
+	// samples rotate to one of those KIDs are withheld until its key is added.
 	KindMissingKey = "missing_key"
 	// KindUnsupportedScheme: an AdaptationSet stays encrypted because a
 	// representation uses a scheme or feature internal/cenc does not decrypt
-	// (cens, cbc1, key rotation, several encrypted tracks in one init).
+	// (cens, cbc1, a malformed seig sample group, several encrypted tracks in
+	// one init).
 	KindUnsupportedScheme = "unsupported_scheme"
 	// KindMalformed: an init or segment could not be read, so the
 	// AdaptationSet stays encrypted or a segment was dropped.
@@ -24,8 +27,9 @@ const (
 	// KindKeyUnmatched: a key whose KID none of the channel's inits uses.
 	// Reported only once the channel has read an init.
 	KindKeyUnmatched = "key_unmatched"
-	// KindConversionFailed: converting a stored AdaptationSet to clear
-	// failed. Reserved for retroactive conversion.
+	// KindConversionFailed: converting an AdaptationSet stored as ciphertext
+	// to clear, once keys were added, failed or was refused, so it stays
+	// encrypted until keys are added again.
 	KindConversionFailed = "conversion_failed"
 	// KindHLSClosed: the channel is not served as HLS because an
 	// AdaptationSet still carries ContentProtection.
@@ -92,7 +96,7 @@ type decision struct {
 // decide works out whether an AdaptationSet whose representations have
 // inits can be decrypted with keys: every encrypted representation has one
 // encrypted track, in a scheme internal/cenc decrypts, with a key held for
-// its KID.
+// each KID its init names (tenc's and those of its seig sample groups).
 func decide(inits []repInit, keys cenc.KeySet) decision {
 	d := decision{reps: make(map[string]cenc.TrackProtection)}
 	var missing []string
@@ -102,7 +106,7 @@ func decide(inits []repInit, keys cenc.KeySet) decision {
 		if err != nil {
 			if fail == nil {
 				kind := KindMalformed
-				if errors.Is(err, cenc.ErrUnsupportedScheme) || errors.Is(err, cenc.ErrKeyRotation) {
+				if errors.Is(err, cenc.ErrUnsupportedScheme) {
 					kind = KindUnsupportedScheme
 				}
 				fail = &Warning{Kind: kind, Message: fmt.Sprintf("representation %s: %v", in.repID, err)}
@@ -110,8 +114,10 @@ func decide(inits []repInit, keys cenc.KeySet) decision {
 			continue
 		}
 		for _, tp := range tps {
-			if !slices.Contains(d.kids, tp.KID) {
-				d.kids = append(d.kids, tp.KID)
+			for _, kid := range tp.KIDs() {
+				if !slices.Contains(d.kids, kid) {
+					d.kids = append(d.kids, kid)
+				}
 			}
 		}
 		switch len(tps) {
@@ -127,8 +133,10 @@ func decide(inits []repInit, keys cenc.KeySet) decision {
 		}
 		tp := tps[0]
 		d.reps[in.repID] = tp
-		if _, ok := keys[tp.KID]; !ok && !slices.Contains(missing, tp.KID.String()) {
-			missing = append(missing, tp.KID.String())
+		for _, kid := range tp.KIDs() {
+			if _, ok := keys[kid]; !ok && !slices.Contains(missing, kid.String()) {
+				missing = append(missing, kid.String())
+			}
 		}
 	}
 	switch {

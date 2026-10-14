@@ -9,10 +9,9 @@ import (
 // Errors returned by this package. Each is wrapped with detail; test with
 // errors.Is.
 var (
-	// ErrUnsupportedScheme is a protection scheme other than cenc and cbcs.
+	// ErrUnsupportedScheme is a protection scheme other than cenc and cbcs,
+	// or a seig sample group this package cannot apply.
 	ErrUnsupportedScheme = errors.New("unsupported protection scheme")
-	// ErrKeyRotation is a seig sample group: keys change within the track.
-	ErrKeyRotation = errors.New("key rotation (seig sample group) is not supported")
 	// ErrNoSampleEncryption is a protected track fragment without senc.
 	ErrNoSampleEncryption = errors.New("protected samples without sample encryption box")
 	// ErrMalformed is a box structure that cannot be parsed.

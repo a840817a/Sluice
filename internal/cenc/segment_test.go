@@ -31,7 +31,7 @@ func TestDecryptSegmentMatchesClear(t *testing.T) {
 					}
 					before := readLayout(t, seg)
 
-					if err := DecryptSegment(seg, tp, key); err != nil {
+					if err := DecryptSegment(seg, tp, onlyKey(key)); err != nil {
 						t.Fatalf("DecryptSegment: %v", err)
 					}
 
@@ -77,7 +77,7 @@ func TestDecryptSegmentWrongKeyIsUndetectable(t *testing.T) {
 			tp := fixtureProtection(t, variant, tr)
 			seg := readFixture(t, variant, tr.dir, segName(1))
 			var wrong [16]byte
-			if err := DecryptSegment(seg, tp, wrong); err != nil {
+			if err := DecryptSegment(seg, tp, onlyKey(wrong)); err != nil {
 				t.Fatalf("DecryptSegment with a wrong key: %v, want nil", err)
 			}
 			if bytes.Equal(mdatPayload(t, seg), mdatPayload(t, readFixture(t, "clear", tr.dir, segName(1)))) {
@@ -101,7 +101,7 @@ func TestDecryptSegmentClearLead(t *testing.T) {
 		lead.ProtectedEntries = []uint32{2} // the fixture's fragments use entry 1
 		seg := readFixture(t, SchemeCBCS, tr.dir, segName(1))
 		orig := bytes.Clone(seg)
-		if err := DecryptSegment(seg, lead, key); err != nil {
+		if err := DecryptSegment(seg, lead, onlyKey(key)); err != nil {
 			t.Fatalf("DecryptSegment: %v", err)
 		}
 		if !bytes.Equal(seg, orig) {
@@ -112,7 +112,7 @@ func TestDecryptSegmentClearLead(t *testing.T) {
 	t.Run("clear samples under a protected entry need senc", func(t *testing.T) {
 		seg := readFixture(t, "clear", tr.dir, segName(1))
 		orig := bytes.Clone(seg)
-		err := DecryptSegment(seg, tp, key)
+		err := DecryptSegment(seg, tp, onlyKey(key))
 		if !errors.Is(err, ErrNoSampleEncryption) {
 			t.Fatalf("err = %v, want ErrNoSampleEncryption", err)
 		}
@@ -166,14 +166,14 @@ func TestDecryptSegmentErrors(t *testing.T) {
 			want: ErrMalformed,
 		},
 		{
-			name:    "seig sample group in traf",
+			name:    "malformed seig sample group in traf",
 			variant: SchemeCBCS,
 			mutate: func(t *testing.T, seg []byte, _ *TrackProtection) {
 				saio := findBox(t, seg, "moof", "traf", "saio")
 				putType(seg, saio, "sgpd")
 				copy(seg[saio.body+4:saio.body+8], "seig")
 			},
-			want: ErrKeyRotation,
+			want: ErrUnsupportedScheme,
 		},
 		{
 			name:    "protected fragment without senc",
@@ -209,7 +209,7 @@ func TestDecryptSegmentErrors(t *testing.T) {
 			tt.mutate(t, seg, &tp)
 			orig := bytes.Clone(seg)
 
-			err := DecryptSegment(seg, tp, key)
+			err := DecryptSegment(seg, tp, onlyKey(key))
 			if !errors.Is(err, tt.want) {
 				t.Fatalf("err = %v, want %v", err, tt.want)
 			}

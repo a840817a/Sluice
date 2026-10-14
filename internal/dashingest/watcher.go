@@ -153,17 +153,27 @@ func (w *Watcher) Run(ctx context.Context) error {
 }
 
 // Rediscover makes the next poll enqueue every segment the origin lists for
-// the representations repKeys name (queue.RepKey), as for a representation
-// seen for the first time: their segments were enqueued once and dropped
-// unstored, and something has changed that may let them be stored now. The
-// broker ignores a segment that is still queued or in flight. It is meant
-// for a representation that stores nothing, which a dynamic MPD's gap
-// filling (shouldFetchDynamicSegment) never revisits.
+// the representations repKeys name (queue.RepKey) above the highest one the
+// index tracks, as for a representation seen for the first time when it
+// tracks none: those segments were enqueued once and dropped unstored, and
+// something has changed that may let them be stored now. The broker ignores
+// a segment that is still queued or in flight. A dropped segment below the
+// highest tracked one is already offered again by a dynamic MPD's gap
+// filling (shouldFetchDynamicSegment); the ones above it, which gap filling
+// never revisits, are what this is for.
 func (w *Watcher) Rediscover(repKeys []string) {
+	var presentMax map[string]uint64
+	if w.ci != nil {
+		presentMax, _ = snapshotTrackedSegments(w.channelID, w.ci)
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for _, k := range repKeys {
-		delete(w.lastKnown, k)
+		if held := presentMax[k]; held > 0 && held < w.lastKnown[k] {
+			w.lastKnown[k] = held
+		} else if held == 0 {
+			delete(w.lastKnown, k)
+		}
 	}
 }
 

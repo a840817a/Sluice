@@ -96,9 +96,11 @@ func (m *Manager) AddContentKeys(ctx context.Context, id string, keys []string) 
 // A representation whose init was refused for want of a key is tried
 // again: the next poll of a live origin enqueues its segments anew
 // (Watcher.Rediscover), and the processor prepares its init again for any
-// of them because keys were added since it failed (Registry.KeyEpoch). A
-// channel that fetches nothing more, a stalled live one or a VOD, tries it
-// again only when it is restarted.
+// of them because keys were added since it failed (Registry.KeyEpoch). So
+// is a representation whose segments were dropped because their samples
+// rotated to a KID without a key (Registry.Withheld). A channel that
+// fetches nothing more, a stalled live one or a VOD, tries them again only
+// when it is restarted.
 func (rt *Runtime) onKeysAdded(keys []cenc.Key) {
 	if rt.decrypt == nil {
 		return
@@ -108,7 +110,7 @@ func (rt *Runtime) onKeysAdded(keys []cenc.Key) {
 		return
 	}
 	var reps []string
-	for _, r := range rt.decrypt.Refused() {
+	for _, r := range append(rt.decrypt.Refused(), rt.decrypt.Withheld()...) {
 		reps = append(reps, queue.RepKey(rt.ID, r.AS.PeriodID, r.AS.ASID, r.RepID))
 	}
 	rt.watcher.Rediscover(reps)

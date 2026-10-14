@@ -4,8 +4,8 @@
 //
 // The unit is one AdaptationSet of one period. It is decrypted only when the
 // channel holds a key for the KID in the tenc box of every one of its
-// representations' init segments and the scheme is one internal/cenc
-// decrypts; otherwise every representation of it stays ciphertext, as a
+// representations' init segments, and for every KID their seig sample groups
+// name, and the scheme is one internal/cenc decrypts; otherwise every representation of it stays ciphertext, as a
 // passthrough channel stores it, and the reason is reported as a Warning.
 //
 // The decision is stored in the AdaptationSet's directory as decrypt.json,
@@ -94,6 +94,10 @@ type Registry struct {
 	// failed holds the AdaptationSets whose conversion failed since keys
 	// were last added; Convertible leaves them out.
 	failed map[ASKey]bool
+	// withheld holds, per representation of a decrypted AdaptationSet, the
+	// KIDs its segments rotated to without a key held, so they were dropped
+	// unstored (RecordSegmentFailure).
+	withheld map[RefusedRep]map[cenc.KID]bool
 	// wake is Wake's channel.
 	wake chan struct{}
 
@@ -121,6 +125,7 @@ func NewRegistry(dataDir, channelID string, keys cenc.KeySet) *Registry {
 		warnings:  make(map[warningKey]Warning),
 		seen:      make(map[cenc.KID]bool),
 		failed:    make(map[ASKey]bool),
+		withheld:  make(map[RefusedRep]map[cenc.KID]bool),
 		wake:      make(chan struct{}, 1),
 		locks:     make(map[ASKey]*sync.Mutex),
 		initLocks: make(map[ASKey]*sync.RWMutex),
@@ -194,20 +199,29 @@ func (r *Registry) IsDecrypted(as ASKey) bool {
 
 // Lookup returns how to decrypt the media of representation repID of as, and
 // false when it is stored as the origin produced it: as is not decrypted, or
-// the representation is clear.
-func (r *Registry) Lookup(as ASKey, repID string) (cenc.TrackProtection, [16]byte, bool) {
+// the representation is clear. The KeyLookup answers from the keys the
+// registry holds when it is called, so a sample whose group rotates to a KID
+// added since is decrypted too.
+func (r *Registry) Lookup(as ASKey, repID string) (cenc.TrackProtection, cenc.KeyLookup, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	st, ok := r.decrypted[as]
 	if !ok {
-		return cenc.TrackProtection{}, [16]byte{}, false
+		return cenc.TrackProtection{}, nil, false
 	}
 	tp, ok := st.Reps[repID]
 	if !ok {
-		return cenc.TrackProtection{}, [16]byte{}, false
+		return cenc.TrackProtection{}, nil, false
 	}
-	key, ok := r.keys[tp.KID]
-	return tp, key, ok
+	return tp, r.key, true
+}
+
+// key is the registry's cenc.KeyLookup.
+func (r *Registry) key(kid cenc.KID) ([16]byte, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	k, ok := r.keys[kid]
+	return k, ok
 }
 
 // ASLock serializes the decisions about as. It returns the unlock function.
@@ -294,7 +308,7 @@ func (r *Registry) loadAS(key ASKey, as store.ASDir) {
 		r.mu.Lock()
 		r.decrypted[key] = st
 		for _, tp := range st.Reps {
-			r.seen[tp.KID] = true
+			r.markSeen(tp.KIDs())
 		}
 		r.mu.Unlock()
 		for _, rep := range as.Reps {
@@ -486,7 +500,9 @@ func (r *Registry) addRep(key ASKey, task *queue.SegmentTask, st asState, orig [
 	if wasRefused {
 		r.generation.Add(1)
 		if encrypted {
-			r.dropMissingKID(key, tp.KID)
+			for _, kid := range tp.KIDs() {
+				r.dropMissingKID(key, kid)
+			}
 		}
 	}
 	r.mu.Unlock()
@@ -528,7 +544,7 @@ func (r *Registry) keep(key ASKey, inits []repInit) {
 	for _, in := range inits {
 		if tps, err := cenc.ReadInitProtection(in.data); err == nil {
 			for _, tp := range tps {
-				r.seen[tp.KID] = true
+				r.markSeen(tp.KIDs())
 			}
 		}
 	}
@@ -542,14 +558,92 @@ func (r *Registry) markSeen(kids []cenc.KID) {
 }
 
 // RecordSegmentFailure reports that a media segment of a decrypted
-// AdaptationSet could not be decrypted.
+// AdaptationSet could not be decrypted, so it is not stored. A segment whose
+// samples rotate to KIDs the registry holds no key for adds them to the
+// AdaptationSet's missing_key warning, and the representation is listed by
+// Withheld until a segment decrypts with each of those keys
+// (SegmentDecrypted).
 func (r *Registry) RecordSegmentFailure(as ASKey, repID string, segNo uint64, err error) {
+	if mk := (*cenc.MissingKeyError)(nil); errors.As(err, &mk) {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		rep := RefusedRep{AS: as, RepID: repID}
+		if r.withheld[rep] == nil {
+			r.withheld[rep] = make(map[cenc.KID]bool)
+		}
+		wk := warningKey{as: as, kind: KindMissingKey}
+		w, ok := r.warnings[wk]
+		if !ok {
+			w = Warning{Period: as.PeriodID, AdaptationSet: as.ASID, Kind: KindMissingKey}
+		}
+		w.KIDs = slices.Clone(w.KIDs)
+		for _, kid := range mk.KIDs {
+			r.withheld[rep][kid] = true
+			r.seen[kid] = true
+			if !slices.Contains(w.KIDs, kid.String()) {
+				w.KIDs = append(w.KIDs, kid.String())
+			}
+		}
+		slices.Sort(w.KIDs)
+		w.Message = fmt.Sprintf("no content key held for these KIDs; segment %d of representation %s and others that use them are withheld", segNo, repID)
+		r.warnings[wk] = w
+		return
+	}
 	kind := KindMalformed
-	if errors.Is(err, cenc.ErrUnsupportedScheme) || errors.Is(err, cenc.ErrKeyRotation) {
+	if errors.Is(err, cenc.ErrUnsupportedScheme) {
 		kind = KindUnsupportedScheme
 	}
 	r.record(as, Warning{Kind: kind,
 		Message: fmt.Sprintf("segment %d of representation %s not decrypted: %v", segNo, repID, err)})
+}
+
+// SegmentDecrypted reports that a segment of as was decrypted with the keys
+// of kids, which a fragment's own seig sample group can name though no init
+// does: they count as used (key_unmatched). A KID whose segments were
+// withheld for want of its key leaves the missing_key warning and Withheld.
+func (r *Registry) SegmentDecrypted(as ASKey, kids []cenc.KID) {
+	r.mu.RLock()
+	pending := slices.ContainsFunc(kids, func(k cenc.KID) bool { return !r.seen[k] })
+	for rep, set := range r.withheld {
+		if rep.AS == as && slices.ContainsFunc(kids, func(k cenc.KID) bool { return set[k] }) {
+			pending = true
+			break
+		}
+	}
+	r.mu.RUnlock()
+	if !pending {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.markSeen(kids)
+	for rep, set := range r.withheld {
+		if rep.AS != as {
+			continue
+		}
+		for _, kid := range kids {
+			if set[kid] {
+				delete(set, kid)
+				r.dropMissingKID(as, kid)
+			}
+		}
+		if len(set) == 0 {
+			delete(r.withheld, rep)
+		}
+	}
+}
+
+// Withheld lists the representations whose segments were dropped for want
+// of a key and have not decrypted with it since. Once its key is added, a
+// live origin's next poll should offer those segments again.
+func (r *Registry) Withheld() []RefusedRep {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]RefusedRep, 0, len(r.withheld))
+	for rep := range r.withheld {
+		out = append(out, rep)
+	}
+	return out
 }
 
 func (r *Registry) record(as ASKey, w Warning) {

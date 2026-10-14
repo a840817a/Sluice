@@ -72,7 +72,7 @@ function collectRefs(root) {
  */
 /** One decrypt warning as text: kind, where, message, and the KIDs it names. */
 function describeDecryptWarning(w) {
-  const where = w.adaptation_set ? ` (period ${w.period || '—'}, AS ${w.adaptation_set})` : '';
+  const where = w.adaptation_set ? ` (Period ${w.period || '—'}, AdaptationSet ${w.adaptation_set})` : '';
   const kids = w.kids && w.kids.length ? ` [${w.kids.join(', ')}]` : '';
   return `${w.kind}${where}: ${w.message}${kids}`;
 }

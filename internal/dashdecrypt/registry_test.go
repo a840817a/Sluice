@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/a840817a/sluice/internal/cenc"
+	"github.com/a840817a/sluice/internal/cenc/cenctest"
 	"github.com/a840817a/sluice/internal/queue"
 	"github.com/a840817a/sluice/internal/store"
 )
@@ -86,6 +87,7 @@ func TestPrepareInitDecidesNewAdaptationSet(t *testing.T) {
 	cbcsVideo := readFixture(t, "cbcs", "video", "avc1", "init.mp4")
 	clearVideo := readFixture(t, "clear", "video", "avc1", "init.mp4")
 	cens := withScheme(t, video, "cens")
+	rotating := rotationInit(t, video, rotKID)
 
 	// The AdaptationSet's representations are "r0" (whose init is being
 	// prepared) and, where siblings is set, "r1".
@@ -114,6 +116,9 @@ func TestPrepareInitDecidesNewAdaptationSet(t *testing.T) {
 		{name: "sibling unavailable", own: video, sibling: audio, fetchErr: true, keys: []string{videoKey, audioKey},
 			kind: KindMalformed},
 		{name: "clear", own: clearVideo, keys: []string{videoKey}},
+		{name: "seig groups, every key", own: rotating, keys: []string{videoKey, rotKey}, decrypted: true},
+		{name: "seig group's key missing", own: rotating, keys: []string{videoKey},
+			kind: KindMissingKey, kids: []string{rotKIDHex}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -386,6 +391,109 @@ func TestLoadRestoresDecisions(t *testing.T) {
 	next := &queue.SegmentTask{ChannelID: "c", PeriodID: "p0", ASID: "1", RepID: "a1", MediaType: "audio"}
 	if got, err := r.PrepareInit(context.Background(), next, audio, false, nil); err != nil || !bytes.Equal(got, audio) {
 		t.Errorf("new representation of a kept AdaptationSet: err %v, init changed %v", err, !bytes.Equal(got, audio))
+	}
+}
+
+// rotKey's KID appears only in seig sample groups.
+const (
+	rotKey    = "40404040404040404040404040404040:404142434445464748494a4b4c4d4e4f"
+	rotKIDHex = "40404040404040404040404040404040"
+)
+
+var rotKID = cenc.KID{0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40}
+
+// rotationInit is init with an seig sample group in its stbl whose one entry
+// protects samples under kid.
+func rotationInit(t *testing.T, init []byte, kid cenc.KID) []byte {
+	t.Helper()
+	out, err := cenctest.Insert(init, []string{"moov", "trak", "mdia", "minf", "stbl"},
+		cenctest.Sgpd([]cenctest.Group{{Protected: true, IVSize: 8, KID: kid}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// A segment whose samples rotate to a KID without a key is withheld: the
+// KID joins the AdaptationSet's missing_key warning and the representation
+// is listed for a retry, until a segment decrypts with that key.
+func TestSegmentRotationToMissingKey(t *testing.T) {
+	r := NewRegistry(t.TempDir(), "c", keySet(t, videoKey, rotKey))
+	if _, err := r.PrepareInit(context.Background(), task("v0"), readFixture(t, "cenc", "video", "avc1", "init.mp4"), false, nil); err != nil {
+		t.Fatal(err)
+	}
+	as := ASKey{"p0", "0"}
+	// The extra key is used only by segments, so far by none.
+	if ws := r.Warnings(); len(ws) != 1 || ws[0].Kind != KindKeyUnmatched {
+		t.Fatalf("warnings = %+v, want key_unmatched for the rotation key", ws)
+	}
+
+	missing := cenc.KID{0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50, 0x50}
+	r.RecordSegmentFailure(as, "v0", 7, &cenc.MissingKeyError{KIDs: []cenc.KID{missing}})
+	ws := r.Warnings()
+	if len(ws) != 2 || ws[0].Kind != KindMissingKey || !slices.Equal(ws[0].KIDs, []string{missing.String()}) {
+		t.Fatalf("warnings = %+v, want missing_key for %s", ws, missing)
+	}
+	if got := r.Withheld(); !slices.Equal(got, []RefusedRep{{AS: as, RepID: "v0"}}) {
+		t.Errorf("Withheld = %+v, want v0", got)
+	}
+	if !r.IsDecrypted(as) {
+		t.Error("a withheld segment undid the decision")
+	}
+
+	// A segment using keys already held changes nothing but key_unmatched.
+	r.SegmentDecrypted(as, []cenc.KID{rotKID})
+	ws = r.Warnings()
+	if len(ws) != 1 || ws[0].Kind != KindMissingKey || len(r.Withheld()) != 1 {
+		t.Errorf("after a segment with held keys: warnings %+v, withheld %+v", ws, r.Withheld())
+	}
+
+	r.AddKeys([]cenc.Key{{KID: missing}})
+	_, keys, _ := r.Lookup(as, "v0")
+	if _, ok := keys(missing); !ok {
+		t.Error("the KeyLookup Lookup returned misses a key added since")
+	}
+	r.SegmentDecrypted(as, []cenc.KID{missing})
+	if ws := r.Warnings(); len(ws) != 0 {
+		t.Errorf("warnings = %+v, want none once the KID decrypted", ws)
+	}
+	if got := r.Withheld(); len(got) != 0 {
+		t.Errorf("Withheld = %+v, want none", got)
+	}
+}
+
+// A decrypt.json written before key rotation was supported has no seig
+// fields; it loads as before, needing tenc's key only.
+func TestLoadStateWithoutSeigFields(t *testing.T) {
+	dir := t.TempDir()
+	loc := store.RepLocation{DataDir: dir, ChannelID: "c", PeriodID: "p0", MediaType: "video", ASID: "0", RepID: "v0"}
+	if err := store.Write(loc.InitPath(), readFixture(t, "cenc", "video", "avc1", "init.mp4")); err != nil {
+		t.Fatal(err)
+	}
+	old := `{"reps":{"v0":{"track_id":1,"scheme":"cenc","original_format":"avc1",` +
+		`"kid":"10101010101010101010101010101010","is_protected":true,"per_sample_iv_size":16,` +
+		`"crypt_blocks":0,"skip_blocks":0,"protected_entries":[1],` +
+		`"default_sample_description_index":1,"default_sample_size":0}}}`
+	if err := os.WriteFile(filepath.Join(loc.ASDir(), StateFileName), []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry(dir, "c", keySet(t, videoKey))
+	if err := r.Load(); err != nil {
+		t.Fatal(err)
+	}
+	tp, keys, ok := r.Lookup(ASKey{"p0", "0"}, "v0")
+	if !ok || tp.SeigGroups != nil || !slices.Equal(tp.KIDs(), []cenc.KID{tp.KID}) {
+		t.Fatalf("Lookup = %+v, %v", tp, ok)
+	}
+	seg := readFixture(t, "cenc", "video", "avc1", "seg-1.m4s")
+	if err := cenc.DecryptSegment(seg, tp, keys); err != nil {
+		t.Fatalf("DecryptSegment: %v", err)
+	}
+	if !bytes.Equal(mdat(t, seg), mdat(t, readFixture(t, "clear", "video", "avc1", "seg-1.m4s"))) {
+		t.Error("segment decrypted with the old state differs from the clear one")
+	}
+	if ws := r.Warnings(); len(ws) != 0 {
+		t.Errorf("warnings = %+v, want none", ws)
 	}
 }
 

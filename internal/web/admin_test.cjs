@@ -208,7 +208,7 @@ test('decrypt warnings show on the card in every mode, and only while running', 
   ];
   h.ctx.renderProgress(h.refs, { running: true, mode: 'live', decrypt_warnings: warnings });
   assert.equal(h.refs.decryptWarning.hidden, false);
-  assert.match(h.refs.decryptWarning.textContent, /missing_key \(period —, AS 1\): no content key held for these KIDs \[2020\]/);
+  assert.match(h.refs.decryptWarning.textContent, /missing_key \(Period —, AdaptationSet 1\): no content key held for these KIDs \[2020\]/);
   assert.match(h.refs.decryptWarning.textContent, /key_unmatched: .*\[3030\]/);
   assert.equal(h.refs.vodWarning.hidden, true, 'decrypt warnings are not VOD warnings');
 

@@ -99,7 +99,7 @@ func TestReadInitProtectionErrors(t *testing.T) {
 			want: ErrUnsupportedScheme,
 		},
 		{
-			name: "seig sample group in stbl",
+			name: "malformed seig sample group in stbl",
 			mutate: func(t *testing.T, init []byte) {
 				// stts is an empty full box: version, flags, entry_count.
 				// Retyped, its entry_count becomes the grouping type.
@@ -107,7 +107,7 @@ func TestReadInitProtectionErrors(t *testing.T) {
 				putType(init, stts, "sgpd")
 				copy(init[stts.body+4:stts.body+8], "seig")
 			},
-			want: ErrKeyRotation,
+			want: ErrUnsupportedScheme,
 		},
 		{
 			name: "invalid tenc IV size",
