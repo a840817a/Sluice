@@ -12,11 +12,11 @@
 // The decision is stored in the AdaptationSet's directory as decrypt.json,
 // which holds each encrypted representation's cenc.TrackProtection, the
 // representations that joined later and were refused with the KIDs they
-// lacked, the KIDs whose segments were withheld, and never a key. The file exists exactly when the
-// AdaptationSet is decrypted: it is written before the first clear init, or,
-// for an AdaptationSet first stored as ciphertext, swapped in with the files
-// Convert rewrote once its keys arrived. It is read back when the channel
-// starts.
+// lacked, the KIDs whose segments were withheld, and never a key. The file
+// exists exactly when the AdaptationSet is decrypted: it is written before the
+// first clear init, or, for an AdaptationSet first stored as ciphertext,
+// swapped in with the files Convert rewrote once its keys arrived. It is read
+// back when the channel starts.
 //
 // Content keys never appear in a log line, a warning or an error.
 package dashdecrypt
@@ -165,7 +165,7 @@ func (r *Registry) AddKeys(keys []cenc.Key) []cenc.KID {
 		r.keys[k.KID] = k.Value
 	}
 	for as, missing := range r.failed {
-		if len(missing) == 0 || anyIn(missing, added) {
+		if len(missing) == 0 || intersects(missing, added) {
 			delete(r.failed, as)
 			for _, kid := range added {
 				r.dropMissingKID(as, kid)
@@ -181,8 +181,8 @@ func (r *Registry) AddKeys(keys []cenc.Key) []cenc.KID {
 	return added
 }
 
-// anyIn reports whether any KID of kids is in set.
-func anyIn(kids, set []cenc.KID) bool {
+// intersects reports whether any KID of kids is in set.
+func intersects(kids, set []cenc.KID) bool {
 	return slices.ContainsFunc(kids, func(k cenc.KID) bool { return slices.Contains(set, k) })
 }
 
@@ -223,13 +223,13 @@ func (r *Registry) Retriable(added []cenc.KID) []RefusedRep {
 	var out []RefusedRep
 	for as, st := range r.decrypted {
 		for _, id := range st.Refused {
-			if kids, known := st.RefusedKIDs[id]; !known || anyIn(kids, added) {
+			if kids, known := st.RefusedKIDs[id]; !known || intersects(kids, added) {
 				out = append(out, RefusedRep{AS: as, RepID: id})
 			}
 		}
 		for id, kids := range st.Withheld {
 			rep := RefusedRep{AS: as, RepID: id}
-			if anyIn(kids, added) && !slices.Contains(out, rep) {
+			if intersects(kids, added) && !slices.Contains(out, rep) {
 				out = append(out, rep)
 			}
 		}
