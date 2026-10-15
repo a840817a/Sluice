@@ -175,17 +175,23 @@ func (pr *initPreparer) prepareOnce(ctx context.Context, task *queue.SegmentTask
 // what to store: data, or its clear form. Every other channel stores data.
 //
 // The init is stored under the registry's HoldInit, so a conversion of the
-// AdaptationSet cannot swap its directory between the decision and the write.
+// AdaptationSet cannot swap its directory between the decision and the write,
+// and the registry is told once it is written (InitStored), so a conversion
+// it completes starts only when the init is on disk.
 func (pr *initPreparer) finishInit(ctx context.Context, task *queue.SegmentTask, path string, data []byte) (uint32, error) {
-	if pr.decrypt != nil {
-		defer pr.decrypt.HoldInit(dashdecrypt.ASKeyOf(task))()
-		var err error
-		data, err = pr.decrypt.PrepareInit(ctx, task, data, pr.asHeld(task), pr.fetchSibling(task))
-		if err != nil {
-			return 0, fmt.Errorf("prepare init for decryption: %w", err)
-		}
+	if pr.decrypt == nil {
+		return persistInit(path, data)
 	}
-	return persistInit(path, data)
+	defer pr.decrypt.HoldInit(dashdecrypt.ASKeyOf(task))()
+	data, err := pr.decrypt.PrepareInit(ctx, task, data, pr.asHeld(task), pr.fetchSibling(task))
+	if err != nil {
+		return 0, fmt.Errorf("prepare init for decryption: %w", err)
+	}
+	n, err := persistInit(path, data)
+	if err == nil {
+		pr.decrypt.InitStored(task)
+	}
+	return n, err
 }
 
 // asHeld reports whether the index holds a segment of any representation of

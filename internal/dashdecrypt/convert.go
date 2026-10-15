@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/a840817a/sluice/internal/cenc"
+	"github.com/a840817a/sluice/internal/queue"
 	"github.com/a840817a/sluice/internal/store"
 )
 
@@ -58,7 +59,8 @@ var rename = os.Rename
 type Exclusive func(ctx context.Context, fn func() error) error
 
 // Wake delivers a value when an AdaptationSet may have become convertible:
-// keys were added, or an init of a kept AdaptationSet carried only held KIDs.
+// keys were added, or an init of a kept AdaptationSet that carried only held
+// KIDs was stored (InitStored).
 func (r *Registry) Wake() <-chan struct{} { return r.wake }
 
 // nudge makes Wake deliver, unless a wake-up is already pending.
@@ -84,8 +86,8 @@ type ListedReps func(as ASKey) (repIDs []string, known bool)
 // init, and whose inits all carry a KID the registry holds a key for, in a
 // scheme internal/cenc decrypts. A representation without a stored init
 // keeps its AdaptationSet out: its KID is unknown, and a conversion without
-// it would refuse it when its init arrives. PrepareInit wakes the converter
-// when such an init arrives with its key held, and AddKeys when the key
+// it would refuse it when its init arrives. InitStored wakes the converter
+// once such an init is stored with its key held, and AddKeys when the key
 // arrives later. An AdaptationSet whose conversion failed is left out until
 // a key that may change that is added (AddKeys).
 func (r *Registry) Convertible(listed ListedReps) ([]Conversion, error) {
@@ -622,5 +624,21 @@ func removeEmpty(dir, stop string) {
 	}
 	if entries, err := os.ReadDir(dir); err == nil && len(entries) == 0 {
 		_ = os.Remove(dir)
+	}
+}
+
+// InitStored tells the registry that the init PrepareInit returned for
+// task's representation is written. It makes Wake deliver if that init may
+// complete the conversion of a kept AdaptationSet: Convertible skips one
+// with an init not yet stored, so a wake-up sent before the write could be
+// spent before the AdaptationSet is convertible. It never blocks.
+func (r *Registry) InitStored(task *queue.SegmentTask) {
+	k := repKey{ASKeyOf(task), task.RepID}
+	r.mu.Lock()
+	wake := r.wakeOnStore[k]
+	delete(r.wakeOnStore, k)
+	r.mu.Unlock()
+	if wake {
+		r.nudge()
 	}
 }

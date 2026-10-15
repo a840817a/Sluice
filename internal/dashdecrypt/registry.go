@@ -113,12 +113,22 @@ type Registry struct {
 	failed map[ASKey][]cenc.KID
 	// wake is Wake's channel.
 	wake chan struct{}
+	// wakeOnStore holds the representations whose init PrepareInit found
+	// may complete a conversion; InitStored wakes the converter once it is
+	// written.
+	wakeOnStore map[repKey]bool
 
 	locksMu sync.Mutex
 	locks   map[ASKey]*sync.Mutex
 	// initLocks keep a conversion's swap from overlapping the storing of an
 	// init of the same AdaptationSet (HoldInit).
 	initLocks map[ASKey]*sync.RWMutex
+}
+
+// repKey names one representation of an AdaptationSet.
+type repKey struct {
+	as    ASKey
+	repID string
 }
 
 type warningKey struct {
@@ -130,17 +140,18 @@ type warningKey struct {
 // dataDir, decrypting with keys. It knows no decision until Load.
 func NewRegistry(dataDir, channelID string, keys cenc.KeySet) *Registry {
 	r := &Registry{
-		dataDir:   dataDir,
-		channelID: channelID,
-		keys:      make(cenc.KeySet, len(keys)),
-		decrypted: make(map[ASKey]asState),
-		kept:      make(map[ASKey]bool),
-		warnings:  make(map[warningKey]Warning),
-		seen:      make(map[cenc.KID]bool),
-		failed:    make(map[ASKey][]cenc.KID),
-		wake:      make(chan struct{}, 1),
-		locks:     make(map[ASKey]*sync.Mutex),
-		initLocks: make(map[ASKey]*sync.RWMutex),
+		dataDir:     dataDir,
+		channelID:   channelID,
+		keys:        make(cenc.KeySet, len(keys)),
+		decrypted:   make(map[ASKey]asState),
+		kept:        make(map[ASKey]bool),
+		warnings:    make(map[warningKey]Warning),
+		seen:        make(map[cenc.KID]bool),
+		failed:      make(map[ASKey][]cenc.KID),
+		wake:        make(chan struct{}, 1),
+		wakeOnStore: make(map[repKey]bool),
+		locks:       make(map[ASKey]*sync.Mutex),
+		initLocks:   make(map[ASKey]*sync.RWMutex),
 	}
 	for kid, k := range keys {
 		r.keys[kid] = k
@@ -415,9 +426,9 @@ func (r *Registry) reclearInit(path string) {
 //     and fails otherwise, so the AdaptationSet never mixes the two;
 //   - one that already stores media or inits (held is true, or a
 //     representation directory of it is not empty), or that this run
-//     already decided to keep, gets orig, and Wake delivers when orig's
-//     KID has a key or orig is clear, since the stored AdaptationSet may
-//     be convertible now that this init is stored;
+//     already decided to keep, gets orig, and InitStored makes Wake
+//     deliver when orig's KID has a key or orig is clear, since the stored
+//     AdaptationSet may be convertible once this init is stored;
 //   - a new one gets every representation's init (fetch, for those of
 //     task.ASInits other than task's own) and is decrypted when every KID has
 //     a key and every scheme is supported: decrypt.json is written before the
@@ -447,9 +458,12 @@ func (r *Registry) PrepareInit(ctx context.Context, task *queue.SegmentTask, ori
 		d := decide([]repInit{{repID: task.RepID, data: orig}}, r.keys)
 		r.mu.RUnlock()
 		// A clear init can complete one too: every representation's init
-		// must be stored (Convertible).
+		// must be stored (Convertible), so the converter is woken only once
+		// this one is (InitStored).
 		if d.warning == nil {
-			r.nudge()
+			r.mu.Lock()
+			r.wakeOnStore[repKey{key, task.RepID}] = true
+			r.mu.Unlock()
 		}
 		return orig, nil
 	}

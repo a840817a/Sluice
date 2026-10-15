@@ -410,9 +410,9 @@ func TestRecoverStaging(t *testing.T) {
 }
 
 // An init of an AdaptationSet kept as ciphertext whose KID has a key, or
-// that is clear, wakes the converter: the stored AdaptationSet may be
-// convertible now that this init is stored too.
-func TestPrepareInitOfKeptAdaptationSetWakes(t *testing.T) {
+// that is clear, wakes the converter once stored: the stored AdaptationSet
+// may be convertible now that this init is stored too.
+func TestStoredInitOfKeptAdaptationSetWakes(t *testing.T) {
 	dataDir := t.TempDir()
 	storeCiphertextAudio(t, dataDir, 1)
 	r := loadedRegistry(t, dataDir, videoKey)
@@ -426,10 +426,11 @@ func TestPrepareInitOfKeptAdaptationSetWakes(t *testing.T) {
 	if got, err := r.PrepareInit(context.Background(), task, audio, true, nil); err != nil || !bytes.Equal(got, audio) {
 		t.Fatalf("PrepareInit of a kept AdaptationSet: err %v, init changed %v", err, !bytes.Equal(got, audio))
 	}
+	r.InitStored(task)
 	select {
 	case <-r.Wake():
 	default:
-		t.Error("PrepareInit of a kept AdaptationSet with its key held did not wake the converter")
+		t.Error("storing an init of a kept AdaptationSet with its key held did not wake the converter")
 	}
 
 	clear := audioFile(t, "clear", "init.mp4")
@@ -437,10 +438,60 @@ func TestPrepareInitOfKeptAdaptationSetWakes(t *testing.T) {
 	if got, err := r.PrepareInit(context.Background(), task, clear, true, nil); err != nil || !bytes.Equal(got, clear) {
 		t.Fatalf("PrepareInit of a clear init: err %v, init changed %v", err, !bytes.Equal(got, clear))
 	}
+	r.InitStored(task)
 	select {
 	case <-r.Wake():
 	default:
-		t.Error("PrepareInit of a clear init of a kept AdaptationSet did not wake the converter")
+		t.Error("storing a clear init of a kept AdaptationSet did not wake the converter")
+	}
+}
+
+// The converter is woken only once the init that completes a kept
+// AdaptationSet is stored: one that runs between PrepareInit's decision and
+// the write finds that init missing and skips the AdaptationSet, so a wake-up
+// sent at the decision would be spent before the AdaptationSet is
+// convertible, and nothing would wake the converter again.
+func TestInitStoredWakesAfterTheWrite(t *testing.T) {
+	dataDir := t.TempDir()
+	storeCiphertextAudio(t, dataDir, 1)
+	r := loadedRegistry(t, dataDir, audioKey)
+	listed := func(ASKey) ([]string, bool) { return []string{"a0", "a1"}, true }
+	drain := func() {
+		select {
+		case <-r.Wake():
+		default:
+		}
+	}
+
+	loc := audioLoc(dataDir)
+	loc.RepID = "a1"
+	tk := task("a1")
+	tk.PeriodID, tk.ASID, tk.MediaType = loc.PeriodID, loc.ASID, loc.MediaType
+	audio := audioFile(t, "cenc", "init.mp4")
+	release := r.HoldInit(ASKeyOf(tk))
+	got, err := r.PrepareInit(context.Background(), tk, audio, true, nil)
+	if err != nil || !bytes.Equal(got, audio) {
+		t.Fatalf("PrepareInit of a kept AdaptationSet: err %v, init changed %v", err, !bytes.Equal(got, audio))
+	}
+
+	// The converter runs now, before the init is written.
+	drain()
+	if pending, _ := r.Convertible(listed); len(pending) != 0 {
+		t.Fatalf("Convertible lists %d AdaptationSets before the last init is stored", len(pending))
+	}
+
+	if err := store.Write(loc.InitPath(), got); err != nil {
+		t.Fatal(err)
+	}
+	r.InitStored(tk)
+	release()
+	select {
+	case <-r.Wake():
+	default:
+		t.Fatal("storing the last init of a kept AdaptationSet with every key held did not wake the converter")
+	}
+	if pending, _ := r.Convertible(listed); len(pending) != 1 {
+		t.Errorf("Convertible lists %d AdaptationSets once every init is stored, want 1", len(pending))
 	}
 }
 
