@@ -146,6 +146,12 @@ func (c *Config) NormalizeKeyAlias() error {
 // origin protection unless the operator opts out of it.
 func (c Config) DecryptOnIngest() bool { return c.KeyMode == KeyModeDecrypt }
 
+// IsDASHDecrypt reports whether c is a DASH source in decrypt mode, the only
+// kind of channel that takes content keys.
+func (c Config) IsDASHDecrypt() bool {
+	return c.canonicalSourceType() == SourceDASH && c.canonicalKeyMode() == KeyModeDecrypt
+}
+
 // ContentKeyIDs lists the KIDs (lower-case hex) of the stored content keys, in
 // stored order. Entries that do not parse are skipped.
 func (c Config) ContentKeyIDs() []string {

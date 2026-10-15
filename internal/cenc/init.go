@@ -13,7 +13,8 @@ const (
 )
 
 // TrackProtection is how one track of an init segment is encrypted, as read
-// from its tenc and trex. It holds no key, so it can be persisted.
+// from its tenc, its seig sample group and trex. It holds no key, so it can
+// be persisted.
 type TrackProtection struct {
 	TrackID uint32 `json:"track_id"`
 	// Scheme is the schm scheme type: "cenc" or "cbcs".
@@ -38,6 +39,12 @@ type TrackProtection struct {
 	// apply to fragments whose tfhd does not override them.
 	DefaultSampleDescriptionIndex uint32 `json:"default_sample_description_index"`
 	DefaultSampleSize             uint32 `json:"default_sample_size"`
+	// SeigGroups are the entries of the init's seig sample group (key
+	// rotation), which a fragment's sbgp refers to by 1-based index.
+	// SeigDefault is the 1-based entry for samples no sbgp maps, 0 for none.
+	// A decrypt.json written before key rotation was supported has neither.
+	SeigGroups  []SeigEntry `json:"seig_groups,omitempty"`
+	SeigDefault uint32      `json:"seig_default,omitempty"`
 }
 
 // sampleEntryFixed is the length of a sample entry's fixed fields, which sit
@@ -124,23 +131,6 @@ func readTrak(data []byte, trak box) (trakInfo, error) {
 		return ti, malformed("stsd entry_count %d, %d entries", n, len(ti.entries))
 	}
 	return ti, nil
-}
-
-// groupingType returns the grouping_type of an sgpd or sbgp.
-func groupingType(data []byte, b box) string {
-	if b.end-b.body < 8 {
-		return ""
-	}
-	return string(data[b.body+4 : b.body+8])
-}
-
-func hasSeig(data []byte, list []box) bool {
-	for _, b := range list {
-		if (b.typ == "sgpd" || b.typ == "sbgp") && groupingType(data, b) == "seig" {
-			return true
-		}
-	}
-	return false
 }
 
 // readSinf reads one encrypted sample entry's protection.
@@ -296,8 +286,12 @@ func ReadInitProtection(init []byte) ([]TrackProtection, error) {
 		if tp == nil {
 			continue
 		}
-		if hasSeig(init, ti.stbl) {
-			return nil, fmt.Errorf("%w: track %d", ErrKeyRotation, ti.trackID)
+		sgpd, ok, err := seigBox(init, ti.stbl, "sgpd")
+		if err == nil && ok {
+			tp.SeigGroups, tp.SeigDefault, err = readSeigSgpd(init, sgpd, tp.Scheme)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("track %d: %w", ti.trackID, err)
 		}
 		tp.TrackID = ti.trackID
 		tp.DefaultSampleDescriptionIndex, tp.DefaultSampleSize = 1, 0
@@ -311,8 +305,8 @@ func ReadInitProtection(init []byte) ([]TrackProtection, error) {
 
 // ClearInit rewrites an encrypted init segment as a clear one: every encv or
 // enca sample entry takes its frma original format and loses its sinf, and
-// pssh boxes are dropped. The stsd keeps its entry count and order. A clear
-// init comes back unchanged (as a copy).
+// pssh boxes and seig sample groups (sgpd, sbgp) are dropped. The stsd keeps
+// its entry count and order. A clear init comes back unchanged (as a copy).
 func ClearInit(init []byte) ([]byte, error) {
 	tps, err := ReadInitProtection(init)
 	if err != nil {
@@ -353,6 +347,7 @@ func rewriteContainer(out, data []byte, b box, typ string) ([]byte, error) {
 	for _, c := range kids {
 		switch {
 		case typ == "moov" && c.typ == "pssh":
+		case typ == "stbl" && isSeig(data, c):
 		case clearPath[c.typ]:
 			if body, err = rewriteContainer(body, data, c, c.typ); err != nil {
 				return nil, err

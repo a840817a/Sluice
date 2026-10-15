@@ -104,7 +104,7 @@ func (m *Manager) afterConversion(rt *Runtime) {
 
 // urlVersion is what presentation.Channel.URLVersion is for rt: nil unless
 // rt decrypts.
-func (rt *Runtime) urlVersion() func(periodID, repID string) uint64 {
+func (rt *Runtime) urlVersion() func(periodID, asID, repID string) uint64 {
 	if rt.decrypt == nil {
 		return nil
 	}

@@ -67,6 +67,16 @@ function parseKeyLines(text) {
   return String(text || '').split('\n').map(l => l.trim()).filter(Boolean);
 }
 
+/**
+ * Licence headers to submit from the form with this prefix, or null when its
+ * DRM section is hidden (applyVisibility): they belong to the same licence
+ * servers as the DRM fields, so they follow the same rule.
+ */
+function licenceHeaders(prefix) {
+  if (document.getElementById(`${prefix}DrmSection`).hidden) return null;
+  return collectHeaders(`${prefix}LicenseHeaders`);
+}
+
 /** Whether the form's source and key mode are the ones that take content keys. */
 function takesKeys(form) {
   return form.elements['source_type'].value === 'dash' && form.elements['key_mode'].value === 'decrypt';
@@ -84,8 +94,11 @@ function formBody(form, { keepEmptyHeaders }) {
   delete body.content_keys;
   const keys = parseKeyLines(form.elements['content_keys'] && form.elements['content_keys'].value);
   if (keys.length && takesKeys(form)) body.content_keys = keys;
+  // A disabled checkbox belongs to a section that does not apply, like any
+  // other disabled field FormData leaves out.
   CHECKBOXES.forEach(name => {
-    if (form.elements[name]) body[name] = form.elements[name].checked;
+    const el = form.elements[name];
+    if (el && !el.disabled) body[name] = el.checked;
   });
   return body;
 }
@@ -139,7 +152,9 @@ function mountFields(form, prefix, { showRestart, editing = false }) {
 /**
  * Shows only the fields that apply to the chosen source and key mode: the URL
  * hint follows the protocol, DRM licence servers are meaningless for HLS, and
- * content keys exist only for DASH that decrypts.
+ * content keys exist only for DASH that decrypts. The hidden DRM fields are
+ * disabled too, so the form does not submit them, and licenceHeaders submits
+ * no licence headers while the section is hidden.
  */
 function applyVisibility(prefix) {
   const sourceType = document.getElementById(`${prefix}SourceType`).value;
@@ -147,7 +162,9 @@ function applyVisibility(prefix) {
   document.getElementById(`${prefix}SourceURL`).placeholder = sourceType === 'hls'
     ? 'https://cdn.example.com/master.m3u8'
     : 'https://cdn.example.com/stream.mpd';
-  document.getElementById(`${prefix}DrmSection`).hidden = sourceType === 'hls';
+  const drm = document.getElementById(`${prefix}DrmSection`);
+  drm.hidden = sourceType === 'hls';
+  drm.querySelectorAll('input, select, textarea').forEach(el => { el.disabled = drm.hidden; });
   const keysField = document.getElementById(`${prefix}KeysField`);
   if (keysField) keysField.hidden = !(sourceType === 'dash' && keyMode === 'decrypt');
 }
@@ -217,8 +234,8 @@ function initAddForm() {
 
     const fetchHeaders = collectHeaders('addFetchHeaders');
     if (fetchHeaders.length) body.fetch_headers = fetchHeaders;
-    const licenseHeaders = collectHeaders('addLicenseHeaders');
-    if (licenseHeaders.length) body.license_headers = licenseHeaders;
+    const licenseHeaders = licenceHeaders('add');
+    if (licenseHeaders && licenseHeaders.length) body.license_headers = licenseHeaders;
 
     adding = true;
     setSubmitting(form, true);
@@ -345,9 +362,11 @@ function initEditModal() {
 
     const body = formBody(form, { keepEmptyHeaders: true });
     // Sent even when empty: an omitted list would leave the old headers in place,
-    // making it impossible to remove the last one.
+    // making it impossible to remove the last one. A source without licence
+    // servers sends no licence headers.
     body.fetch_headers = collectHeaders('editFetchHeaders');
-    body.license_headers = collectHeaders('editLicenseHeaders');
+    const licenseHeaders = licenceHeaders('edit');
+    if (licenseHeaders) body.license_headers = licenseHeaders;
 
     saving = true;
     setSubmitting(form, true);

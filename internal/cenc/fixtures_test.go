@@ -187,3 +187,8 @@ func findBox(t *testing.T, data []byte, path ...string) box {
 func putType(data []byte, b box, typ string) { copy(data[b.start+4:b.start+8], typ) }
 
 func putU32(data []byte, off int, v uint32) { binary.BigEndian.PutUint32(data[off:], v) }
+
+// onlyKey is a KeyLookup that answers key for every KID.
+func onlyKey(key [16]byte) KeyLookup {
+	return func(KID) ([16]byte, bool) { return key, true }
+}

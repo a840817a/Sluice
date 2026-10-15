@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/a840817a/sluice/internal/cenc"
@@ -71,7 +72,7 @@ func (r *Registry) nudge() {
 // Convertible lists the stored AdaptationSets without a decrypt.json whose
 // representations' stored inits all carry a KID the registry holds a key for,
 // in a scheme internal/cenc decrypts. An AdaptationSet whose conversion
-// failed is left out until keys are added again.
+// failed is left out until a key that may change that is added (AddKeys).
 func (r *Registry) Convertible() ([]Conversion, error) {
 	periods, err := store.ScanChannel(r.dataDir, r.channelID)
 	if err != nil {
@@ -86,7 +87,7 @@ func (r *Registry) Convertible() ([]Conversion, error) {
 			key := ASKey{PeriodID: p.ID, ASID: as.ID}
 			r.mu.RLock()
 			_, decrypted := r.decrypted[key]
-			failed := r.failed[key]
+			_, failed := r.failed[key]
 			r.mu.RUnlock()
 			dir := as.Reps[0].ASDir()
 			if decrypted || failed {
@@ -127,10 +128,13 @@ func (r *Registry) Convertible() ([]Conversion, error) {
 // interrupted. Only then does the registry treat the AdaptationSet as
 // decrypted, with a new generation and URL version.
 //
-// A failure leaves the AdaptationSet stored as it was, records a
-// conversion_failed warning and removes the staging; the AdaptationSet is
-// not tried again until keys are added. When ctx ends first the conversion
-// is dropped without a warning: the next start tries again.
+// A failure leaves the AdaptationSet stored as it was, records a warning
+// and removes the staging. A stored segment whose samples rotate to KIDs
+// without a key fails it with a missing_key warning naming them, and it is
+// tried again once a key for one of them is added; any other failure is a
+// conversion_failed warning, tried again once any key is added. When ctx
+// ends first the conversion is dropped without a warning: the next start
+// tries again.
 func (r *Registry) Convert(ctx context.Context, c Conversion, exclusive Exclusive) error {
 	paths := stagingPaths(r.dataDir, r.channelID, c.dir)
 	err := r.convert(ctx, c, paths, exclusive)
@@ -148,37 +152,43 @@ func (r *Registry) Convert(ctx context.Context, c Conversion, exclusive Exclusiv
 	if ctx.Err() != nil {
 		return err
 	}
-	r.mu.Lock()
-	r.failed[c.AS] = true
-	r.mu.Unlock()
-	r.record(c.AS, Warning{Kind: KindConversionFailed,
-		Message: fmt.Sprintf("stored AdaptationSet not converted to clear, so it stays encrypted: %v", err)})
 	slog.Warn("AdaptationSet conversion failed", "channel", r.channelID,
 		"period", c.AS.PeriodID, "as", c.AS.ASID, "err", err)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if mk := (*cenc.MissingKeyError)(nil); errors.As(err, &mk) {
+		r.failed[c.AS] = slices.Clone(mk.KIDs)
+		r.markSeen(mk.KIDs)
+		delete(r.warnings, warningKey{as: c.AS, kind: KindConversionFailed})
+		r.recordLocked(c.AS, missingKeyWarning(mk.KIDs, nil, nil))
+		return err
+	}
+	r.failed[c.AS] = nil
+	r.recordLocked(c.AS, Warning{Kind: KindConversionFailed,
+		Message: fmt.Sprintf("stored AdaptationSet not converted to clear, so it stays encrypted: %v", err)})
 	return err
 }
 
 // Refuse records that c is left stored as ciphertext for reason, in a
-// conversion_failed warning, and leaves it out of Convertible until keys are
-// added again.
+// conversion_failed warning, and leaves it out of Convertible until AddKeys
+// adds any key: a refusal names no KID whose key would end it.
 func (r *Registry) Refuse(c Conversion, reason string) {
 	r.mu.Lock()
-	r.failed[c.AS] = true
-	r.mu.Unlock()
-	r.record(c.AS, Warning{Kind: KindConversionFailed,
+	r.failed[c.AS] = nil
+	r.recordLocked(c.AS, Warning{Kind: KindConversionFailed,
 		Message: "stored AdaptationSet not converted to clear, so it stays encrypted: " + reason})
+	r.mu.Unlock()
 }
 
 func (r *Registry) convert(ctx context.Context, c Conversion, paths staging, exclusive Exclusive) error {
 	conv := &converter{ctx: ctx, registry: r, src: c.dir, dst: paths.staged, known: make(map[string]bool),
-		reps: make(map[string]cenc.TrackProtection), keys: make(map[string][16]byte), stamps: make(map[string]fileStamp)}
+		reps: make(map[string]cenc.TrackProtection), stamps: make(map[string]fileStamp)}
 	r.mu.RLock()
 	for _, repID := range c.repIDs {
 		conv.known[repID] = true
 	}
 	for repID, tp := range c.reps {
 		conv.reps[repID] = tp
-		conv.keys[repID] = r.keys[tp.KID]
 	}
 	r.mu.RUnlock()
 
@@ -256,21 +266,21 @@ func (r *Registry) markConverted(as ASKey, st asState) {
 }
 
 // URLVersion is the version the gateway's URLs of representation repID of
-// period periodID carry, or 0 for none: a representation whose stored files
-// a conversion rewrote is served under new URLs, so no cache serves its
-// ciphertext again.
-func (r *Registry) URLVersion(periodID, repID string) uint64 {
+// AdaptationSet asID of period periodID carry, or 0 for none: a representation
+// whose stored files a conversion rewrote is served under new URLs, so no
+// cache serves its ciphertext again. Two AdaptationSets of a period may use
+// the same representation ID; each has its own version.
+func (r *Registry) URLVersion(periodID, asID, repID string) uint64 {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	for as, st := range r.decrypted {
-		if as.PeriodID != periodID || st.URLVersion == 0 {
-			continue
-		}
-		if _, ok := st.Reps[repID]; ok {
-			return st.URLVersion
-		}
+	st, ok := r.decrypted[ASKey{PeriodID: periodID, ASID: asID}]
+	if !ok {
+		return 0
 	}
-	return 0
+	if _, ok := st.Reps[repID]; !ok {
+		return 0
+	}
+	return st.URLVersion
 }
 
 // staging names the staging entries of one AdaptationSet directory.
@@ -309,10 +319,9 @@ type converter struct {
 	registry *Registry
 	src, dst string
 	// known is every representation whose files may be converted; reps
-	// holds the encrypted ones, and keys their keys.
+	// holds the encrypted ones. Their keys come from the registry.
 	known map[string]bool
 	reps  map[string]cenc.TrackProtection
-	keys  map[string][16]byte
 	// stamps holds each file converted so far, by path relative to src, as
 	// it was before it was read.
 	stamps map[string]fileStamp
@@ -417,7 +426,7 @@ func (c *converter) convertFile(rel string) error {
 			return err
 		}
 	case isSeg && ext == store.ExtFMP4:
-		if err := cenc.DecryptSegment(data, tp, c.keys[repID]); err != nil {
+		if err := cenc.DecryptSegment(data, tp, c.registry.key); err != nil {
 			return err
 		}
 	}
@@ -445,9 +454,6 @@ func (c *converter) repOf(dir string) (string, error) {
 	}
 	if tp, ok := d.reps[repID]; ok {
 		c.reps[repID] = tp
-		c.registry.mu.RLock()
-		c.keys[repID] = c.registry.keys[tp.KID]
-		c.registry.mu.RUnlock()
 	}
 	c.known[repID] = true
 	return repID, nil

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -156,7 +157,7 @@ func TestConvertCatchesUpBeforeSwap(t *testing.T) {
 	if r.Generation() == gen {
 		t.Error("conversion did not change the generation")
 	}
-	if v := r.URLVersion("p0", "a0"); v != 1 {
+	if v := r.URLVersion("p0", "1", "a0"); v != 1 {
 		t.Errorf("URLVersion = %d, want 1", v)
 	}
 	if _, _, ok := r.Lookup(c.AS, "a0"); !ok {
@@ -167,7 +168,7 @@ func TestConvertCatchesUpBeforeSwap(t *testing.T) {
 	}
 
 	// The URL version survives a restart.
-	if v := loadedRegistry(t, dataDir, audioKey).URLVersion("p0", "a0"); v != 1 {
+	if v := loadedRegistry(t, dataDir, audioKey).URLVersion("p0", "1", "a0"); v != 1 {
 		t.Errorf("URLVersion after Load = %d, want 1", v)
 	}
 }
@@ -237,6 +238,59 @@ func TestConvertFailureKeepsCiphertext(t *testing.T) {
 	}
 	r.AddKeys([]cenc.Key{mustKey(t, "30303030303030303030303030303030:0123456789abcdef0123456789abcdef")})
 	onlyConversion(t, r)
+}
+
+// A conversion that meets a stored segment rotating to a KID without a key
+// leaves the AdaptationSet as stored and reports missing_key for that KID,
+// not conversion_failed. Only adding that KID's key makes it convertible
+// again.
+func TestConvertMissingRotationKey(t *testing.T) {
+	dataDir := t.TempDir()
+	loc := storeCiphertextAudio(t, dataDir, 1)
+	audio, missing := mustKey(t, audioKey), mustKey(t, missingKey)
+	seg2 := rotated(t, audioFixture, "seg-2.m4s", audio, missing)
+	if err := store.Write(loc.SegmentPath(2, store.ExtFMP4), seg2); err != nil {
+		t.Fatal(err)
+	}
+	r := loadedRegistry(t, dataDir, audioKey)
+	c := onlyConversion(t, r)
+
+	if err := r.Convert(context.Background(), c, run); err == nil {
+		t.Fatal("Convert of a segment without its key succeeded")
+	}
+	if got, _ := os.ReadFile(loc.SegmentPath(2, store.ExtFMP4)); !bytes.Equal(got, seg2) {
+		t.Error("segment 2 changed by a failed conversion")
+	}
+	if got, _ := os.ReadFile(loc.InitPath()); !bytes.Equal(got, audioFile(t, "cenc", "init.mp4")) {
+		t.Error("init changed by a failed conversion")
+	}
+	if r.IsDecrypted(c.AS) {
+		t.Error("AdaptationSet decrypted after a failed conversion")
+	}
+	ws := r.Warnings()
+	if len(ws) != 1 || ws[0].Kind != KindMissingKey || ws[0].AdaptationSet != "1" || len(ws[0].KIDs) != 1 || ws[0].KIDs[0] != missing.KID.String() {
+		t.Errorf("warnings = %+v, want only missing_key for %s", ws, missing.KID)
+	}
+
+	r.AddKeys([]cenc.Key{mustKey(t, videoKey)})
+	if pending, _ := r.Convertible(); len(pending) != 0 {
+		t.Errorf("convertible again after an unrelated key: %+v", pending)
+	}
+	r.AddKeys([]cenc.Key{missing})
+	if _, ok := warningOf(r.Warnings(), KindMissingKey); ok {
+		t.Errorf("warnings = %+v, want no missing_key once its key is held", r.Warnings())
+	}
+	if err := r.Convert(context.Background(), onlyConversion(t, r), run); err != nil {
+		t.Fatalf("Convert with the key: %v", err)
+	}
+	got, _ := os.ReadFile(loc.SegmentPath(2, store.ExtFMP4))
+	if !bytes.Equal(mdat(t, got), mdat(t, audioFile(t, "clear", "seg-2.m4s"))) {
+		t.Error("converted segment 2 differs from the clear fixture's")
+	}
+	// Only the unrelated key is left to report.
+	if ws := r.Warnings(); len(ws) != 1 || ws[0].Kind != KindKeyUnmatched {
+		t.Errorf("warnings after the conversion = %+v, want only key_unmatched", ws)
+	}
 }
 
 // A conversion dropped because the channel is stopping leaves no warning.
@@ -421,11 +475,11 @@ func TestRepJoinsAfterConversionKeepsURLVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, rep := range []string{"a0", "a1"} {
-		if v := r.URLVersion("p0", rep); v != 1 {
+		if v := r.URLVersion("p0", "1", rep); v != 1 {
 			t.Errorf("URLVersion of %s = %d, want 1", rep, v)
 		}
 	}
-	if v := loadedRegistry(t, dataDir, audioKey).URLVersion("p0", "a1"); v != 1 {
+	if v := loadedRegistry(t, dataDir, audioKey).URLVersion("p0", "1", "a1"); v != 1 {
 		t.Errorf("URLVersion of a1 after Load = %d, want 1", v)
 	}
 }
@@ -464,5 +518,56 @@ func TestConvertStuckSwapKeepsBothCopies(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(loc.ASDir(), StateFileName)); err != nil {
 		t.Errorf("recovery did not swap the converted AdaptationSet in: %v", err)
+	}
+}
+
+// Two AdaptationSets of one period may use the same representation ID; a
+// version belongs to the AdaptationSet that was converted, not to the ID.
+func TestURLVersionIsPerAdaptationSet(t *testing.T) {
+	r := NewRegistry(t.TempDir(), "c", nil)
+	reps := map[string]cenc.TrackProtection{"x": {}}
+	r.decrypted[ASKey{"p0", "1"}] = asState{Reps: reps, URLVersion: 1}
+	r.decrypted[ASKey{"p0", "2"}] = asState{Reps: reps}
+	if v := r.URLVersion("p0", "1", "x"); v != 1 {
+		t.Errorf("converted AdaptationSet: URLVersion = %d, want 1", v)
+	}
+	if v := r.URLVersion("p0", "2", "x"); v != 0 {
+		t.Errorf("unconverted AdaptationSet: URLVersion = %d, want 0", v)
+	}
+	if v := r.URLVersion("p0", "1", "other"); v != 0 {
+		t.Errorf("unknown representation: URLVersion = %d, want 0", v)
+	}
+}
+
+// A missing_key warning says the same thing whichever part of the channel
+// lacks the key: a stored AdaptationSet a conversion could not finish, or
+// segments a decrypted one withheld, which it names.
+func TestMissingKeyMessageIsShared(t *testing.T) {
+	const base = "no content key held for these KIDs"
+	dataDir := t.TempDir()
+	loc := storeCiphertextAudio(t, dataDir, 1)
+	audio, missing := mustKey(t, audioKey), mustKey(t, missingKey)
+	if err := store.Write(loc.SegmentPath(2, store.ExtFMP4), rotated(t, audioFixture, "seg-2.m4s", audio, missing)); err != nil {
+		t.Fatal(err)
+	}
+	r := loadedRegistry(t, dataDir, audioKey)
+	if err := r.Convert(context.Background(), onlyConversion(t, r), run); err == nil {
+		t.Fatal("Convert of a segment without its key succeeded")
+	}
+	converting, ok := warningOf(r.Warnings(), KindMissingKey)
+	if !ok || converting.Message != base {
+		t.Errorf("conversion's missing_key = %+v, want message %q", converting, base)
+	}
+
+	withholding := decryptedVideo(t, t.TempDir(), videoKey)
+	if err := withholding.DecryptSegment(segTask(3), rotated(t, videoRep, "seg-1.m4s", mustKey(t, videoKey), missing)); err == nil {
+		t.Fatal("decrypted without the key")
+	}
+	w, ok := warningOf(withholding.Warnings(), KindMissingKey)
+	if want := base + "; segments that use them withheld from representations: v0"; !ok || w.Message != want {
+		t.Errorf("decrypted AdaptationSet's missing_key = %+v, want message %q", w, want)
+	}
+	if !slices.Equal(converting.KIDs, w.KIDs) {
+		t.Errorf("KIDs differ for the same missing key: %v and %v", converting.KIDs, w.KIDs)
 	}
 }

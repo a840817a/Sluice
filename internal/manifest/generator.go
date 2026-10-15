@@ -53,7 +53,7 @@ type GeneratorConfig struct {
 	StaticIngestStart time.Time
 	// URLVersion is the version (gwurl.Versioned) of the segment and init
 	// URLs of a period's representation. Nil versions none.
-	URLVersion func(periodID, repID string) uint64
+	URLVersion func(periodID, asID, repID string) uint64
 	// Now is the wall clock used for publishTime. The zero value means
 	// time.Now().UTC(), which is what every production caller wants; tests set
 	// it so that generating the same input twice yields identical bytes.
@@ -277,7 +277,7 @@ func buildRepresentation(
 
 	// Build segment template pointing to gateway paths. The URL shape, including
 	// why DASH advertises zero-padded segment numbers, lives in gwurl.
-	mediaPath, initPath := templatePaths(cfg, origPeriod.ID, origRep.ID)
+	mediaPath, initPath := templatePaths(cfg, origPeriod.ID, origAS.ID, origRep.ID)
 
 	st := &gompeg.SegmentTemplate{
 		Media:          &mediaPath,
@@ -336,11 +336,11 @@ func buildRepresentation(
 
 // templatePaths are the SegmentTemplate media and initialization attributes
 // of a period's representation.
-func templatePaths(cfg GeneratorConfig, periodID, repID string) (media, init string) {
+func templatePaths(cfg GeneratorConfig, periodID, asID, repID string) (media, init string) {
 	media = gwurl.SegmentTemplatePath(cfg.ChannelID, periodID, repID)
 	init = gwurl.InitTemplatePath(cfg.ChannelID, periodID, repID)
 	if cfg.URLVersion != nil {
-		v := cfg.URLVersion(periodID, repID)
+		v := cfg.URLVersion(periodID, asID, repID)
 		media, init = gwurl.Versioned(media, v), gwurl.Versioned(init, v)
 	}
 	return media, init
@@ -368,7 +368,7 @@ func buildRepFromSegmentList(
 		return nil, nil, nil // not ready yet
 	}
 
-	mediaPath, initPath := templatePaths(cfg, origPeriod.ID, origRep.ID)
+	mediaPath, initPath := templatePaths(cfg, origPeriod.ID, origAS.ID, origRep.ID)
 	st := &gompeg.SegmentTemplate{
 		Media:          &mediaPath,
 		Initialization: &initPath,

@@ -167,6 +167,9 @@ func (p *Processor) Run(ctx context.Context, pool *fetch.Pool) {
 		tick:      ticker.C,
 		exclusive: p.exclusive,
 	}
+	if p.inits.decrypt != nil {
+		gate.keyEpoch = p.inits.decrypt.KeyEpoch
+	}
 	gate.run(ctx, pool.Results())
 }
 

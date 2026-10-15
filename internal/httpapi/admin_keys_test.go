@@ -265,6 +265,29 @@ func TestAdminUpdateSourceTypeCannotStrandKeys(t *testing.T) {
 	}
 }
 
+// recreateHint is what the 400 of an edit that would change a setting fixed
+// at creation tells the operator to do instead.
+const recreateHint = "delete the channel and create it again"
+
+// Both edits a decrypt channel cannot take, a new key_mode and a source type
+// that strands its keys, say in their 400 how to get there instead.
+func TestAdminFixedSettingErrorsSayRecreate(t *testing.T) {
+	admin := newTestAdminServer(t)
+	if err := storeOf(t, admin).Put("d", dashDecryptChannel(keyA)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.manager.StopAll)
+	for name, body := range map[string]map[string]any{
+		"key_mode":    {"mpd_url": "http://127.0.0.1:1/m.mpd", "key_mode": "passthrough"},
+		"source_type": {"mpd_url": "http://127.0.0.1:1/m.m3u8", "source_type": "hls"},
+	} {
+		w := adminExec(admin, http.MethodPut, "/admin/api/channels/d", body, map[string]string{"channelID": "d"})
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), recreateHint) {
+			t.Errorf("%s edit: got %d %s, want 400 containing %q", name, w.Code, w.Body.String(), recreateHint)
+		}
+	}
+}
+
 func TestAdminAddKeys(t *testing.T) {
 	type want struct {
 		code int

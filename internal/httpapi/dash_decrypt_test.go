@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -52,11 +53,16 @@ var cencReps = []cencRep{
 
 // cencOrigin serves the fixtures of one variant as a DASH origin. Its MPD is
 // the variant's manifest.mpd with the representation IDs shortened and with
-// edit applied; edit can change between requests.
+// edit applied; edit can change between requests. A path stored in extra
+// ("rep/file") is served from there instead. Requests are counted by path
+// (requests), and a path hold names is answered only once it is released.
 type cencOrigin struct {
 	srv     *httptest.Server
 	variant string
 	edit    atomic.Pointer[func(string) string]
+	extra   sync.Map
+	hits    sync.Map // path → *atomic.Int32
+	holds   sync.Map // path → chan struct{}
 }
 
 func startCENCOrigin(t *testing.T, variant string, edit func(string) string) *cencOrigin {
@@ -81,6 +87,16 @@ func startCENCOrigin(t *testing.T, variant string, edit func(string) string) *ce
 		fmt.Fprint(w, mpd)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		n, _ := o.hits.LoadOrStore(path, new(atomic.Int32))
+		n.(*atomic.Int32).Add(1)
+		if c, ok := o.holds.Load(path); ok {
+			<-c.(chan struct{})
+		}
+		if b, ok := o.extra.Load(path); ok {
+			w.Write(b.([]byte))
+			return
+		}
 		repID, file, ok := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
 		for _, rep := range cencReps {
 			if ok && rep.id == repID {
@@ -96,6 +112,26 @@ func startCENCOrigin(t *testing.T, variant string, edit func(string) string) *ce
 }
 
 func (o *cencOrigin) setEdit(edit func(string) string) { o.edit.Store(&edit) }
+
+// requests counts the requests for path ("rep/file") so far.
+func (o *cencOrigin) requests(path string) int {
+	if n, ok := o.hits.Load(path); ok {
+		return int(n.(*atomic.Int32).Load())
+	}
+	return 0
+}
+
+// hold keeps requests for path waiting until the returned function is
+// called, which the test's cleanup also does before the origin closes.
+func (o *cencOrigin) hold(t *testing.T, path string) (release func()) {
+	t.Helper()
+	c := make(chan struct{})
+	o.holds.Store(path, c)
+	var once sync.Once
+	release = func() { once.Do(func() { close(c) }) }
+	t.Cleanup(release)
+	return release
+}
 
 func (o *cencOrigin) fixture(t *testing.T, variant string, rep cencRep, file string) []byte {
 	t.Helper()
@@ -148,14 +184,10 @@ func newCENCChannel(t *testing.T, o *cencOrigin, dataDir string, keys ...string)
 
 func waitVOD(t *testing.T, mgr *ch.Manager) {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
-	for time.Now().Before(deadline) {
-		if rt := mgr.Get("c"); rt != nil && rt.Mode() == ch.ModeVOD {
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatalf("channel never reached VOD")
+	waitFor(t, "the channel to reach VOD", func() bool {
+		rt := mgr.Get("c")
+		return rt != nil && rt.Mode() == ch.ModeVOD
+	})
 }
 
 func segmentURL(rep cencRep, n int) string {

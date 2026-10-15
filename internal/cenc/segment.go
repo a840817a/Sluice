@@ -1,6 +1,7 @@
 package cenc
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"fmt"
@@ -8,37 +9,62 @@ import (
 )
 
 // Retyped boxes become free boxes of the same size, so nothing after them
-// moves. See ADR 0010.
+// moves. See ADR-0010.
 const freeType = "free"
 
 type subsample struct {
 	clear, protected int
 }
 
-// sample is one encrypted sample: where its bytes are and how to decrypt them.
+// sample is one sample of a protected track: where its bytes are and how to
+// decrypt them.
 type sample struct {
 	off, size int
 	iv        []byte
 	subs      []subsample // nil: the whole sample is protected
+	prot      protection
+}
+
+// protection is how one sample is encrypted: tenc's defaults, or those of
+// the seig entry it is mapped to.
+type protection struct {
+	protected   bool
+	ivSize      int
+	constantIV  []byte
+	kid         KID
+	crypt, skip int
+}
+
+func (tp TrackProtection) protection() protection {
+	return protection{protected: tp.IsProtected, ivSize: int(tp.PerSampleIVSize), constantIV: tp.ConstantIV,
+		kid: tp.KID, crypt: int(tp.CryptBlocks), skip: int(tp.SkipBlocks)}
+}
+
+func (e *SeigEntry) protection() protection {
+	return protection{protected: e.IsProtected, ivSize: int(e.PerSampleIVSize), constantIV: e.ConstantIV,
+		kid: e.KID, crypt: int(e.CryptBlocks), skip: int(e.SkipBlocks)}
 }
 
 // trafJob is what decrypting one track fragment takes. It is built in full
 // before any byte changes, so a malformed segment is never half-decrypted.
 type trafJob struct {
-	samples []sample
-	retype  []int // offsets of box headers whose type becomes free
-	decrypt bool
+	samples []sample // only the protected ones
+	retype  []int    // offsets of box headers whose type becomes free
 }
 
 // DecryptSegment decrypts, in place, every fragment of track tp.TrackID in a
-// media segment. Sample bytes are decrypted where they lie; senc, saiz, saio
-// and pssh boxes are retyped to free. The segment's length and the size and
-// position of every box stay the same.
+// media segment, taking each sample's key from keys by the KID its seig
+// sample group or tenc gives it. Sample bytes are decrypted where they lie;
+// senc, saiz, saio, pssh and seig sgpd and sbgp boxes are retyped to free.
+// The segment's length and the size and position of every box stay the same.
 //
 // A fragment whose sample description is not one of tp.ProtectedEntries is a
-// clear lead and is left untouched. A wrong key is not detected: the samples
-// decrypt to different bytes and no error is returned.
-func DecryptSegment(seg []byte, tp TrackProtection, key [16]byte) error {
+// clear lead and is left untouched, as is a sample whose seig entry marks it
+// clear. When keys holds no key for a KID a sample needs, the error is a
+// *MissingKeyError naming every such KID. On any error the segment is left as
+// it was. A wrong key is not detected: the samples decrypt to different bytes
+// and no error is returned.
+func DecryptSegment(seg []byte, tp TrackProtection, keys KeyLookup) error {
 	top, err := boxes(seg, 0, len(seg))
 	if err != nil {
 		return err
@@ -92,21 +118,37 @@ func DecryptSegment(seg []byte, tp TrackProtection, key [16]byte) error {
 		return malformed("no track fragment for track %d", tp.TrackID)
 	}
 
-	var block cipher.Block
+	// Every key is found before any byte changes.
+	blocks := make(map[KID]cipher.Block)
+	var missing []KID
 	for _, job := range jobs {
-		if job.decrypt && block == nil {
-			if block, err = aes.NewCipher(key[:]); err != nil {
+		for _, s := range job.samples {
+			kid := s.prot.kid
+			if _, ok := blocks[kid]; ok || slices.Contains(missing, kid) {
+				continue
+			}
+			key, ok := keys(kid)
+			if !ok {
+				missing = append(missing, kid)
+				continue
+			}
+			if blocks[kid], err = aes.NewCipher(key[:]); err != nil {
 				return err
 			}
 		}
-		if job.decrypt {
-			for _, s := range job.samples {
-				buf := seg[s.off : s.off+s.size]
-				if tp.Scheme == SchemeCBCS {
-					decryptCBCS(block, s, buf, int(tp.CryptBlocks), int(tp.SkipBlocks))
-				} else {
-					decryptCENC(block, s, buf)
-				}
+	}
+	if len(missing) > 0 {
+		slices.SortFunc(missing, func(a, b KID) int { return bytes.Compare(a[:], b[:]) })
+		return &MissingKeyError{KIDs: missing}
+	}
+
+	for _, job := range jobs {
+		for _, s := range job.samples {
+			buf := seg[s.off : s.off+s.size]
+			if tp.Scheme == SchemeCBCS {
+				decryptCBCS(blocks[s.prot.kid], s, buf, s.prot.crypt, s.prot.skip)
+			} else {
+				decryptCENC(blocks[s.prot.kid], s, buf)
 			}
 		}
 		for _, off := range job.retype {
@@ -211,9 +253,6 @@ func planTraf(seg []byte, moof, traf box, first bool, prevEnd int, tp TrackProte
 		return job, 0, true, malformed("cannot locate the data of track %d", tp.TrackID)
 	}
 
-	if hasSeig(seg, kids) {
-		return job, 0, true, fmt.Errorf("%w: track %d fragment", ErrKeyRotation, tp.TrackID)
-	}
 	sdi := tp.DefaultSampleDescriptionIndex
 	if h.flags&0x2 != 0 {
 		sdi = h.sdi
@@ -225,25 +264,41 @@ func planTraf(seg []byte, moof, traf box, first bool, prevEnd int, tp TrackProte
 		return job, end, true, nil // clear lead
 	}
 
+	groups, seigBoxes, err := fragmentGroups(seg, kids, tp, len(samples))
+	if err != nil {
+		return job, 0, true, fmt.Errorf("track %d fragment: %w", tp.TrackID, err)
+	}
+	anyProtected := false
+	for i := range samples {
+		if groups[i] != nil {
+			samples[i].prot = groups[i].protection()
+		} else {
+			samples[i].prot = tp.protection()
+		}
+		anyProtected = anyProtected || samples[i].prot.protected
+	}
+	job.retype = seigBoxes
+
 	senc, piff, found := findSenc(seg, kids)
 	if !found {
-		if tp.IsProtected && len(samples) > 0 {
+		if anyProtected {
 			return job, 0, true, fmt.Errorf("%w: track %d", ErrNoSampleEncryption, tp.TrackID)
 		}
 		return job, end, true, nil
 	}
-	if err := readSenc(seg, senc, piff, tp, samples); err != nil {
+	if err := readSenc(seg, senc, piff, samples); err != nil {
 		return job, 0, true, err
 	}
 	for _, s := range samples {
-		if !inside(mdats, s.off, s.size) {
-			return job, 0, true, malformed("sample at %d (%d bytes) is outside mdat", s.off, s.size)
+		if s.prot.protected {
+			if !inside(mdats, s.off, s.size) {
+				return job, 0, true, malformed("sample at %d (%d bytes) is outside mdat", s.off, s.size)
+			}
+			job.samples = append(job.samples, s)
 		}
 	}
 
-	job.samples = samples
-	job.decrypt = tp.IsProtected
-	job.retype = []int{senc.start}
+	job.retype = append(job.retype, senc.start)
 	for _, b := range kids {
 		if b.typ == "saiz" || b.typ == "saio" {
 			job.retype = append(job.retype, b.start)
@@ -318,16 +373,18 @@ func findSenc(data []byte, kids []box) (b box, piff, ok bool) {
 }
 
 // readSenc fills each sample's IV and subsamples from a senc (or PIFF senc).
-func readSenc(data []byte, b box, piff bool, tp TrackProtection, samples []sample) error {
+// Each sample's IV is as long as its own protection says, unless a PIFF senc
+// overrides the size for all of them.
+func readSenc(data []byte, b box, piff bool, samples []sample) error {
 	_, flags, err := fullHeader(data, b)
 	if err != nil {
 		return err
 	}
 	r := newReader(data, b.body+4, b.end)
-	ivSize := int(tp.PerSampleIVSize)
+	override := -1
 	if piff && flags&0x1 != 0 {
 		r.take(3) // AlgorithmID
-		ivSize = int(r.u8())
+		override = int(r.u8())
 		r.take(16) // KID
 	}
 	count := r.u32()
@@ -339,10 +396,14 @@ func readSenc(data []byte, b box, piff bool, tp TrackProtection, samples []sampl
 	}
 	for i := range samples {
 		s := &samples[i]
+		ivSize := s.prot.ivSize
+		if override >= 0 {
+			ivSize = override
+		}
 		if ivSize > 0 {
 			s.iv = r.take(ivSize)
 		} else {
-			s.iv = tp.ConstantIV
+			s.iv = s.prot.constantIV
 		}
 		if flags&0x2 == 0 {
 			continue
@@ -365,7 +426,7 @@ func readSenc(data []byte, b box, piff bool, tp TrackProtection, samples []sampl
 		return malformed("senc truncated")
 	}
 	if r.off != r.end {
-		return malformed("senc has %d bytes left over: IV size %d does not match", r.end-r.off, ivSize)
+		return malformed("senc has %d bytes left over: IV sizes do not match", r.end-r.off)
 	}
 	return nil
 }

@@ -179,7 +179,7 @@ func (p *ingestPipeline) attachSource(id string, cfg Config, chGwCfg gocfg.Confi
 
 	// One key cache per channel, shared by decrypt-on-ingest and the key proxy,
 	// so a key is fetched from the key server at most once. Both modes persist
-	// keys to disk (ADR 0003), so playback and re-ingest survive the key server
+	// keys to disk (ADR-0003), so playback and re-ingest survive the key server
 	// going away; decrypt channels still never serve keys to players.
 	p.keys = hlskey.NewCache(nil, p.origin, hlskey.KeyStorePath(chGwCfg.Store.DataDir, id))
 	p.source = hlsSource{w: hw, keys: p.keys}

@@ -64,15 +64,15 @@ type MediaOptions struct {
 	KeyProxyBase string
 	// URLVersion is the version (gwurl.Versioned) of the representation's
 	// segment and init URLs in a period. Nil versions none.
-	URLVersion func(periodID, repID string) uint64
+	URLVersion func(periodID, asID, repID string) uint64
 }
 
-// version is o's URL version for period periodID.
-func (o MediaOptions) version(periodID string) uint64 {
+// version is o's URL version for AdaptationSet asID of period periodID.
+func (o MediaOptions) version(periodID, asID string) uint64 {
 	if o.URLVersion == nil {
 		return 0
 	}
-	return o.URLVersion(periodID, o.RepID)
+	return o.URLVersion(periodID, asID, o.RepID)
 }
 
 // playlistEntry is one segment as the playlist numbers it.
@@ -274,11 +274,11 @@ func Media(periods []index.TimelinePeriod, o MediaOptions) []byte {
 		extinf: "#EXTINF:%.6f,\n",
 		uri: func(e playlistEntry) (string, error) {
 			p := periods[e.periodIdx]
-			return gwurl.Versioned(gwurl.SegmentURL(base, o.ChannelID, p.PeriodID, o.RepID, e.seg.SegNo, segmentExt(e.seg)), o.version(p.PeriodID)), nil
+			return gwurl.Versioned(gwurl.SegmentURL(base, o.ChannelID, p.PeriodID, o.RepID, e.seg.SegNo, segmentExt(e.seg)), o.version(p.PeriodID, p.ASID)), nil
 		},
 		initURI: func(e playlistEntry) (string, error) {
 			if p := periods[e.periodIdx]; p.InitPath != "" {
-				return gwurl.Versioned(gwurl.InitURL(base, o.ChannelID, p.PeriodID, o.RepID), o.version(p.PeriodID)), nil
+				return gwurl.Versioned(gwurl.InitURL(base, o.ChannelID, p.PeriodID, o.RepID), o.version(p.PeriodID, p.ASID)), nil
 			}
 			return "", nil
 		},

@@ -52,7 +52,11 @@ type Watcher struct {
 	// saved to the representations that copy lists (periodContents), so a
 	// period's copy is rewritten only when the origin changes what it carries.
 	savedPeriods map[string]string
-	client       *http.Client
+	// runCtx is the context of the latest Run. It outlives a Run that
+	// returned for a static MPD until the channel stops admitting work, and
+	// bounds the extra passes Rediscover runs for one.
+	runCtx context.Context
+	client *http.Client
 }
 
 // SetProgress attaches the channel's progress counters. Must be called before Run.
@@ -86,6 +90,9 @@ func NewWatcher(cfg config.Config, channelID string, origin *fetch.Origin, ci *i
 // re-polls according to MinimumUpdatePeriod (dynamic) or returns after
 // the first fetch (static).
 func (w *Watcher) Run(ctx context.Context) error {
+	w.mu.Lock()
+	w.runCtx = ctx
+	w.mu.Unlock()
 	p, err := w.fetchMPD(ctx)
 	if err != nil {
 		w.prog.SetSourceError("manifest", err.Error())
@@ -148,6 +155,71 @@ func (w *Watcher) Run(ctx context.Context) error {
 				interval = newInterval
 				ticker.Reset(interval)
 			}
+		}
+	}
+}
+
+// Rediscover offers again the segments of the representations repKeys
+// name (queue.RepKey) that are not stored: they were enqueued once and
+// dropped unstored, and something has changed that may let them be stored
+// now. The broker ignores a segment that is still queued or in flight.
+//
+// For a dynamic MPD it makes the next poll enqueue every segment the origin
+// lists for them above the highest one the index tracks, as for a
+// representation seen for the first time when it tracks none. A dropped
+// segment below the highest tracked one needs nothing: every poll offers it
+// again, as long as the MPD still lists it (shouldFetchDynamicSegment).
+//
+// A static MPD is not polled again, so Rediscover enumerates the last one
+// once more for those representations, in the background, while the Run
+// that read it has not been cancelled, which the VOD transition does first.
+// A watcher whose channel has no running ingest offers nothing, and neither
+// does an empty repKeys.
+func (w *Watcher) Rediscover(repKeys []string) {
+	if len(repKeys) == 0 {
+		return
+	}
+	var presentMax map[string]uint64
+	if w.ci != nil {
+		presentMax, _ = snapshotTrackedSegments(w.channelID, w.ci)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, k := range repKeys {
+		if held := presentMax[k]; held > 0 && held < w.lastKnown[k] {
+			w.lastKnown[k] = held
+		} else if held == 0 {
+			delete(w.lastKnown, k)
+		}
+	}
+	p, ctx := w.lastMPD, w.runCtx
+	if p == nil || p.Type != imdp.PresentationStatic || ctx == nil || ctx.Err() != nil {
+		return
+	}
+	want := make(map[string]bool, len(repKeys))
+	for _, k := range repKeys {
+		want[k] = true
+	}
+	// Not counted anywhere: it only feeds this channel's broker, and stops
+	// as soon as ctx ends.
+	go w.rediscoverStatic(ctx, p, want)
+}
+
+// rediscoverStatic pushes the segments of static MPD p for the
+// representations want names that are not on disk.
+func (w *Watcher) rediscoverStatic(ctx context.Context, p *imdp.ParsedMPD, want map[string]bool) {
+	tasks, _ := w.discoverTasks(ctx, p, nil, nil, nil)
+	for _, t := range tasks {
+		if !want[t.RepKey()] {
+			continue
+		}
+		loc := store.RepLocation{DataDir: w.cfg.Store.DataDir, ChannelID: w.channelID,
+			PeriodID: t.PeriodID, MediaType: t.MediaType, ASID: t.ASID, RepID: t.RepID}
+		if store.SegmentOnDisk(loc.Dir(), t.SegNo) {
+			continue
+		}
+		if !w.broker.PushPreserving(ctx, t) {
+			return
 		}
 	}
 }
@@ -226,17 +298,7 @@ func (w *Watcher) processMPD(ctx context.Context, p *imdp.ParsedMPD) {
 	w.mu.Unlock()
 	w.savePeriodMPDs(toSave, raw)
 
-	// Prefer MPD-level BaseURL over computed directory URL.
-	baseURL := mpdDirURL(w.cfg.Upstream.MPDURL)
-	if p.BaseURL != "" {
-		baseURL = resolveBaseURL(baseURL, p.BaseURL)
-	}
-
-	// Collect tasks from SegmentTemplate and SegmentList representations.
-	tasks, truncated := DiscoverTasks(p, baseURL, w.channelID, snapshot, presentMax, knownSegs)
-
-	// Collect tasks from SegmentBase representations (requires sidx fetch).
-	tasks = append(tasks, w.discoverSegmentBaseTasks(ctx, p, baseURL, snapshot, presentMax, knownSegs)...)
+	tasks, truncated := w.discoverTasks(ctx, p, snapshot, presentMax, knownSegs)
 
 	// A static MPD names its whole asset in one pass, and static discovery does
 	// not filter out what is already on disk, so the task count here is the
@@ -250,20 +312,8 @@ func (w *Watcher) processMPD(ctx context.Context, p *imdp.ParsedMPD) {
 		}
 	}
 
-	// Feed the broker in presentation order rather than one representation at a
-	// time. Discovery walks period → AdaptationSet → Representation, so its
-	// natural output is every segment of the first representation, then the
-	// next — and while the whole asset fits in the queue that does not matter,
-	// because the broker is a priority queue and pops by segment number anyway.
-	//
-	// A bounded queue removes that safety net: what has not been pushed cannot
-	// be chosen, so a representation-at-a-time feed leaves the queue holding
-	// only the first representation while the rest of the asset waits. Audio,
-	// discovered last, would not start until the video was nearly done — and
-	// with no audio to align against, the A/V barrier publishes nothing, so an
-	// ingest that is visibly progressing stays unplayable until the end.
-	sort.SliceStable(tasks, func(i, j int) bool { return tasks[i].Priority < tasks[j].Priority })
-
+	// Fed in presentation order, as discoverTasks returns them, so a bounded
+	// queue holds every representation's next segments.
 	for _, t := range tasks {
 		if p.Type == imdp.PresentationStatic {
 			if !w.broker.PushPreserving(ctx, t) {
@@ -285,6 +335,41 @@ func (w *Watcher) processMPD(ctx context.Context, p *imdp.ParsedMPD) {
 	for _, period := range p.Periods {
 		w.ci.Period(period.ID)
 	}
+}
+
+// discoverTasks returns the segment tasks p lists, of every addressing
+// scheme, in presentation order (lowest Priority first), and whether
+// DiscoverTasks truncated them. The arguments after p filter a dynamic MPD's
+// segments as DiscoverTasks describes.
+func (w *Watcher) discoverTasks(ctx context.Context, p *imdp.ParsedMPD, lastKnown, presentMax map[string]uint64, knownSegs map[string]map[uint64]struct{}) ([]*queue.SegmentTask, bool) {
+	// Prefer MPD-level BaseURL over computed directory URL.
+	baseURL := mpdDirURL(w.cfg.Upstream.MPDURL)
+	if p.BaseURL != "" {
+		baseURL = resolveBaseURL(baseURL, p.BaseURL)
+	}
+
+	// Collect tasks from SegmentTemplate and SegmentList representations.
+	tasks, truncated := DiscoverTasks(p, baseURL, w.channelID, lastKnown, presentMax, knownSegs)
+
+	// Collect tasks from SegmentBase representations (requires sidx fetch).
+	tasks = append(tasks, w.discoverSegmentBaseTasks(ctx, p, baseURL, lastKnown, presentMax, knownSegs)...)
+
+	// The broker is fed in presentation order rather than one representation
+	// at a time. Discovery walks period → AdaptationSet → Representation, so
+	// its natural output is every segment of the first representation, then
+	// the next — and while the whole asset fits in the queue that does not
+	// matter, because the broker is a priority queue and pops by segment
+	// number anyway.
+	//
+	// A bounded queue removes that safety net: what has not been pushed
+	// cannot be chosen, so a representation-at-a-time feed leaves the queue
+	// holding only the first representation while the rest of the asset
+	// waits. Audio, discovered last, would not start until the video was
+	// nearly done — and with no audio to align against, the A/V barrier
+	// publishes nothing, so an ingest that is visibly progressing stays
+	// unplayable until the end.
+	sort.SliceStable(tasks, func(i, j int) bool { return tasks[i].Priority < tasks[j].Priority })
+	return tasks, truncated
 }
 
 // adoptPeriods renames p's periods to the gateway periods their segments go

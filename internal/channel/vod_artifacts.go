@@ -96,9 +96,10 @@ func (v vodAsset) capture(rt *Runtime, candidate *index.ChannelIndex) (vodArtifa
 	snapshot := candidate.Snapshot()
 	originMPD, periodWarnings := vodOriginMPD(sv.ParsedMPD, snapshot, v.dataDir, rt.ID)
 	// A period put back from its saved origin MPD still carries the
-	// ContentProtection of AdaptationSets this channel decrypted.
+	// ContentProtection of AdaptationSets this channel decrypted, and the
+	// representations it refused.
 	if rt.decrypt != nil {
-		originMPD = stripDecryptedCP(originMPD, rt.decrypt.IsDecrypted)
+		originMPD = stripDecrypted(originMPD, rt.decrypt)
 	}
 	if originMPD != sv.ParsedMPD {
 		sv.ParsedMPD = originMPD

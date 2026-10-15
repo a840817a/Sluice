@@ -39,8 +39,7 @@ func (c Config) ValidateUpdate() error {
 // together: keys belong to DASH channels in decrypt mode, which need at least
 // one, and each KID may appear once.
 func (c Config) validateContentKeys() error {
-	dashDecrypt := c.canonicalSourceType() == SourceDASH && c.canonicalKeyMode() == KeyModeDecrypt
-	if !dashDecrypt {
+	if !c.IsDASHDecrypt() {
 		if len(c.ContentKeys) > 0 {
 			return errors.New("content_keys are only allowed for a dash source with key_mode decrypt")
 		}

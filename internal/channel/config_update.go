@@ -18,7 +18,8 @@ var (
 	ErrInvalidChannelID = errors.New("channel id must match [a-zA-Z0-9_-]{1,64}")
 	// ErrKeyModeImmutable: an edit asked for a key_mode other than the one the
 	// channel was created with.
-	ErrKeyModeImmutable = errors.New("key_mode cannot be changed after the channel is created")
+	ErrKeyModeImmutable = errors.New("key_mode cannot be changed after the channel is created; " +
+		"to use another key_mode, delete the channel and create it again")
 	// ErrInvalidConfig: an edit would leave the channel's stored settings
 	// inconsistent.
 	ErrInvalidConfig = errors.New("invalid channel configuration")
@@ -147,7 +148,9 @@ func (m *Manager) UpdateConfig(ctx context.Context, id string, requested Config)
 	// What would be stored must still be consistent: a source_type edit can
 	// strand content keys on a channel that no longer takes them.
 	if err := mergedOperatorConfig(requested, stored, false).validateContentKeys(); err != nil {
-		return UpdateResult{}, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
+		return UpdateResult{}, fmt.Errorf("%w: key_mode and content_keys are fixed when the channel is created, "+
+			"so to change the source type of a channel in decrypt mode, delete the channel and create it again (%w)",
+			ErrInvalidConfig, err)
 	}
 
 	m.mu.RLock()

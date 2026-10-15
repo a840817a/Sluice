@@ -71,15 +71,15 @@ func TestParsedMPDStripsDecryptedContentProtection(t *testing.T) {
 		t.Fatal("fixture AdaptationSets carry no ContentProtection; this test proves nothing")
 	}
 
-	if got := rt.withoutDecryptedCP(p); got != p {
+	if got := rt.decryptView(p); got != p {
 		t.Error("nothing decrypted, yet the MPD was copied")
 	}
-	if presentation.TracksFromMPD(rt.withoutDecryptedCP(p)).ServesHLS {
+	if presentation.TracksFromMPD(rt.decryptView(p)).ServesHLS {
 		t.Error("HLS served before anything was decrypted")
 	}
 
 	decryptAS(t, reg, "0", "video", "../../testdata/cenc/cenc/video/avc1/init.mp4")
-	got := rt.withoutDecryptedCP(p)
+	got := rt.decryptView(p)
 	if got == p {
 		t.Fatal("the cached view survived a generation change")
 	}
@@ -92,7 +92,7 @@ func TestParsedMPDStripsDecryptedContentProtection(t *testing.T) {
 	if cpCount(video) == 0 {
 		t.Error("the source MPD was modified")
 	}
-	if rt.withoutDecryptedCP(p) != got {
+	if rt.decryptView(p) != got {
 		t.Error("an unchanged generation rebuilt the view")
 	}
 	if presentation.TracksFromMPD(got).ServesHLS {
@@ -100,7 +100,7 @@ func TestParsedMPDStripsDecryptedContentProtection(t *testing.T) {
 	}
 
 	decryptAS(t, reg, "1", "audio", "../../testdata/cenc/cenc/audio/und/mp4a.40.2/init.mp4")
-	all := rt.withoutDecryptedCP(p)
+	all := rt.decryptView(p)
 	if n := cpCount(all.Periods[0].AdaptationSets[1]); n != 0 {
 		t.Errorf("decrypted audio AdaptationSet still has %d ContentProtection entries", n)
 	}
@@ -112,10 +112,60 @@ func TestParsedMPDStripsDecryptedContentProtection(t *testing.T) {
 	}
 }
 
+// fakeDecryptState decrypts the AdaptationSets in decrypted and refuses the
+// representations in refused ("asID/repID").
+type fakeDecryptState struct {
+	decrypted map[string]bool
+	refused   map[string]bool
+}
+
+func (f fakeDecryptState) IsDecrypted(as dashdecrypt.ASKey) bool { return f.decrypted[as.ASID] }
+func (f fakeDecryptState) IsRefused(as dashdecrypt.ASKey, repID string) bool {
+	return f.refused[as.ASID+"/"+repID]
+}
+
+// The served view leaves out a refused representation, so neither the
+// manifest nor the HLS track list offers it, and an AdaptationSet whose
+// every representation is refused, and leaves the source MPD alone.
+func TestStripDecryptedLeavesOutRefusedRepresentations(t *testing.T) {
+	p := parseFixtureMPD(t)
+	video := p.Periods[0].AdaptationSets[0]
+	joined := *video.Representations[0]
+	joined.ID = "w"
+	video.Representations = append(video.Representations, &joined)
+	both := fakeDecryptState{decrypted: map[string]bool{"0": true, "1": true}}
+
+	both.refused = map[string]bool{"0/w": true}
+	got := stripDecrypted(p, both)
+	reps := got.Periods[0].AdaptationSets[0].Representations
+	if len(reps) != 1 || reps[0].ID != video.Representations[0].ID {
+		t.Errorf("video representations = %d, want the original one only", len(reps))
+	}
+	if len(video.Representations) != 2 {
+		t.Error("the source MPD lost a representation")
+	}
+	tracks := presentation.TracksFromMPD(got)
+	if !tracks.ServesHLS || len(tracks.Variants) != 1 || tracks.Variants[0].RepID == "w" {
+		t.Errorf("HLS variants = %+v, want the original video only", tracks.Variants)
+	}
+
+	both.refused = map[string]bool{"0/w": true, "0/" + video.Representations[0].ID: true}
+	got = stripDecrypted(p, both)
+	if as := got.Periods[0].AdaptationSets; len(as) != 1 || as[0].ID != "1" {
+		t.Errorf("AdaptationSets with every video representation refused = %d, want the audio one only", len(as))
+	}
+
+	// A refusal recorded for an AdaptationSet not decrypted (which the
+	// registry never reports) changes nothing.
+	if got := stripDecrypted(p, fakeDecryptState{refused: map[string]bool{"0/w": true}}); got != p {
+		t.Error("an MPD with nothing decrypted was copied")
+	}
+}
+
 // A channel without a registry gets the MPD as it is.
 func TestParsedMPDUnchangedWithoutRegistry(t *testing.T) {
 	p := parseFixtureMPD(t)
-	if got := (&Runtime{}).withoutDecryptedCP(p); got != p {
+	if got := (&Runtime{}).decryptView(p); got != p {
 		t.Error("a passthrough channel's MPD was copied")
 	}
 }

@@ -56,6 +56,10 @@ func compareSegments(a, b SegmentState) int {
 // sorted by segment number and owned by the caller.
 type TimelinePeriod struct {
 	PeriodID string
+	// ASID is the AdaptationSet the period's segments come from. When two
+	// AdaptationSets of the period carry the representation, whose playlist
+	// URLs omit the AdaptationSet, it is the lowest ASID.
+	ASID string
 	// Segments are the period's published segments still in the window,
 	// possibly none.
 	Segments []SegmentState
@@ -96,6 +100,9 @@ func (ci *ChannelIndex) Timeline(repID string, docOrder []string) []TimelinePeri
 			p = &TimelinePeriod{PeriodID: ref.PeriodID}
 			byPeriod[ref.PeriodID] = p
 			ids = append(ids, ref.PeriodID)
+		}
+		if p.ASID == "" || ref.ASID < p.ASID {
+			p.ASID = ref.ASID
 		}
 		// The same representation ID in two AdaptationSets of one period is
 		// one track to a playlist, whose URLs omit the AdaptationSet: merge.

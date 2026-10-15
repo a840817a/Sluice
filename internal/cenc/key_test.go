@@ -18,6 +18,22 @@ func assertNoKey(t *testing.T, s string, key [16]byte) {
 	}
 }
 
+func TestKeyFormatRoundTrip(t *testing.T) {
+	k := Key{}
+	for i := range k.KID {
+		k.KID[i] = byte(0xA0 + i)
+		k.Value[i] = byte(0x10 * (i % 16))
+	}
+	s := k.Format()
+	if s != strings.ToLower(s) {
+		t.Errorf("Format = %q, want lower case", s)
+	}
+	got, err := ParseKey(s)
+	if err != nil || got != k {
+		t.Errorf("ParseKey(Format()) = %v, %v; want %v", got, err, k)
+	}
+}
+
 func TestParseKey(t *testing.T) {
 	const kid = "0123456789abcdef0123456789abcdef"
 	const val = "fedcba9876543210fedcba9876543210"

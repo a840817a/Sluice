@@ -11,15 +11,21 @@ import (
 )
 
 // initialization belongs to one stored period/representation. A failed attempt
-// is terminal for its batch. Later live work may renew it under a later deadline.
+// is terminal for its batch. Later live work may renew it under a later
+// deadline, and any work may once keys were added after it started.
 type initialization struct {
 	done     bool
 	err      error
 	deadline time.Time
+	// keyEpoch is the gate's keyEpoch when the attempt started.
+	keyEpoch uint64
 }
 
-func (s *initialization) canRenew(task *queue.SegmentTask, now time.Time) bool {
-	return s.done && s.err != nil && !task.ExpiredAt(now) && !task.Deadline.IsZero() && task.Deadline.After(s.deadline)
+func (s *initialization) canRenew(task *queue.SegmentTask, now time.Time, keyEpoch uint64) bool {
+	if !s.done || s.err == nil || task.ExpiredAt(now) {
+		return false
+	}
+	return keyEpoch != s.keyEpoch || (!task.Deadline.IsZero() && task.Deadline.After(s.deadline))
 }
 
 type initCompletion struct {
@@ -36,8 +42,10 @@ type initCompletion struct {
 // media workers or their result channel.
 //
 // One init preparation runs per init path at a time. A failure is final for
-// the media waiting on it, unless later live media carries a later deadline:
-// then preparation starts again for the media that can still use it.
+// the media waiting on it, unless later live media carries a later deadline,
+// or keys were added since the failed preparation started (an init refused
+// for want of a key): then preparation starts again for the media that can
+// still use it.
 //
 // The gate settles every result it reads: after deliver or abandon, and for
 // whatever still waits when run returns.
@@ -59,6 +67,8 @@ type initGate struct {
 	tick <-chan time.Time
 	// exclusive delivers work to run between deliveries (Processor.Exclusive).
 	exclusive <-chan exclusiveWork
+	// keyEpoch changes each time content keys are added; nil means never.
+	keyEpoch func() uint64
 }
 
 // exclusiveWork is a function to run on the gate's goroutine, and where its
@@ -86,6 +96,12 @@ func (g *initGate) run(ctx context.Context, results <-chan fetch.Result) {
 		}
 	}()
 
+	epoch := func() uint64 {
+		if g.keyEpoch == nil {
+			return 0
+		}
+		return g.keyEpoch()
+	}
 	finish := func(res fetch.Result, err error) {
 		if res.Task.ExpiredAt(g.now()) {
 			err = errors.New("media deadline expired while waiting for init")
@@ -102,7 +118,7 @@ func (g *initGate) run(ctx context.Context, results <-chan fetch.Result) {
 		kept := pending[:0]
 		for _, res := range pending {
 			state := states[g.initPath(res.Task)]
-			if (state.done && !state.canRenew(res.Task, now)) || res.Task.ExpiredAt(now) {
+			if (state.done && !state.canRenew(res.Task, now, epoch())) || res.Task.ExpiredAt(now) {
 				finish(res, state.err)
 			} else {
 				kept = append(kept, res)
@@ -113,7 +129,7 @@ func (g *initGate) run(ctx context.Context, results <-chan fetch.Result) {
 	}
 
 	startInit := func(path string, source *queue.SegmentTask) *initialization {
-		state := &initialization{deadline: source.Deadline}
+		state := &initialization{deadline: source.Deadline, keyEpoch: epoch()}
 		states[path] = state
 		// The task may later be requeued/mutated. Init owns a copy.
 		task := *source
@@ -147,10 +163,10 @@ func (g *initGate) run(ctx context.Context, results <-chan fetch.Result) {
 			flush()
 			// Preserve fetched media with later live deadlines. Use the latest
 			// pending deadline so a failed batch cannot restart once per segment.
-			now := g.now()
+			now, ep := g.now(), epoch()
 			var next *queue.SegmentTask
 			for _, res := range pending {
-				if g.initPath(res.Task) == result.path && state.canRenew(res.Task, now) && (next == nil || res.Task.Deadline.After(next.Deadline)) {
+				if g.initPath(res.Task) == result.path && state.canRenew(res.Task, now, ep) && (next == nil || res.Task.Deadline.After(next.Deadline)) {
 					next = res.Task
 				}
 			}
@@ -176,7 +192,7 @@ func (g *initGate) run(ctx context.Context, results <-chan fetch.Result) {
 			}
 			path := g.initPath(res.Task)
 			state := states[path]
-			if state == nil || state.canRenew(res.Task, g.now()) {
+			if state == nil || state.canRenew(res.Task, g.now(), epoch()) {
 				state = startInit(path, res.Task)
 			}
 			if state.done {

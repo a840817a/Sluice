@@ -4,11 +4,11 @@ package channel
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 
 	"github.com/a840817a/sluice/internal/cenc"
+	"github.com/a840817a/sluice/internal/queue"
 )
 
 var (
@@ -33,7 +33,7 @@ func (m *Manager) AddContentKeys(ctx context.Context, id string, keys []string) 
 	if !ok {
 		return nil, ErrChannelNotFound
 	}
-	if cfg.canonicalSourceType() != SourceDASH || cfg.canonicalKeyMode() != KeyModeDecrypt {
+	if !cfg.IsDASHDecrypt() {
 		return nil, ErrKeysNotApplicable
 	}
 	if len(keys) == 0 {
@@ -67,7 +67,7 @@ func (m *Manager) AddContentKeys(ctx context.Context, id string, keys []string) 
 			}
 		}
 		for _, k := range parsed {
-			c.ContentKeys = append(c.ContentKeys, k.KID.String()+":"+hex.EncodeToString(k.Value[:]))
+			c.ContentKeys = append(c.ContentKeys, k.Format())
 		}
 	})
 	if err != nil {
@@ -92,8 +92,27 @@ func (m *Manager) AddContentKeys(ctx context.Context, id string, keys []string) 
 // configuration. AdaptationSets decided from now on can use them, and the
 // channel's conversion goroutine converts those already stored encrypted
 // that the keys complete (runConversions).
+//
+// A representation whose init was refused, or whose segments were dropped
+// because their samples rotated to a KID, for want of one of these keys is
+// tried again (Registry.Retriable): the watcher offers its segments anew
+// (Watcher.Rediscover), and the processor prepares its init again for any of
+// them because keys were added since it failed (Registry.KeyEpoch). A live
+// origin's next poll does so; a static one is enumerated once more while the
+// channel still ingests. A channel that fetches nothing more, a stalled live
+// one or a VOD, tries them again only when ingest runs again: a restart
+// before the VOD transition, or a restore to live after it.
 func (rt *Runtime) onKeysAdded(keys []cenc.Key) {
-	if rt.decrypt != nil {
-		rt.decrypt.AddKeys(keys)
+	if rt.decrypt == nil {
+		return
 	}
+	added := rt.decrypt.AddKeys(keys)
+	if rt.watcher == nil {
+		return
+	}
+	var reps []string
+	for _, r := range rt.decrypt.Retriable(added) {
+		reps = append(reps, queue.RepKey(rt.ID, r.AS.PeriodID, r.AS.ASID, r.RepID))
+	}
+	rt.watcher.Rediscover(reps)
 }

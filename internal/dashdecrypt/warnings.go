@@ -1,6 +1,7 @@
 package dashdecrypt
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"slices"
@@ -12,20 +13,26 @@ import (
 // Warning kinds.
 const (
 	// KindMissingKey: an AdaptationSet stays encrypted because the channel
-	// holds no key for one of its KIDs, which the warning lists.
+	// holds no key for one of its KIDs, which the warning lists; or, in a
+	// decrypted AdaptationSet, a representation is refused or segments whose
+	// samples rotate to one of those KIDs are withheld until its key is added.
 	KindMissingKey = "missing_key"
 	// KindUnsupportedScheme: an AdaptationSet stays encrypted because a
 	// representation uses a scheme or feature internal/cenc does not decrypt
-	// (cens, cbc1, key rotation, several encrypted tracks in one init).
+	// (cens, cbc1, a malformed seig sample group, several encrypted tracks in
+	// one init).
 	KindUnsupportedScheme = "unsupported_scheme"
 	// KindMalformed: an init or segment could not be read, so the
 	// AdaptationSet stays encrypted or a segment was dropped.
 	KindMalformed = "malformed"
-	// KindKeyUnmatched: a key whose KID none of the channel's inits uses.
-	// Reported only once the channel has read an init.
+	// KindKeyUnmatched: a key whose KID no init or decrypted segment of the
+	// channel has used so far. A key used only by the seig sample groups of
+	// later segments is listed until one of them decrypts with it. Reported
+	// only once the channel has read an init.
 	KindKeyUnmatched = "key_unmatched"
-	// KindConversionFailed: converting a stored AdaptationSet to clear
-	// failed. Reserved for retroactive conversion.
+	// KindConversionFailed: converting an AdaptationSet stored as ciphertext
+	// to clear, once keys were added, failed or was refused, so it stays
+	// encrypted until keys are added again.
 	KindConversionFailed = "conversion_failed"
 	// KindHLSClosed: the channel is not served as HLS because an
 	// AdaptationSet still carries ContentProtection.
@@ -66,7 +73,7 @@ func (r *Registry) Warnings() []Warning {
 		if len(unmatched) > 0 {
 			slices.Sort(unmatched)
 			out = append(out, Warning{Kind: KindKeyUnmatched, KIDs: unmatched,
-				Message: "no init segment of this channel uses these keys"})
+				Message: "no init or segment seen so far uses these keys"})
 		}
 	}
 	return out
@@ -85,6 +92,8 @@ type decision struct {
 	reps map[string]cenc.TrackProtection
 	// warning, when set, says why the AdaptationSet cannot be decrypted.
 	warning *Warning
+	// missing lists the KIDs of a missing_key warning.
+	missing []cenc.KID
 	// kids lists every KID the inits carry.
 	kids []cenc.KID
 }
@@ -92,17 +101,17 @@ type decision struct {
 // decide works out whether an AdaptationSet whose representations have
 // inits can be decrypted with keys: every encrypted representation has one
 // encrypted track, in a scheme internal/cenc decrypts, with a key held for
-// its KID.
+// each KID its init names (tenc's and those of its seig sample groups).
 func decide(inits []repInit, keys cenc.KeySet) decision {
 	d := decision{reps: make(map[string]cenc.TrackProtection)}
-	var missing []string
+	var missing []cenc.KID
 	var fail *Warning
 	for _, in := range inits {
 		tps, err := cenc.ReadInitProtection(in.data)
 		if err != nil {
 			if fail == nil {
 				kind := KindMalformed
-				if errors.Is(err, cenc.ErrUnsupportedScheme) || errors.Is(err, cenc.ErrKeyRotation) {
+				if errors.Is(err, cenc.ErrUnsupportedScheme) {
 					kind = KindUnsupportedScheme
 				}
 				fail = &Warning{Kind: kind, Message: fmt.Sprintf("representation %s: %v", in.repID, err)}
@@ -110,8 +119,10 @@ func decide(inits []repInit, keys cenc.KeySet) decision {
 			continue
 		}
 		for _, tp := range tps {
-			if !slices.Contains(d.kids, tp.KID) {
-				d.kids = append(d.kids, tp.KID)
+			for _, kid := range tp.KIDs() {
+				if !slices.Contains(d.kids, kid) {
+					d.kids = append(d.kids, kid)
+				}
 			}
 		}
 		switch len(tps) {
@@ -127,20 +138,49 @@ func decide(inits []repInit, keys cenc.KeySet) decision {
 		}
 		tp := tps[0]
 		d.reps[in.repID] = tp
-		if _, ok := keys[tp.KID]; !ok && !slices.Contains(missing, tp.KID.String()) {
-			missing = append(missing, tp.KID.String())
+		for _, kid := range tp.KIDs() {
+			if _, ok := keys[kid]; !ok && !slices.Contains(missing, kid) {
+				missing = append(missing, kid)
+			}
 		}
 	}
 	switch {
 	case fail != nil:
 		d.warning = fail
 	case len(missing) > 0:
-		slices.Sort(missing)
-		d.warning = &Warning{Kind: KindMissingKey, KIDs: missing,
-			Message: "no content key held for these KIDs"}
+		slices.SortFunc(missing, func(a, b cenc.KID) int { return bytes.Compare(a[:], b[:]) })
+		d.missing = missing
+		w := missingKeyWarning(missing, nil, nil)
+		d.warning = &w
 	}
 	if d.warning != nil {
 		d.reps = nil
 	}
 	return d
+}
+
+// missingKeyWarning is the missing_key warning for kids, which have no key
+// held, whatever lacks them: an AdaptationSet stored as ciphertext, or a
+// decrypted one whose representations refused names, and whose segments
+// from representations withheld names, need them.
+func missingKeyWarning(kids []cenc.KID, refused, withheld []string) Warning {
+	kids = slices.Clone(kids)
+	slices.SortFunc(kids, func(a, b cenc.KID) int { return bytes.Compare(a[:], b[:]) })
+	msg := "no content key held for these KIDs"
+	if len(refused) > 0 {
+		msg += "; representations refused: " + strings.Join(slices.Sorted(slices.Values(refused)), ", ")
+	}
+	if len(withheld) > 0 {
+		msg += "; segments that use them withheld from representations: " + strings.Join(slices.Sorted(slices.Values(withheld)), ", ")
+	}
+	return Warning{Kind: KindMissingKey, KIDs: kidStrings(kids), Message: msg}
+}
+
+// kidStrings returns kids in hex, as a Warning lists them.
+func kidStrings(kids []cenc.KID) []string {
+	out := make([]string, len(kids))
+	for i, k := range kids {
+		out[i] = k.String()
+	}
+	return out
 }

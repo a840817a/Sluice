@@ -3,8 +3,8 @@
 // It handles the cenc (AES-CTR) and cbcs (AES-CBC with a pattern) schemes. An
 // init segment is rewritten into a clear one; a media segment is decrypted in
 // place without changing its size or the offset of any box, so trun data
-// offsets, sidx entries and byte ranges into the file all stay valid. See ADR
-// 0010.
+// offsets, sidx entries and byte ranges into the file all stay valid. See
+// ADR-0010.
 //
 // The package does no I/O and never logs. Content keys never appear in an
 // error string or in the formatted form of a Key.
@@ -65,6 +65,13 @@ func ParseKey(s string) (Key, error) {
 		return Key{}, fmt.Errorf("content key value: %w", err)
 	}
 	return Key{KID: kid, Value: val}, nil
+}
+
+// Format returns the key as "kid:key", 32 lowercase hex digits each: the
+// inverse of ParseKey. The result contains the key itself; it must never be
+// logged or put in an error or API response.
+func (k Key) Format() string {
+	return k.KID.String() + ":" + hex.EncodeToString(k.Value[:])
 }
 
 func parseHex16(s string) ([16]byte, error) {

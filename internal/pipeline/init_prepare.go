@@ -178,7 +178,7 @@ func (pr *initPreparer) prepareOnce(ctx context.Context, task *queue.SegmentTask
 // AdaptationSet cannot swap its directory between the decision and the write.
 func (pr *initPreparer) finishInit(ctx context.Context, task *queue.SegmentTask, path string, data []byte) (uint32, error) {
 	if pr.decrypt != nil {
-		defer pr.decrypt.HoldInit(dashdecrypt.ASKey{PeriodID: task.PeriodID, ASID: task.ASID})()
+		defer pr.decrypt.HoldInit(dashdecrypt.ASKeyOf(task))()
 		var err error
 		data, err = pr.decrypt.PrepareInit(ctx, task, data, pr.asHeld(task), pr.fetchSibling(task))
 		if err != nil {

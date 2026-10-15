@@ -12,7 +12,7 @@ const deferred = () => {
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 };
-function formsHarness() {
+function formsHarness({ FormData } = {}) {
   const nodes = new Map(), calls = [], messages = [];
   function node(id) {
     if (!nodes.has(id)) {
@@ -32,7 +32,7 @@ function formsHarness() {
   function request(...args) { const d = deferred(); calls.push({ ...d, args }); return d.promise; }
   const ctx = vm.createContext({
     document: { getElementById: node },
-    FormData: class { entries() { return [['title', 'draft']]; } },
+    FormData: FormData || class { entries() { return [['title', 'draft']]; } },
     api: { createChannel: request, updateChannel: request, addKeys: request }, configFor: () => ({}),
   });
   vm.runInContext(source('forms'), ctx);
@@ -40,7 +40,7 @@ function formsHarness() {
   vm.runInContext('mountFields = () => {}; bindVisibility = () => {};', ctx);
   ctx.configure({ message: (...args) => messages.push(args), changed() {} });
   ctx.initAddForm(); ctx.initEditModal();
-  return { ctx, node, calls, messages, submit: id => node(id).listeners.submit({ preventDefault() {} }) };
+  return { ctx, node, nodes, calls, messages, submit: id => node(id).listeners.submit({ preventDefault() {} }) };
 }
 
 test('add submission is single-flight and can retry after failure', async () => {
@@ -144,6 +144,72 @@ test('field visibility follows source type and key mode', () => {
   assert.equal(show('dash', 'passthrough').drm, true);
 });
 
+// licenceHarness submits the add or edit form with every DRM field filled
+// in and one licence header row, and returns the request body.
+function licenceHarness() {
+  const drm = ['enable_playready', 'playready_license_url', 'enable_widevine', 'widevine_license_url', 'forward_client_ip'];
+  const h = formsHarness({
+    // As a browser's: every enabled field, a checkbox only when checked.
+    FormData: class {
+      constructor(form) { this.form = form; }
+      entries() {
+        return Object.entries(this.form.elements)
+          .filter(([, el]) => !el.disabled && (el.type !== 'checkbox' || el.checked))
+          .map(([name, el]) => [name, el.type === 'checkbox' ? 'on' : el.value]);
+      }
+    },
+  });
+  const licenceRow = { querySelector: sel => ({ value: sel === '.hdr-name' ? 'X-Licence' : 'secret' }) };
+  const send = async (prefix, type) => {
+    const f = h.node(`${prefix}Form`).elements;
+    // The source select the visibility rules read is the form's own field.
+    h.nodes.set(`${prefix}SourceType`, f.source_type);
+    h.node(`${prefix}DrmSection`).querySelectorAll = () => drm.map(name => f[name]);
+    h.node(`${prefix}LicenseHeaders`).querySelectorAll = () => [licenceRow];
+    f.mpd_url.value = 'https://origin.example/x';
+    f.playready_license_url.value = 'https://pr.example'; f.widevine_license_url.value = 'https://wv.example';
+    ['enable_playready', 'enable_widevine', 'forward_client_ip'].forEach(name => { f[name].type = 'checkbox'; f[name].checked = true; });
+    if (prefix === 'add') {
+      f.source_type.value = type; h.ctx.applyVisibility('add'); h.ctx.openAdd();
+    } else {
+      h.ctx.configFor = () => ({ source_type: type, forward_client_ip: true,
+        playready_license_url: 'https://pr.example', widevine_license_url: 'https://wv.example' });
+      h.ctx.openEdit('c');
+    }
+    const pending = h.submit(`${prefix}Form`);
+    const call = h.calls[h.calls.length - 1];
+    call.resolve({ id: 'c' }); await pending;
+    return plain(prefix === 'add' ? call.args[0] : call.args[1]);
+  };
+  return { drm, send };
+}
+
+test('an HLS source submits no licence fields or headers', async () => {
+  const { drm, send } = licenceHarness();
+  for (const prefix of ['add', 'edit']) {
+    const hls = await send(prefix, 'hls');
+    for (const name of [...drm, 'license_headers']) assert.equal(name in hls, false, `${prefix}: HLS sent ${name}`);
+    const dash = await send(prefix, 'dash');
+    assert.equal(dash.playready_license_url, 'https://pr.example', `${prefix}: DASH after HLS lost its licence URL`);
+    assert.deepEqual(dash.license_headers, [{ name: 'X-Licence', value: 'secret' }], `${prefix}: DASH after HLS lost its licence headers`);
+  }
+});
+
+test('a DASH source submits every licence field and header', async () => {
+  for (const prefix of ['add', 'edit']) {
+    const dash = await licenceHarness().send(prefix, 'dash');
+    assert.deepEqual({
+      enable_playready: dash.enable_playready, enable_widevine: dash.enable_widevine,
+      playready_license_url: dash.playready_license_url, widevine_license_url: dash.widevine_license_url,
+      forward_client_ip: dash.forward_client_ip, license_headers: dash.license_headers,
+    }, {
+      enable_playready: true, enable_widevine: true,
+      playready_license_url: 'https://pr.example', widevine_license_url: 'https://wv.example',
+      forward_client_ip: true, license_headers: [{ name: 'X-Licence', value: 'secret' }],
+    }, `${prefix}: DASH lost a licence field`);
+  }
+});
+
 test('create form sends content keys as a list, only for dash decrypt', async () => {
   const h = formsHarness();
   const f = h.node('addForm').elements;
@@ -208,7 +274,7 @@ test('decrypt warnings show on the card in every mode, and only while running', 
   ];
   h.ctx.renderProgress(h.refs, { running: true, mode: 'live', decrypt_warnings: warnings });
   assert.equal(h.refs.decryptWarning.hidden, false);
-  assert.match(h.refs.decryptWarning.textContent, /missing_key \(period —, AS 1\): no content key held for these KIDs \[2020\]/);
+  assert.match(h.refs.decryptWarning.textContent, /missing_key \(Period —, AdaptationSet 1\): no content key held for these KIDs \[2020\]/);
   assert.match(h.refs.decryptWarning.textContent, /key_unmatched: .*\[3030\]/);
   assert.equal(h.refs.vodWarning.hidden, true, 'decrypt warnings are not VOD warnings');
 
