@@ -63,7 +63,7 @@ func TestHLSLiveRestartResumesWithoutCollapse(t *testing.T) {
 	// The channel must keep running (a live channel, not terminated).
 	w := executeRequest(h2.srv.handleMediaPlaylist, http.MethodGet,
 		"/v1/channels/live1/media/v0.m3u8",
-		map[string]string{"channelID": "live1", "repID": "v0"})
+		map[string]string{"channelID": "live1", "playlist": "v0.m3u8"})
 	if strings.Contains(w.Body.String(), "#EXT-X-ENDLIST") {
 		t.Error("live channel came back terminated after restart")
 	}

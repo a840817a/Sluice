@@ -82,13 +82,17 @@ func NewRouter(
 		// DASH sources serve manifest.mpd, HLS sources serve master.m3u8, and
 		// an fMP4 source can serve both from the same segments on disk.
 		r.Get("/v1/channels/{channelID}/master.m3u8", srv.handleMasterPlaylist)
-		r.Get("/v1/channels/{channelID}/media/{repID}.m3u8", srv.handleMediaPlaylist)
+		//
+		// A representation's segment carries its suffix inside the parameter
+		// and the handler strips it: chi ends a "{repID}.m3u8" parameter at
+		// the first ".", so an ID like "mp4a.40.2" never matched.
+		r.Get("/v1/channels/{channelID}/media/{playlist}", srv.handleMediaPlaylist)
 		// AES-128 key proxy for HLS channels kept in passthrough mode.
 		r.Get("/v1/channels/{channelID}/key/{keyID}", srv.handleKeyProxy)
 		r.Get("/v1/channels/{channelID}/health", srv.handleChannelHealth)
 		// Segment and init URLs name their period (ADR-0005).
 		r.Get("/v1/channels/{channelID}/segments/{periodID}/{repID}/{segFile}", srv.handleSegment)
-		r.Get("/v1/channels/{channelID}/init/{periodID}/{repID}.mp4", srv.handleInit)
+		r.Get("/v1/channels/{channelID}/init/{periodID}/{initFile}", srv.handleInit)
 		// Per-channel license proxies (OPTIONS preflight also handled by corsMiddleware)
 		r.Post("/v1/channels/{channelID}/license/playready", srv.handleLicense("playready"))
 		r.Post("/v1/channels/{channelID}/license/widevine", srv.handleLicense("widevine"))

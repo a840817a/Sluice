@@ -110,7 +110,7 @@ func TestClearDASHServesHLS(t *testing.T) {
 		for time.Now().Before(deadline) {
 			w := executeRequest(srv.handleMediaPlaylist, http.MethodGet,
 				"/v1/channels/d2h/media/"+rep+".m3u8",
-				map[string]string{"channelID": "d2h", "repID": rep})
+				map[string]string{"channelID": "d2h", "playlist": rep + ".m3u8"})
 			if strings.Count(w.Body.String(), "#EXTINF:") >= 1 && w.Code == http.StatusOK {
 				return w.Body.String()
 			}

@@ -2,10 +2,12 @@
 //
 // Period and representation IDs are arbitrary strings chosen by the origin,
 // and the gateway puts them in two kinds of path: the segment URLs it serves
-// (ADR-0005) and the directories it stores segments in (ADR-0006). Raw, an ID
-// can be empty, which a path join silently drops, or contain "/" and "..",
-// which walk out of the directory meant to hold it. Both kinds of path use this
-// one encoding so the rules cannot drift apart.
+// (ADR-0005) and the directories it stores segments in (ADR-0006). A
+// representation ID in a URL is the exception: gwurl writes it raw whenever
+// that is one path segment, and only borrows this encoding's "~" form for the
+// rest. Raw, an ID can be empty, which a path join silently drops, or contain
+// "/" and "..", which walk out of the directory meant to hold it. Both kinds of
+// path use this one encoding so the rules cannot drift apart.
 //
 // This package must not import anything from internal/: gwurl and store both
 // depend on it, and gwurl may import nothing else.

@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/a840817a/sluice/internal/gwurl"
 	"github.com/a840817a/sluice/internal/pathseg"
 	"github.com/a840817a/sluice/internal/store"
 	"github.com/go-chi/chi/v5"
@@ -20,10 +21,10 @@ import (
 // GET /v1/channels/{channelID}/segments/{periodID}/{repID}/{segFile}
 func (s *Server) handleSegment(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "channelID")
-	repID := chi.URLParam(r, "repID")
 	segFile := chi.URLParam(r, "segFile") // e.g. "000000001.m4s"
 	periodID, ok := pathseg.Decode(chi.URLParam(r, "periodID"))
-	if !ok {
+	repID, repOK := gwurl.ParseRepSegment(chi.URLParam(r, "repID"))
+	if !ok || !repOK {
 		http.NotFound(w, r)
 		return
 	}
@@ -55,9 +56,10 @@ func (s *Server) handleSegment(w http.ResponseWriter, r *http.Request) {
 // GET /v1/channels/{channelID}/init/{periodID}/{repID}.mp4
 func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "channelID")
-	repID := chi.URLParam(r, "repID")
 	periodID, ok := pathseg.Decode(chi.URLParam(r, "periodID"))
-	if !ok {
+	repSeg, isMP4 := strings.CutSuffix(chi.URLParam(r, "initFile"), ".mp4")
+	repID, repOK := gwurl.ParseRepSegment(repSeg)
+	if !ok || !isMP4 || !repOK {
 		http.NotFound(w, r)
 		return
 	}

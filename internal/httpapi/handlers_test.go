@@ -69,7 +69,7 @@ func TestHandleSegment_MalformedSegFile(t *testing.T) {
 func TestHandleInit_ChannelNotFound(t *testing.T) {
 	srv := newTestServer(t)
 	w := executeRequest(srv.handleInit, http.MethodGet, "/v1/channels/noexist/init/0/r0.mp4",
-		map[string]string{"channelID": "noexist", "periodID": "0", "repID": "r0"})
+		map[string]string{"channelID": "noexist", "periodID": "0", "initFile": "r0.mp4"})
 	if w.Code != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", w.Code)
 	}

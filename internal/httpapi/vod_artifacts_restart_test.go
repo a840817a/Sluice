@@ -95,7 +95,7 @@ func TestDASHArtifactsSurviveRestartWithOriginOffline(t *testing.T) {
 				}
 			}
 			init := executeRequest(h2.srv.handleInit, http.MethodGet,
-				"/v1/channels/"+id+"/init/0/v0.mp4", map[string]string{"channelID": id, "periodID": "0", "repID": "v0"})
+				"/v1/channels/"+id+"/init/0/v0.mp4", map[string]string{"channelID": id, "periodID": "0", "initFile": "v0.mp4"})
 			if init.Code != http.StatusOK || init.Body.Len() == 0 {
 				t.Fatalf("init unavailable after restart: %d", init.Code)
 			}

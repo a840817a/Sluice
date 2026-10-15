@@ -91,7 +91,7 @@ func TestDemuxedHLSAudioIngestedAndServed(t *testing.T) {
 		for time.Now().Before(deadline) {
 			w := executeRequest(srv.handleMediaPlaylist, http.MethodGet,
 				"/v1/channels/dx/media/"+repID+".m3u8",
-				map[string]string{"channelID": "dx", "repID": repID})
+				map[string]string{"channelID": "dx", "playlist": repID + ".m3u8"})
 			if strings.Count(w.Body.String(), "#EXTINF:") >= 3 {
 				return w.Body.String()
 			}

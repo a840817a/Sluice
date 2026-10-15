@@ -92,7 +92,7 @@ func TestSubtitlesIngestedAndServed(t *testing.T) {
 		for time.Now().Before(deadline) {
 			w := executeRequest(srv.handleMediaPlaylist, http.MethodGet,
 				"/v1/channels/sx/media/"+rep+".m3u8",
-				map[string]string{"channelID": "sx", "repID": rep})
+				map[string]string{"channelID": "sx", "playlist": rep + ".m3u8"})
 			if strings.Count(w.Body.String(), "#EXTINF:") >= 3 {
 				return w.Body.String()
 			}

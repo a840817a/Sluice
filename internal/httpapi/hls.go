@@ -5,8 +5,10 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	ch "github.com/a840817a/sluice/internal/channel"
+	"github.com/a840817a/sluice/internal/gwurl"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -39,7 +41,12 @@ func (s *Server) handleMasterPlaylist(w http.ResponseWriter, r *http.Request) {
 // GET /v1/channels/{channelID}/media/{repID}.m3u8
 func (s *Server) handleMediaPlaylist(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "channelID")
-	repID := chi.URLParam(r, "repID")
+	repSeg, isM3U8 := strings.CutSuffix(chi.URLParam(r, "playlist"), ".m3u8")
+	repID, ok := gwurl.ParseRepSegment(repSeg)
+	if !isM3U8 || !ok {
+		http.NotFound(w, r)
+		return
+	}
 
 	rt := s.manager.Get(channelID)
 	if rt == nil {

@@ -120,7 +120,7 @@ func waitForEncPlaylist(t *testing.T, srv *Server, want int) string {
 	for time.Now().Before(deadline) {
 		w := executeRequest(srv.handleMediaPlaylist, http.MethodGet,
 			"/v1/channels/enc/media/v0.m3u8",
-			map[string]string{"channelID": "enc", "repID": "v0"})
+			map[string]string{"channelID": "enc", "playlist": "v0.m3u8"})
 		body = w.Body.String()
 		if w.Code == http.StatusOK && strings.Count(body, "#EXTINF:") >= want {
 			return body
@@ -328,7 +328,7 @@ func TestPassthroughKeySurvivesKeyServerDownRestart(t *testing.T) {
 	for time.Now().Before(deadline) {
 		w := executeRequest(h1.srv.handleMediaPlaylist, http.MethodGet,
 			"/v1/channels/enc/media/v0.m3u8",
-			map[string]string{"channelID": "enc", "repID": "v0"})
+			map[string]string{"channelID": "enc", "playlist": "v0.m3u8"})
 		if strings.Count(w.Body.String(), "#EXTINF:") >= 3 {
 			break
 		}

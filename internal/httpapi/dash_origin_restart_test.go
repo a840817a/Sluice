@@ -85,7 +85,7 @@ func TestDASHOriginRestartStartsANewPeriod(t *testing.T) {
 	srv := NewServer(cfg, mgr)
 	playlist := func() string {
 		return executeRequest(srv.handleMediaPlaylist, http.MethodGet, "/",
-			map[string]string{"channelID": "dr", "repID": "v0"}).Body.String()
+			map[string]string{"channelID": "dr", "playlist": "v0.m3u8"}).Body.String()
 	}
 	waitFor := func(segments int) string {
 		t.Helper()

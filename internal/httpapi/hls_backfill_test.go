@@ -83,7 +83,7 @@ func TestHLSBackfillsInteriorGap(t *testing.T) {
 	for time.Now().Before(deadline) {
 		w := executeRequest(srv.handleMediaPlaylist, http.MethodGet,
 			"/v1/channels/bf/media/v0.m3u8",
-			map[string]string{"channelID": "bf", "repID": "v0"})
+			map[string]string{"channelID": "bf", "playlist": "v0.m3u8"})
 		body = w.Body.String()
 		if strings.Count(body, "#EXTINF:") == 4 &&
 			strings.Contains(body, "/segments/0/v0/2.ts") {

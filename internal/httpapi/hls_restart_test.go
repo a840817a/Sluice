@@ -56,7 +56,7 @@ func (h *restartHarness) playlist(t *testing.T, id string) (int, string) {
 	t.Helper()
 	w := executeRequest(h.srv.handleMediaPlaylist, http.MethodGet,
 		"/v1/channels/"+id+"/media/v0.m3u8",
-		map[string]string{"channelID": id, "repID": "v0"})
+		map[string]string{"channelID": id, "playlist": "v0.m3u8"})
 	return w.Code, w.Body.String()
 }
 

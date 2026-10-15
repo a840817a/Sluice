@@ -15,6 +15,11 @@
 // period is written as one path segment in pathseg's encoding, which the
 // segment handlers decode.
 //
+// A representation ID is written as is unless that cannot be one path segment
+// (see repSegment): unlike period IDs, representation IDs were in URLs before
+// either encoding existed, and the common ones must keep the URLs players and
+// CDNs already hold.
+//
 // This package must not import anything from internal/ except pathseg, which
 // imports nothing. It is depended on by internal/manifest and internal/hlsout,
 // neither of which may import internal/httpapi — that edge is what a shared
@@ -22,6 +27,7 @@
 package gwurl
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strconv"
 	"strings"
@@ -51,12 +57,12 @@ func Base(baseURL string) string { return strings.TrimRight(baseURL, "/") }
 // ParseUint. Collapsing the two forms into one builder would still pass every
 // test while changing every HLS segment URI that players and CDNs have cached.
 func SegmentTemplatePath(channelID, periodID, repID string) string {
-	return fmt.Sprintf("v1/channels/%s/segments/%s/%s/$Number%%09d$.m4s", channelID, pathseg.Encode(periodID), repID)
+	return fmt.Sprintf("v1/channels/%s/segments/%s/%s/$Number%%09d$.m4s", channelID, pathseg.Encode(periodID), repSegment(repID))
 }
 
 // InitTemplatePath is the DASH SegmentTemplate initialization attribute.
 func InitTemplatePath(channelID, periodID, repID string) string {
-	return fmt.Sprintf("v1/channels/%s/init/%s/%s.mp4", channelID, pathseg.Encode(periodID), repID)
+	return fmt.Sprintf("v1/channels/%s/init/%s/%s.mp4", channelID, pathseg.Encode(periodID), repSegment(repID))
 }
 
 // Versioned returns u with version v as its query, or u itself for version
@@ -70,6 +76,45 @@ func Versioned(u string, v uint64) string {
 	return u + "?c=" + strconv.FormatUint(v, 10)
 }
 
+// repSegment returns a representation ID as one URL path segment.
+//
+// An ID goes in as is when its raw form routes back to it, which keeps the
+// URLs of every ID that already worked byte for byte, "audio=128000" and
+// "mp4a.40.2" included. The others are written "~" and unpadded base64url,
+// the form pathseg uses: an ID containing "/" or "\" (Bento4 mp4dash names
+// representations "video/avc1"), one containing "?", "#" or "%", which a
+// client reads as a query, a fragment or an escape, the empty ID, "." and
+// "..", which a client normalizes away, and an ID starting with "~", which
+// would read as an encoded one.
+//
+// This is deliberately not pathseg.Encode, which also encodes every
+// character outside letters, digits, ".", "_" and "-": that would have moved
+// the URL of nearly every representation of a Unified Streaming origin.
+func repSegment(id string) string {
+	if rawRepSegment(id) {
+		return id
+	}
+	return encodedRepPrefix + base64.RawURLEncoding.EncodeToString([]byte(id))
+}
+
+// ParseRepSegment reverses repSegment for a segment taken from a request
+// path. It reports false for a segment repSegment never returns, so every
+// representation has exactly one URL.
+func ParseRepSegment(seg string) (string, bool) {
+	if enc, ok := strings.CutPrefix(seg, encodedRepPrefix); ok {
+		id, err := base64.RawURLEncoding.DecodeString(enc)
+		return string(id), err == nil && !rawRepSegment(string(id))
+	}
+	return seg, rawRepSegment(seg)
+}
+
+const encodedRepPrefix = "~"
+
+func rawRepSegment(id string) bool {
+	return id != "" && id != "." && id != ".." &&
+		!strings.HasPrefix(id, encodedRepPrefix) && !strings.ContainsAny(id, "/\\?#%")
+}
+
 // --- Absolute URLs ---------------------------------------------------------
 //
 // base is a configured gateway base URL; each function normalizes it, so
@@ -77,20 +122,20 @@ func Versioned(u string, v uint64) string {
 
 // MediaPlaylistURL is one representation's HLS media playlist.
 func MediaPlaylistURL(base, channelID, repID string) string {
-	return Base(base) + "/v1/channels/" + channelID + "/media/" + repID + ".m3u8"
+	return Base(base) + "/v1/channels/" + channelID + "/media/" + repSegment(repID) + ".m3u8"
 }
 
 // SegmentURL is one stored segment, numbered exactly as it is on disk and
 // carrying the extension it was stored under (see SegmentTemplatePath for why
 // this is not zero-padded).
 func SegmentURL(base, channelID, periodID, repID string, segNo uint64, ext string) string {
-	return Base(base) + "/v1/channels/" + channelID + "/segments/" + pathseg.Encode(periodID) + "/" + repID + "/" +
+	return Base(base) + "/v1/channels/" + channelID + "/segments/" + pathseg.Encode(periodID) + "/" + repSegment(repID) + "/" +
 		strconv.FormatUint(segNo, 10) + ext
 }
 
 // InitURL is a representation's fMP4 initialization segment.
 func InitURL(base, channelID, periodID, repID string) string {
-	return Base(base) + "/v1/channels/" + channelID + "/init/" + pathseg.Encode(periodID) + "/" + repID + ".mp4"
+	return Base(base) + "/v1/channels/" + channelID + "/init/" + pathseg.Encode(periodID) + "/" + repSegment(repID) + ".mp4"
 }
 
 // KeyProxyBaseURL is the prefix a key ID is appended to, and therefore must

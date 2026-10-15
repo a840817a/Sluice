@@ -104,7 +104,7 @@ func TestHLSVODListsWhatTheLiveChannelPublished(t *testing.T) {
 			srv := NewServer(cfg, mgr)
 			count := func(rep string) int {
 				w := executeRequest(srv.handleMediaPlaylist, http.MethodGet, "/v1/channels/d/media/"+rep+".m3u8",
-					map[string]string{"channelID": "d", "repID": rep})
+					map[string]string{"channelID": "d", "playlist": rep + ".m3u8"})
 				return strings.Count(w.Body.String(), "#EXTINF:")
 			}
 

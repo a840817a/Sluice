@@ -128,7 +128,7 @@ func waitForCMAFPlaylist(t *testing.T, srv *Server, want int) string {
 	for time.Now().Before(deadline) {
 		w := executeRequest(srv.handleMediaPlaylist, http.MethodGet,
 			"/v1/channels/cmaf/media/v0.m3u8",
-			map[string]string{"channelID": "cmaf", "repID": "v0"})
+			map[string]string{"channelID": "cmaf", "playlist": "v0.m3u8"})
 		body = w.Body.String()
 		if w.Code == http.StatusOK && strings.Count(body, "#EXTINF:") >= want {
 			return body
@@ -203,7 +203,7 @@ func TestCMAFDualOutput(t *testing.T) {
 	}
 	// The shared init segment must serve for both.
 	iw := executeRequest(srv.handleInit, http.MethodGet,
-		"/v1/channels/cmaf/init/0/v0.mp4", map[string]string{"channelID": "cmaf", "periodID": "0", "repID": "v0"})
+		"/v1/channels/cmaf/init/0/v0.mp4", map[string]string{"channelID": "cmaf", "periodID": "0", "initFile": "v0.mp4"})
 	if iw.Code != http.StatusOK {
 		t.Errorf("init.mp4: got %d, want 200", iw.Code)
 	}

@@ -80,7 +80,7 @@ func waitForPlaylist(t *testing.T, srv *Server, channelID, repID string, want in
 	for time.Now().Before(deadline) {
 		w := executeRequest(srv.handleMediaPlaylist, http.MethodGet,
 			"/v1/channels/"+channelID+"/media/"+repID+".m3u8",
-			map[string]string{"channelID": channelID, "repID": repID})
+			map[string]string{"channelID": channelID, "playlist": repID + ".m3u8"})
 		body = w.Body.String()
 		if w.Code == http.StatusOK && strings.Count(body, "#EXTINF:") >= want {
 			return body
@@ -205,7 +205,7 @@ func TestHLSUnknownRepIs404(t *testing.T) {
 
 	w := executeRequest(srv.handleMediaPlaylist, http.MethodGet,
 		"/v1/channels/hls1/media/nope.m3u8",
-		map[string]string{"channelID": "hls1", "repID": "nope"})
+		map[string]string{"channelID": "hls1", "playlist": "nope.m3u8"})
 	if w.Code != http.StatusNotFound {
 		t.Errorf("unknown rep: got %d, want 404", w.Code)
 	}
@@ -263,7 +263,7 @@ func TestHLSVODKeepsItsSegments(t *testing.T) {
 	for time.Now().Before(deadline) {
 		w := executeRequest(srv.handleMediaPlaylist, http.MethodGet,
 			"/v1/channels/hls1/media/v0.m3u8",
-			map[string]string{"channelID": "hls1", "repID": "v0"})
+			map[string]string{"channelID": "hls1", "playlist": "v0.m3u8"})
 		body = w.Body.String()
 		if strings.Contains(body, "#EXT-X-ENDLIST") {
 			break
