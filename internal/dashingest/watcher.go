@@ -52,6 +52,8 @@ type Watcher struct {
 	// saved to the representations that copy lists (periodContents), so a
 	// period's copy is rewritten only when the origin changes what it carries.
 	savedPeriods map[string]string
+	// firstMPD is called once the first MPD is processed (OnFirstMPD).
+	firstMPD func()
 	// runCtx is the context of the latest Run. It outlives a Run that
 	// returned for a static MPD until the channel stops admitting work, and
 	// bounds the extra passes Rediscover runs for one.
@@ -61,6 +63,10 @@ type Watcher struct {
 
 // SetProgress attaches the channel's progress counters. Must be called before Run.
 func (w *Watcher) SetProgress(p *progress.Counters) { w.prog = p }
+
+// OnFirstMPD has fn called once, when ParsedMPD first returns an MPD this
+// watcher read. Must be called before Run.
+func (w *Watcher) OnFirstMPD(fn func()) { w.firstMPD = fn }
 
 // NewWatcher creates a Watcher for the given channel.
 // lastKnown is seeded from ci so that segments already on disk are not
@@ -289,6 +295,8 @@ func (w *Watcher) processMPD(ctx context.Context, p *imdp.ParsedMPD) {
 	w.mu.Lock()
 	w.adoptPeriods(p, presentMax)
 	w.lastMPD = p
+	first := w.firstMPD
+	w.firstMPD = nil
 	toSave := w.periodsToSave(p)
 	raw := w.lastMPDBytes
 	snapshot := make(map[string]uint64, len(w.lastKnown))
@@ -296,6 +304,9 @@ func (w *Watcher) processMPD(ctx context.Context, p *imdp.ParsedMPD) {
 		snapshot[k] = v
 	}
 	w.mu.Unlock()
+	if first != nil {
+		first()
+	}
 	w.savePeriodMPDs(toSave, raw)
 
 	tasks, truncated := w.discoverTasks(ctx, p, snapshot, presentMax, knownSegs)
@@ -349,10 +360,12 @@ func (w *Watcher) discoverTasks(ctx context.Context, p *imdp.ParsedMPD, lastKnow
 	}
 
 	// Collect tasks from SegmentTemplate and SegmentList representations.
-	tasks, truncated := DiscoverTasks(p, baseURL, w.channelID, lastKnown, presentMax, knownSegs)
+	tasks, truncated, listed := DiscoverTasks(p, baseURL, w.channelID, lastKnown, presentMax, knownSegs)
 
 	// Collect tasks from SegmentBase representations (requires sidx fetch).
-	tasks = append(tasks, w.discoverSegmentBaseTasks(ctx, p, baseURL, lastKnown, presentMax, knownSegs)...)
+	sbTasks, sbInits := w.discoverSegmentBaseTasks(ctx, p, baseURL, lastKnown, presentMax, knownSegs)
+	tasks = append(tasks, sbTasks...)
+	shareASInits(p, tasks, listed, sbInits)
 
 	// The broker is fed in presentation order rather than one representation
 	// at a time. Discovery walks period → AdaptationSet → Representation, so
@@ -538,7 +551,9 @@ func highestListed(p *imdp.ParsedMPD, period *imdp.ParsedPeriod, as *imdp.Parsed
 }
 
 // discoverSegmentBaseTasks fetches sidx boxes for all SegmentBase representations
-// in the parsed MPD and returns one SegmentTask per subsegment.
+// in the parsed MPD and returns one SegmentTask per subsegment, and the init
+// of every addressable SegmentBase representation by AdaptationSet, including
+// one whose index could not be read this pass (see DiscoverTasks).
 func (w *Watcher) discoverSegmentBaseTasks(
 	ctx context.Context,
 	p *imdp.ParsedMPD,
@@ -546,8 +561,9 @@ func (w *Watcher) discoverSegmentBaseTasks(
 	lastKnown map[string]uint64,
 	presentMax map[string]uint64,
 	knownSegs map[string]map[uint64]struct{},
-) []*queue.SegmentTask {
+) ([]*queue.SegmentTask, InitLists) {
 	var tasks []*queue.SegmentTask
+	inits := InitLists{}
 	deadline := liveDeadline(p)
 
 	for _, period := range p.Periods {
@@ -585,26 +601,6 @@ func (w *Watcher) discoverSegmentBaseTasks(
 					continue
 				}
 
-				// Fetch the sidx bytes.
-				data, err := w.fetchRange(ctx, repBase, idxStart, idxEnd)
-				if err != nil {
-					slog.Warn("SegmentBase sidx fetch failed",
-						"channel", w.channelID,
-						"rep", rep.ID,
-						"url", repBase,
-						"err", err,
-					)
-					continue
-				}
-
-				// Parse sidx to enumerate subsegments.
-				timescale, _, entries, err := validate.ParseSidxBytes(data, idxEnd+1)
-				if err != nil {
-					slog.Warn("SegmentBase sidx parse failed",
-						"rep", rep.ID, "err", err)
-					continue
-				}
-
 				// Resolve init segment info.
 				initURL := repBase
 				var initRangeStart, initRangeEnd uint64
@@ -627,9 +623,32 @@ func (w *Watcher) discoverSegmentBaseTasks(
 					}
 				}
 
+				// The init is listed even if the index below cannot be read:
+				// the AdaptationSet is decided from every representation.
 				asInits = append(asInits, queue.InitRef{
 					RepID: rep.ID, InitURL: initURL, InitRangeStart: initRangeStart, InitRangeEnd: initRangeEnd,
 				})
+
+				// Fetch the sidx bytes.
+				data, err := w.fetchRange(ctx, repBase, idxStart, idxEnd)
+				if err != nil {
+					slog.Warn("SegmentBase sidx fetch failed",
+						"channel", w.channelID,
+						"rep", rep.ID,
+						"url", repBase,
+						"err", err,
+					)
+					continue
+				}
+
+				// Parse sidx to enumerate subsegments.
+				timescale, _, entries, err := validate.ParseSidxBytes(data, idxEnd+1)
+				if err != nil {
+					slog.Warn("SegmentBase sidx parse failed",
+						"rep", rep.ID, "err", err)
+					continue
+				}
+
 				rk := repKey(w.channelID, period.ID, as.ID, rep.ID)
 				for i, entry := range entries {
 					segNo := uint64(i + 1) // 1-based segment numbering
@@ -664,9 +683,12 @@ func (w *Watcher) discoverSegmentBaseTasks(
 			for _, t := range tasks[asStart:] {
 				t.ASInits = asInits
 			}
+			if len(asInits) > 0 {
+				inits[ASRef{PeriodID: period.ID, ASID: as.ID}] = asInits
+			}
 		}
 	}
-	return tasks
+	return tasks, inits
 }
 
 func snapshotTrackedSegments(channelID string, ci *index.ChannelIndex) (map[string]uint64, map[string]map[uint64]struct{}) {

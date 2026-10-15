@@ -79,7 +79,7 @@ func loadedRegistry(t *testing.T, dataDir string, keys ...string) *Registry {
 
 func onlyConversion(t *testing.T, r *Registry) Conversion {
 	t.Helper()
-	pending, err := r.Convertible()
+	pending, err := r.Convertible(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestConvertCatchesUpBeforeSwap(t *testing.T) {
 	if _, _, ok := r.Lookup(c.AS, "a0"); !ok {
 		t.Error("Lookup does not decrypt segments ingested after the conversion")
 	}
-	if pending, _ := r.Convertible(); len(pending) != 0 {
+	if pending, _ := r.Convertible(nil); len(pending) != 0 {
 		t.Errorf("Convertible after conversion = %+v, want none", pending)
 	}
 
@@ -179,7 +179,7 @@ func TestConvertibleNeedsEveryKey(t *testing.T) {
 	dataDir := t.TempDir()
 	storeCiphertextAudio(t, dataDir, 1)
 	r := loadedRegistry(t, dataDir, videoKey)
-	if pending, _ := r.Convertible(); len(pending) != 0 {
+	if pending, _ := r.Convertible(nil); len(pending) != 0 {
 		t.Fatalf("Convertible without the audio key = %+v", pending)
 	}
 	r.AddKeys([]cenc.Key{mustKey(t, audioKey)})
@@ -233,7 +233,7 @@ func TestConvertFailureKeepsCiphertext(t *testing.T) {
 			t.Errorf("warning holds a key value: %+v", w)
 		}
 	}
-	if pending, _ := r.Convertible(); len(pending) != 0 {
+	if pending, _ := r.Convertible(nil); len(pending) != 0 {
 		t.Errorf("a failed AdaptationSet is convertible again before keys are added: %+v", pending)
 	}
 	r.AddKeys([]cenc.Key{mustKey(t, "30303030303030303030303030303030:0123456789abcdef0123456789abcdef")})
@@ -273,7 +273,7 @@ func TestConvertMissingRotationKey(t *testing.T) {
 	}
 
 	r.AddKeys([]cenc.Key{mustKey(t, videoKey)})
-	if pending, _ := r.Convertible(); len(pending) != 0 {
+	if pending, _ := r.Convertible(nil); len(pending) != 0 {
 		t.Errorf("convertible again after an unrelated key: %+v", pending)
 	}
 	r.AddKeys([]cenc.Key{missing})
@@ -409,8 +409,9 @@ func TestRecoverStaging(t *testing.T) {
 	}
 }
 
-// An init of an AdaptationSet kept as ciphertext whose KID has a key wakes
-// the converter: the stored AdaptationSet may be convertible now.
+// An init of an AdaptationSet kept as ciphertext whose KID has a key, or
+// that is clear, wakes the converter: the stored AdaptationSet may be
+// convertible now that this init is stored too.
 func TestPrepareInitOfKeptAdaptationSetWakes(t *testing.T) {
 	dataDir := t.TempDir()
 	storeCiphertextAudio(t, dataDir, 1)
@@ -429,6 +430,17 @@ func TestPrepareInitOfKeptAdaptationSetWakes(t *testing.T) {
 	case <-r.Wake():
 	default:
 		t.Error("PrepareInit of a kept AdaptationSet with its key held did not wake the converter")
+	}
+
+	clear := audioFile(t, "clear", "init.mp4")
+	task.RepID = "a2"
+	if got, err := r.PrepareInit(context.Background(), task, clear, true, nil); err != nil || !bytes.Equal(got, clear) {
+		t.Fatalf("PrepareInit of a clear init: err %v, init changed %v", err, !bytes.Equal(got, clear))
+	}
+	select {
+	case <-r.Wake():
+	default:
+		t.Error("PrepareInit of a clear init of a kept AdaptationSet did not wake the converter")
 	}
 }
 
@@ -569,5 +581,82 @@ func TestMissingKeyMessageIsShared(t *testing.T) {
 	}
 	if !slices.Equal(converting.KIDs, w.KIDs) {
 		t.Errorf("KIDs differ for the same missing key: %v and %v", converting.KIDs, w.KIDs)
+	}
+}
+
+// An AdaptationSet is converted only from all of its representations,
+// those stored and those its MPD lists: one with no stored init, whose KID
+// is therefore unknown, keeps the whole AdaptationSet as ciphertext,
+// whatever keys are added, until its init is stored and its key held.
+// Converting from the others alone would leave it to be refused, and
+// hidden, when its init arrives.
+func TestConvertibleNeedsEveryRepresentationsInit(t *testing.T) {
+	tests := []struct {
+		name string
+		// storedSegment stores a segment of a1 before its init, so a1 has a
+		// directory; otherwise only the MPD names it.
+		storedSegment bool
+		listed        ListedReps
+	}{
+		{name: "stored without its init", storedSegment: true},
+		{name: "listed by the MPD only", listed: func(as ASKey) ([]string, bool) {
+			if as != (ASKey{"p0", "1"}) {
+				t.Errorf("listed asked for %+v", as)
+			}
+			return []string{"a0", "a1"}, true
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			storeCiphertextAudio(t, dataDir, 1)
+			// a1's init, once stored, is the video's, under the video KID.
+			a1 := audioLoc(dataDir)
+			a1.RepID = "a1"
+			video := []string{"cenc", "video", "avc1"}
+			if tc.storedSegment {
+				if err := store.Write(a1.SegmentPath(1, store.ExtFMP4), readFixture(t, append(video, "seg-1.m4s")...)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r := loadedRegistry(t, dataDir, audioKey)
+
+			r.AddKeys([]cenc.Key{mustKey(t, missingKey)})
+			if pending, _ := r.Convertible(tc.listed); len(pending) != 0 {
+				t.Fatalf("Convertible while a1 has no init = %+v, want none", pending)
+			}
+			if err := store.Write(a1.InitPath(), readFixture(t, append(video, "init.mp4")...)); err != nil {
+				t.Fatal(err)
+			}
+			if pending, _ := r.Convertible(tc.listed); len(pending) != 0 {
+				t.Fatalf("Convertible without a1's key = %+v, want none", pending)
+			}
+			r.AddKeys([]cenc.Key{mustKey(t, videoKey)})
+			pending, err := r.Convertible(tc.listed)
+			if err != nil || len(pending) != 1 || !slices.Equal(pending[0].repIDs, []string{"a0", "a1"}) {
+				t.Errorf("Convertible with every init and key = %+v, %v; want the AdaptationSet with a0 and a1", pending, err)
+			}
+		})
+	}
+}
+
+// Before the channel has read the MPD that lists its representations,
+// nothing is converted: one it lists may not be stored yet.
+func TestConvertibleWaitsForTheListing(t *testing.T) {
+	dataDir := t.TempDir()
+	storeCiphertextAudio(t, dataDir, 1)
+	r := loadedRegistry(t, dataDir, audioKey)
+	unknown := func(ASKey) ([]string, bool) { return nil, false }
+	if pending, _ := r.Convertible(unknown); len(pending) != 0 {
+		t.Fatalf("Convertible before the MPD was read = %+v, want none", pending)
+	}
+	r.Reconsider()
+	select {
+	case <-r.Wake():
+	default:
+		t.Error("Reconsider did not wake the converter")
+	}
+	if pending, _ := r.Convertible(func(ASKey) ([]string, bool) { return []string{"a0"}, true }); len(pending) != 1 {
+		t.Errorf("Convertible once the MPD lists a0 = %+v, want the audio AdaptationSet", pending)
 	}
 }

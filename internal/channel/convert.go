@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 
+	"github.com/a840817a/sluice/internal/dashdecrypt"
 	"github.com/a840817a/sluice/internal/pipeline"
 )
 
@@ -27,7 +28,7 @@ func (m *Manager) launchConversions(ctx context.Context, rt *Runtime) {
 // restored, and again each time the registry wakes it.
 func (m *Manager) runConversions(ctx context.Context, rt *Runtime) {
 	for {
-		pending, err := rt.decrypt.Convertible()
+		pending, err := rt.decrypt.Convertible(rt.listedReps)
 		if err != nil {
 			slog.Warn("listing AdaptationSets to convert failed", "channel", rt.ID, "err", err)
 		}
@@ -50,6 +51,33 @@ func (m *Manager) runConversions(ctx context.Context, rt *Runtime) {
 		case <-rt.decrypt.Wake():
 		}
 	}
+}
+
+// listedReps lists the representations rt's MPD names for as, so that an
+// AdaptationSet is converted only once each of them has a stored init.
+// While rt ingests and its watcher has not read an MPD yet, they are
+// unknown; the watcher wakes the registry once it has (attachSource). A VOD
+// without an MPD lists none: its stored representations are all there is.
+func (rt *Runtime) listedReps(as dashdecrypt.ASKey) ([]string, bool) {
+	p := rt.ParsedMPD()
+	if p == nil {
+		return nil, rt.Mode() == ModeVOD
+	}
+	var ids []string
+	for _, period := range p.Periods {
+		if period.ID != as.PeriodID {
+			continue
+		}
+		for _, a := range period.AdaptationSets {
+			if a.ID != as.ASID {
+				continue
+			}
+			for _, rep := range a.Representations {
+				ids = append(ids, rep.ID)
+			}
+		}
+	}
+	return ids, true
 }
 
 // servesSavedManifestOnly reports whether rt is a VOD restored without its

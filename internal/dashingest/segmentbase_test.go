@@ -134,7 +134,7 @@ func TestDiscoverSegmentBaseTasksAddressesEachSubsegment(t *testing.T) {
 	p := parseMPD(t, segmentBaseMPDFor(origin.URL+"/video.mp4", idxStart, idxEnd))
 	w := segmentBaseWatcher(t)
 
-	tasks := w.discoverSegmentBaseTasks(context.Background(), p, origin.URL, nil, nil, nil)
+	tasks, _ := w.discoverSegmentBaseTasks(context.Background(), p, origin.URL, nil, nil, nil)
 
 	if len(tasks) != 3 {
 		t.Fatalf("got %d tasks, want one per sidx reference (3)", len(tasks))
@@ -180,7 +180,7 @@ func TestDiscoverSegmentBaseTasksCarryTheInitRange(t *testing.T) {
 	origin := startRangeOrigin(t, file, &rangeOrigin{})
 
 	p := parseMPD(t, segmentBaseMPDFor(origin.URL+"/video.mp4", idxStart, idxEnd))
-	tasks := segmentBaseWatcher(t).discoverSegmentBaseTasks(
+	tasks, _ := segmentBaseWatcher(t).discoverSegmentBaseTasks(
 		context.Background(), p, origin.URL, nil, nil, nil)
 
 	if len(tasks) == 0 {
@@ -241,7 +241,7 @@ func TestDiscoverSegmentBaseTasksSkipsUnreadableRepresentations(t *testing.T) {
 				mpdBase = ""
 			}
 			p := parseMPD(t, tc.mpd(origin.URL, idxStart, idxEnd))
-			tasks := segmentBaseWatcher(t).discoverSegmentBaseTasks(
+			tasks, _ := segmentBaseWatcher(t).discoverSegmentBaseTasks(
 				context.Background(), p, mpdBase, nil, nil, nil)
 
 			if len(tasks) != 0 {
@@ -267,7 +267,7 @@ func TestDiscoverSegmentBaseTasksIgnoresOtherAddressingModes(t *testing.T) {
 </MPD>`
 
 	p := parseMPD(t, raw)
-	tasks := segmentBaseWatcher(t).discoverSegmentBaseTasks(
+	tasks, _ := segmentBaseWatcher(t).discoverSegmentBaseTasks(
 		context.Background(), p, "http://origin", nil, nil, nil)
 
 	if len(tasks) != 0 {

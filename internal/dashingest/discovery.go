@@ -39,6 +39,12 @@ import (
 // truncated at maxSegmentsPerPass, making len(tasks) a floor rather than the true
 // segment count. Callers deriving a progress total from it must not present a
 // percentage or an ETA, both of which would be wrong in the reassuring direction.
+//
+// The third result holds, for every AdaptationSet, the inits of the
+// representations these addressing schemes locate, whether or not they have
+// a task this pass. The returned tasks carry only those in ASInits; a caller
+// that also discovers SegmentBase representations merges the two
+// (shareASInits), since an AdaptationSet may mix them.
 func DiscoverTasks(
 	p *imdp.ParsedMPD,
 	baseURL string,
@@ -46,7 +52,7 @@ func DiscoverTasks(
 	lastKnown map[string]uint64,
 	presentMax map[string]uint64,
 	knownSegs map[string]map[uint64]struct{},
-) ([]*queue.SegmentTask, bool) {
+) ([]*queue.SegmentTask, bool, InitLists) {
 	if lastKnown == nil {
 		lastKnown = make(map[string]uint64)
 	}
@@ -90,6 +96,7 @@ func DiscoverTasks(
 		asInits []queue.InitRef
 	}
 	var entries []entry
+	inits := InitLists{}
 
 	for _, period := range p.Periods {
 		// Resolve period-level base URL.
@@ -229,6 +236,9 @@ func DiscoverTasks(
 			for i := asStart; i < len(entries); i++ {
 				entries[i].asInits = asInits
 			}
+			if len(asInits) > 0 {
+				inits[ASRef{PeriodID: period.ID, ASID: as.ID}] = asInits
+			}
 		}
 	}
 
@@ -269,7 +279,44 @@ func DiscoverTasks(
 		})
 	}
 
-	return tasks, truncated
+	return tasks, truncated, inits
+}
+
+// ASRef names an AdaptationSet of a parsed MPD.
+type ASRef struct{ PeriodID, ASID string }
+
+// InitLists maps an AdaptationSet to the inits of those of its
+// representations one discovery path locates, in the MPD's order.
+type InitLists map[ASRef][]queue.InitRef
+
+// shareASInits gives every task the init of each representation of its
+// AdaptationSet that any of lists locates, in p's representation order.
+// SegmentTemplate/SegmentList and SegmentBase representations are discovered
+// separately, and one AdaptationSet may mix them: deciding it from either
+// half alone could decrypt it while the other half has no key.
+func shareASInits(p *imdp.ParsedMPD, tasks []*queue.SegmentTask, lists ...InitLists) {
+	merged := make(map[ASRef][]queue.InitRef)
+	for _, period := range p.Periods {
+		for _, as := range period.AdaptationSets {
+			ref := ASRef{PeriodID: period.ID, ASID: as.ID}
+			var all []queue.InitRef
+			for _, rep := range as.Representations {
+			find:
+				for _, l := range lists {
+					for _, init := range l[ref] {
+						if init.RepID == rep.ID {
+							all = append(all, init)
+							break find
+						}
+					}
+				}
+			}
+			merged[ref] = all
+		}
+	}
+	for _, t := range tasks {
+		t.ASInits = merged[ASRef{PeriodID: t.PeriodID, ASID: t.ASID}]
+	}
 }
 
 // maxSegmentsPerPass bounds how many segments one discovery pass may derive for

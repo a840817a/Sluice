@@ -69,11 +69,26 @@ func (r *Registry) nudge() {
 	}
 }
 
+// Reconsider makes Wake deliver: what Convertible was given to list may
+// have changed, such as the channel's MPD read for the first time.
+func (r *Registry) Reconsider() { r.nudge() }
+
+// ListedReps reports the IDs of the representations the channel's MPD lists
+// for AdaptationSet as. known is false while the channel has yet to read
+// the MPD it ingests from: the representations are then unknown and
+// Convertible lists nothing, so the channel calls Reconsider once it has.
+type ListedReps func(as ASKey) (repIDs []string, known bool)
+
 // Convertible lists the stored AdaptationSets without a decrypt.json whose
-// representations' stored inits all carry a KID the registry holds a key for,
-// in a scheme internal/cenc decrypts. An AdaptationSet whose conversion
-// failed is left out until a key that may change that is added (AddKeys).
-func (r *Registry) Convertible() ([]Conversion, error) {
+// every representation, stored or listed (nil lists none), has a stored
+// init, and whose inits all carry a KID the registry holds a key for, in a
+// scheme internal/cenc decrypts. A representation without a stored init
+// keeps its AdaptationSet out: its KID is unknown, and a conversion without
+// it would refuse it when its init arrives. PrepareInit wakes the converter
+// when such an init arrives with its key held, and AddKeys when the key
+// arrives later. An AdaptationSet whose conversion failed is left out until
+// a key that may change that is added (AddKeys).
+func (r *Registry) Convertible(listed ListedReps) ([]Conversion, error) {
 	periods, err := store.ScanChannel(r.dataDir, r.channelID)
 	if err != nil {
 		return nil, err
@@ -96,13 +111,22 @@ func (r *Registry) Convertible() ([]Conversion, error) {
 			if _, err := os.Stat(filepath.Join(dir, StateFileName)); err == nil {
 				continue // decided already, but unreadable: Load warned
 			}
+			if !storesListedReps(key, as, listed) {
+				continue
+			}
 			var inits []repInit
 			var repIDs []string
 			for _, rep := range as.Reps {
-				if data, err := os.ReadFile(rep.InitPath()); err == nil {
-					repIDs = append(repIDs, rep.RepID)
-					inits = append(inits, repInit{repID: rep.RepID, data: data})
+				data, err := os.ReadFile(rep.InitPath())
+				if err != nil {
+					inits = nil
+					break
 				}
+				repIDs = append(repIDs, rep.RepID)
+				inits = append(inits, repInit{repID: rep.RepID, data: data})
+			}
+			if inits == nil {
+				continue // a representation's init is not stored (yet)
 			}
 			r.mu.RLock()
 			d := decide(inits, r.keys)
@@ -114,6 +138,24 @@ func (r *Registry) Convertible() ([]Conversion, error) {
 		}
 	}
 	return out, nil
+}
+
+// storesListedReps reports whether every representation listed for key is
+// among as's stored ones, the listing being known.
+func storesListedReps(key ASKey, as store.ASDir, listed ListedReps) bool {
+	if listed == nil {
+		return true
+	}
+	ids, known := listed(key)
+	if !known {
+		return false
+	}
+	for _, id := range ids {
+		if !slices.ContainsFunc(as.Reps, func(rep store.RepLocation) bool { return rep.RepID == id }) {
+			return false
+		}
+	}
+	return true
 }
 
 // Convert rewrites c's stored files as clear ones and swaps them in.

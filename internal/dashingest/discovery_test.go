@@ -18,7 +18,7 @@ func TestDiscoverTasksStatic(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	tasks, truncated := DiscoverTasks(p, "https://origin.example.com", "ch1", nil, nil, nil)
+	tasks, truncated, _ := DiscoverTasks(p, "https://origin.example.com", "ch1", nil, nil, nil)
 
 	// 5 reps × 15 segments = 75 tasks. This is a characterization assertion
 	// against testdata/manifest.mpd and the only thing pinning DiscoverTasks's
@@ -52,7 +52,7 @@ func TestDiscoverTasksStatic(t *testing.T) {
 			lastKnown[key] = task.SegNo
 		}
 	}
-	tasks2, _ := DiscoverTasks(p, "https://origin.example.com", "ch1", lastKnown, nil, nil)
+	tasks2, _, _ := DiscoverTasks(p, "https://origin.example.com", "ch1", lastKnown, nil, nil)
 	if len(tasks2) != len(tasks) {
 		t.Errorf("expected static discovery to return %d tasks again, got %d", len(tasks), len(tasks2))
 	}
@@ -94,7 +94,7 @@ func TestDiscoverTasksDynamicIncludesRestoreGapsBelowHighWater(t *testing.T) {
 		},
 	}
 
-	tasks, _ := DiscoverTasks(p, "https://origin.example.com/live", "ch1", lastKnown, presentMax, knownSegs)
+	tasks, _, _ := DiscoverTasks(p, "https://origin.example.com/live", "ch1", lastKnown, presentMax, knownSegs)
 	if len(tasks) != 1 {
 		t.Fatalf("expected exactly one gap task, got %d", len(tasks))
 	}

@@ -416,7 +416,8 @@ func (r *Registry) reclearInit(path string) {
 //   - one that already stores media or inits (held is true, or a
 //     representation directory of it is not empty), or that this run
 //     already decided to keep, gets orig, and Wake delivers when orig's
-//     KID has a key, since the stored AdaptationSet may be convertible;
+//     KID has a key or orig is clear, since the stored AdaptationSet may
+//     be convertible now that this init is stored;
 //   - a new one gets every representation's init (fetch, for those of
 //     task.ASInits other than task's own) and is decrypted when every KID has
 //     a key and every scheme is supported: decrypt.json is written before the
@@ -445,7 +446,9 @@ func (r *Registry) PrepareInit(ctx context.Context, task *queue.SegmentTask, ori
 		r.mu.RLock()
 		d := decide([]repInit{{repID: task.RepID, data: orig}}, r.keys)
 		r.mu.RUnlock()
-		if d.warning == nil && len(d.reps) > 0 {
+		// A clear init can complete one too: every representation's init
+		// must be stored (Convertible).
+		if d.warning == nil {
 			r.nudge()
 		}
 		return orig, nil

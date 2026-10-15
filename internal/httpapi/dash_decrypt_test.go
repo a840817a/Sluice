@@ -54,8 +54,9 @@ var cencReps = []cencRep{
 // cencOrigin serves the fixtures of one variant as a DASH origin. Its MPD is
 // the variant's manifest.mpd with the representation IDs shortened and with
 // edit applied; edit can change between requests. A path stored in extra
-// ("rep/file") is served from there instead. Requests are counted by path
-// (requests), and a path hold names is answered only once it is released.
+// ("rep/file") is served from there instead, honouring Range. Requests are
+// counted by path (requests), and a path hold names is answered only once it
+// is released.
 type cencOrigin struct {
 	srv     *httptest.Server
 	variant string
@@ -94,7 +95,7 @@ func startCENCOrigin(t *testing.T, variant string, edit func(string) string) *ce
 			<-c.(chan struct{})
 		}
 		if b, ok := o.extra.Load(path); ok {
-			w.Write(b.([]byte))
+			http.ServeContent(w, r, path, time.Time{}, bytes.NewReader(b.([]byte)))
 			return
 		}
 		repID, file, ok := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")

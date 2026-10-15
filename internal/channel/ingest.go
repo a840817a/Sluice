@@ -168,6 +168,8 @@ func (p *ingestPipeline) attachSource(id string, cfg Config, chGwCfg gocfg.Confi
 		if cfg.DecryptOnIngest() {
 			p.decrypt = newDecryptRegistry(chGwCfg.Store.DataDir, id, cfg)
 			p.processor.SetDecryptor(p.decrypt)
+			// Conversions wait for the MPD to know every representation.
+			w.OnFirstMPD(p.decrypt.Reconsider)
 		}
 		return
 	}
