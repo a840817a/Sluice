@@ -106,19 +106,13 @@ func (rt *Runtime) onKeysAdded(keys []cenc.Key) {
 	if rt.decrypt == nil {
 		return
 	}
-	rt.decrypt.AddKeys(keys)
+	added := rt.decrypt.AddKeys(keys)
 	if rt.watcher == nil {
 		return
-	}
-	added := make([]cenc.KID, len(keys))
-	for i, k := range keys {
-		added[i] = k.KID
 	}
 	var reps []string
 	for _, r := range rt.decrypt.Retriable(added) {
 		reps = append(reps, queue.RepKey(rt.ID, r.AS.PeriodID, r.AS.ASID, r.RepID))
 	}
-	if len(reps) > 0 {
-		rt.watcher.Rediscover(reps)
-	}
+	rt.watcher.Rediscover(reps)
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -634,8 +635,10 @@ func TestMissingKeyWarningTracksEachSource(t *testing.T) {
 }
 
 // A representation refused for want of a key is retriable for that key
-// only; one refused before a restart, whose KIDs this run has not learnt,
-// for any key.
+// only, before and after a restart: decrypt.json keeps the KIDs it was
+// refused for, though no key, so a restart also lists them in the
+// missing_key warning. A decrypt.json written before it kept them lists
+// only the refused representation, which is then retriable for any key.
 func TestRetriableRefused(t *testing.T) {
 	dir := t.TempDir()
 	r := decryptedVideo(t, dir, videoKey)
@@ -647,15 +650,52 @@ func TestRetriableRefused(t *testing.T) {
 		t.Fatal("r1 joined without its key")
 	}
 	r1 := []RefusedRep{{AS: ASKey{"p0", "0"}, RepID: "r1"}}
-	other := mustKey(t, missingKey).KID
+	other, audio := mustKey(t, missingKey).KID, mustKey(t, audioKey).KID
 	if got := r.Retriable([]cenc.KID{other}); len(got) != 0 {
 		t.Errorf("Retriable(unrelated) = %+v, want none", got)
 	}
-	if got := r.Retriable([]cenc.KID{mustKey(t, audioKey).KID}); !slices.Equal(got, r1) {
+	if got := r.Retriable([]cenc.KID{audio}); !slices.Equal(got, r1) {
 		t.Errorf("Retriable(audio) = %+v, want r1", got)
 	}
-	if got := loadedRegistry(t, dir, videoKey).Retriable([]cenc.KID{other}); !slices.Equal(got, r1) {
-		t.Errorf("after Load: Retriable(unrelated) = %+v, want r1", got)
+	statePath := filepath.Join(loc.ASDir(), StateFileName)
+	raw, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("ffeeddccbbaa99887766554433221100")) || bytes.Contains(raw, []byte("00112233445566778899aabbccddeeff")) {
+		t.Errorf("%s holds a key:\n%s", StateFileName, raw)
+	}
+
+	restarted := loadedRegistry(t, dir, videoKey)
+	w, ok := warningOf(restarted.Warnings(), KindMissingKey)
+	if !ok || !slices.Equal(w.KIDs, []string{audioKID}) || !strings.Contains(w.Message, "r1") {
+		t.Errorf("after Load: warnings %+v, want missing_key for %s naming r1", restarted.Warnings(), audioKID)
+	}
+	if got := restarted.Retriable([]cenc.KID{other}); len(got) != 0 {
+		t.Errorf("after Load: Retriable(unrelated) = %+v, want none", got)
+	}
+	if got := restarted.Retriable([]cenc.KID{audio}); !slices.Equal(got, r1) {
+		t.Errorf("after Load: Retriable(audio) = %+v, want r1", got)
+	}
+
+	var st map[string]any
+	if err := json.Unmarshal(raw, &st); err != nil {
+		t.Fatal(err)
+	}
+	delete(st, "refused_kids")
+	old, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, old, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	restarted = loadedRegistry(t, dir, videoKey)
+	if !restarted.IsRefused(ASKey{"p0", "0"}, "r1") {
+		t.Error("a state file without refused KIDs lost the refusal")
+	}
+	if got := restarted.Retriable([]cenc.KID{other}); !slices.Equal(got, r1) {
+		t.Errorf("state without refused KIDs: Retriable(unrelated) = %+v, want r1", got)
 	}
 }
 

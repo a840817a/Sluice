@@ -67,9 +67,14 @@ function parseKeyLines(text) {
   return String(text || '').split('\n').map(l => l.trim()).filter(Boolean);
 }
 
-/** Whether the form's source is HLS, which has no DRM licence servers. */
-function isHLS(form) {
-  return form.elements['source_type'].value === 'hls';
+/**
+ * Licence headers to submit from the form with this prefix, or null when its
+ * DRM section is hidden (applyVisibility): they belong to the same licence
+ * servers as the DRM fields, so they follow the same rule.
+ */
+function licenceHeaders(prefix) {
+  if (document.getElementById(`${prefix}DrmSection`).hidden) return null;
+  return collectHeaders(`${prefix}LicenseHeaders`);
 }
 
 /** Whether the form's source and key mode are the ones that take content keys. */
@@ -148,7 +153,8 @@ function mountFields(form, prefix, { showRestart, editing = false }) {
  * Shows only the fields that apply to the chosen source and key mode: the URL
  * hint follows the protocol, DRM licence servers are meaningless for HLS, and
  * content keys exist only for DASH that decrypts. The hidden DRM fields are
- * disabled too, so the form does not submit them.
+ * disabled too, so the form does not submit them, and licenceHeaders submits
+ * no licence headers while the section is hidden.
  */
 function applyVisibility(prefix) {
   const sourceType = document.getElementById(`${prefix}SourceType`).value;
@@ -228,8 +234,8 @@ function initAddForm() {
 
     const fetchHeaders = collectHeaders('addFetchHeaders');
     if (fetchHeaders.length) body.fetch_headers = fetchHeaders;
-    const licenseHeaders = collectHeaders('addLicenseHeaders');
-    if (licenseHeaders.length && !isHLS(form)) body.license_headers = licenseHeaders;
+    const licenseHeaders = licenceHeaders('add');
+    if (licenseHeaders && licenseHeaders.length) body.license_headers = licenseHeaders;
 
     adding = true;
     setSubmitting(form, true);
@@ -356,10 +362,11 @@ function initEditModal() {
 
     const body = formBody(form, { keepEmptyHeaders: true });
     // Sent even when empty: an omitted list would leave the old headers in place,
-    // making it impossible to remove the last one. HLS has no licence server
-    // to send licence headers to.
+    // making it impossible to remove the last one. A source without licence
+    // servers sends no licence headers.
     body.fetch_headers = collectHeaders('editFetchHeaders');
-    if (!isHLS(form)) body.license_headers = collectHeaders('editLicenseHeaders');
+    const licenseHeaders = licenceHeaders('edit');
+    if (licenseHeaders) body.license_headers = licenseHeaders;
 
     saving = true;
     setSubmitting(form, true);

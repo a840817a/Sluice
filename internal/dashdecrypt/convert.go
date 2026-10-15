@@ -160,8 +160,7 @@ func (r *Registry) Convert(ctx context.Context, c Conversion, exclusive Exclusiv
 		r.failed[c.AS] = slices.Clone(mk.KIDs)
 		r.markSeen(mk.KIDs)
 		delete(r.warnings, warningKey{as: c.AS, kind: KindConversionFailed})
-		r.recordLocked(c.AS, Warning{Kind: KindMissingKey, KIDs: kidStrings(mk.KIDs),
-			Message: "no content key held for these KIDs, which stored segments use, so the AdaptationSet stays encrypted"})
+		r.recordLocked(c.AS, missingKeyWarning(mk.KIDs, nil, nil))
 		return err
 	}
 	r.failed[c.AS] = nil
@@ -171,8 +170,8 @@ func (r *Registry) Convert(ctx context.Context, c Conversion, exclusive Exclusiv
 }
 
 // Refuse records that c is left stored as ciphertext for reason, in a
-// conversion_failed warning, and leaves it out of Convertible until keys are
-// added again.
+// conversion_failed warning, and leaves it out of Convertible until AddKeys
+// adds any key: a refusal names no KID whose key would end it.
 func (r *Registry) Refuse(c Conversion, reason string) {
 	r.mu.Lock()
 	r.failed[c.AS] = nil

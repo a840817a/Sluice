@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -535,5 +536,38 @@ func TestURLVersionIsPerAdaptationSet(t *testing.T) {
 	}
 	if v := r.URLVersion("p0", "1", "other"); v != 0 {
 		t.Errorf("unknown representation: URLVersion = %d, want 0", v)
+	}
+}
+
+// A missing_key warning says the same thing whichever part of the channel
+// lacks the key: a stored AdaptationSet a conversion could not finish, or
+// segments a decrypted one withheld, which it names.
+func TestMissingKeyMessageIsShared(t *testing.T) {
+	const base = "no content key held for these KIDs"
+	dataDir := t.TempDir()
+	loc := storeCiphertextAudio(t, dataDir, 1)
+	audio, missing := mustKey(t, audioKey), mustKey(t, missingKey)
+	if err := store.Write(loc.SegmentPath(2, store.ExtFMP4), rotated(t, audioFixture, "seg-2.m4s", audio, missing)); err != nil {
+		t.Fatal(err)
+	}
+	r := loadedRegistry(t, dataDir, audioKey)
+	if err := r.Convert(context.Background(), onlyConversion(t, r), run); err == nil {
+		t.Fatal("Convert of a segment without its key succeeded")
+	}
+	converting, ok := warningOf(r.Warnings(), KindMissingKey)
+	if !ok || converting.Message != base {
+		t.Errorf("conversion's missing_key = %+v, want message %q", converting, base)
+	}
+
+	withholding := decryptedVideo(t, t.TempDir(), videoKey)
+	if err := withholding.DecryptSegment(segTask(3), rotated(t, videoRep, "seg-1.m4s", mustKey(t, videoKey), missing)); err == nil {
+		t.Fatal("decrypted without the key")
+	}
+	w, ok := warningOf(withholding.Warnings(), KindMissingKey)
+	if want := base + "; segments that use them withheld from representations: v0"; !ok || w.Message != want {
+		t.Errorf("decrypted AdaptationSet's missing_key = %+v, want message %q", w, want)
+	}
+	if !slices.Equal(converting.KIDs, w.KIDs) {
+		t.Errorf("KIDs differ for the same missing key: %v and %v", converting.KIDs, w.KIDs)
 	}
 }

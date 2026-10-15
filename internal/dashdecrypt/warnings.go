@@ -150,13 +150,30 @@ func decide(inits []repInit, keys cenc.KeySet) decision {
 	case len(missing) > 0:
 		slices.SortFunc(missing, func(a, b cenc.KID) int { return bytes.Compare(a[:], b[:]) })
 		d.missing = missing
-		d.warning = &Warning{Kind: KindMissingKey, KIDs: kidStrings(missing),
-			Message: "no content key held for these KIDs"}
+		w := missingKeyWarning(missing, nil, nil)
+		d.warning = &w
 	}
 	if d.warning != nil {
 		d.reps = nil
 	}
 	return d
+}
+
+// missingKeyWarning is the missing_key warning for kids, which have no key
+// held, whatever lacks them: an AdaptationSet stored as ciphertext, or a
+// decrypted one whose representations refused names, and whose segments
+// from representations withheld names, need them.
+func missingKeyWarning(kids []cenc.KID, refused, withheld []string) Warning {
+	kids = slices.Clone(kids)
+	slices.SortFunc(kids, func(a, b cenc.KID) int { return bytes.Compare(a[:], b[:]) })
+	msg := "no content key held for these KIDs"
+	if len(refused) > 0 {
+		msg += "; representations refused: " + strings.Join(slices.Sorted(slices.Values(refused)), ", ")
+	}
+	if len(withheld) > 0 {
+		msg += "; segments that use them withheld from representations: " + strings.Join(slices.Sorted(slices.Values(withheld)), ", ")
+	}
+	return Warning{Kind: KindMissingKey, KIDs: kidStrings(kids), Message: msg}
 }
 
 // kidStrings returns kids in hex, as a Warning lists them.

@@ -173,8 +173,12 @@ func (w *Watcher) Run(ctx context.Context) error {
 // A static MPD is not polled again, so Rediscover enumerates the last one
 // once more for those representations, in the background, while the Run
 // that read it has not been cancelled, which the VOD transition does first.
-// A watcher whose channel has no running ingest offers nothing.
+// A watcher whose channel has no running ingest offers nothing, and neither
+// does an empty repKeys.
 func (w *Watcher) Rediscover(repKeys []string) {
+	if len(repKeys) == 0 {
+		return
+	}
 	var presentMax map[string]uint64
 	if w.ci != nil {
 		presentMax, _ = snapshotTrackedSegments(w.channelID, w.ci)
@@ -308,20 +312,8 @@ func (w *Watcher) processMPD(ctx context.Context, p *imdp.ParsedMPD) {
 		}
 	}
 
-	// Feed the broker in presentation order rather than one representation at a
-	// time. Discovery walks period → AdaptationSet → Representation, so its
-	// natural output is every segment of the first representation, then the
-	// next — and while the whole asset fits in the queue that does not matter,
-	// because the broker is a priority queue and pops by segment number anyway.
-	//
-	// A bounded queue removes that safety net: what has not been pushed cannot
-	// be chosen, so a representation-at-a-time feed leaves the queue holding
-	// only the first representation while the rest of the asset waits. Audio,
-	// discovered last, would not start until the video was nearly done — and
-	// with no audio to align against, the A/V barrier publishes nothing, so an
-	// ingest that is visibly progressing stays unplayable until the end.
-	// discoverTasks sorts them so.
-
+	// Fed in presentation order, as discoverTasks returns them, so a bounded
+	// queue holds every representation's next segments.
 	for _, t := range tasks {
 		if p.Type == imdp.PresentationStatic {
 			if !w.broker.PushPreserving(ctx, t) {
@@ -362,6 +354,20 @@ func (w *Watcher) discoverTasks(ctx context.Context, p *imdp.ParsedMPD, lastKnow
 	// Collect tasks from SegmentBase representations (requires sidx fetch).
 	tasks = append(tasks, w.discoverSegmentBaseTasks(ctx, p, baseURL, lastKnown, presentMax, knownSegs)...)
 
+	// The broker is fed in presentation order rather than one representation
+	// at a time. Discovery walks period → AdaptationSet → Representation, so
+	// its natural output is every segment of the first representation, then
+	// the next — and while the whole asset fits in the queue that does not
+	// matter, because the broker is a priority queue and pops by segment
+	// number anyway.
+	//
+	// A bounded queue removes that safety net: what has not been pushed
+	// cannot be chosen, so a representation-at-a-time feed leaves the queue
+	// holding only the first representation while the rest of the asset
+	// waits. Audio, discovered last, would not start until the video was
+	// nearly done — and with no audio to align against, the A/V barrier
+	// publishes nothing, so an ingest that is visibly progressing stays
+	// unplayable until the end.
 	sort.SliceStable(tasks, func(i, j int) bool { return tasks[i].Priority < tasks[j].Priority })
 	return tasks, truncated
 }

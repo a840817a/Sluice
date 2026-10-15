@@ -144,7 +144,9 @@ test('field visibility follows source type and key mode', () => {
   assert.equal(show('dash', 'passthrough').drm, true);
 });
 
-test('an HLS source submits no licence fields or headers', async () => {
+// licenceHarness submits the add or edit form with every DRM field filled
+// in and one licence header row, and returns the request body.
+function licenceHarness() {
   const drm = ['enable_playready', 'playready_license_url', 'enable_widevine', 'widevine_license_url', 'forward_client_ip'];
   const h = formsHarness({
     // As a browser's: every enabled field, a checkbox only when checked.
@@ -179,13 +181,32 @@ test('an HLS source submits no licence fields or headers', async () => {
     call.resolve({ id: 'c' }); await pending;
     return plain(prefix === 'add' ? call.args[0] : call.args[1]);
   };
+  return { drm, send };
+}
+
+test('an HLS source submits no licence fields or headers', async () => {
+  const { drm, send } = licenceHarness();
   for (const prefix of ['add', 'edit']) {
     const hls = await send(prefix, 'hls');
     for (const name of [...drm, 'license_headers']) assert.equal(name in hls, false, `${prefix}: HLS sent ${name}`);
     const dash = await send(prefix, 'dash');
-    assert.equal(dash.playready_license_url, 'https://pr.example', `${prefix}: DASH lost its licence URL`);
-    assert.equal(dash.forward_client_ip, true, `${prefix}: DASH lost forward_client_ip`);
-    assert.deepEqual(dash.license_headers, [{ name: 'X-Licence', value: 'secret' }], `${prefix}: DASH lost its licence headers`);
+    assert.equal(dash.playready_license_url, 'https://pr.example', `${prefix}: DASH after HLS lost its licence URL`);
+    assert.deepEqual(dash.license_headers, [{ name: 'X-Licence', value: 'secret' }], `${prefix}: DASH after HLS lost its licence headers`);
+  }
+});
+
+test('a DASH source submits every licence field and header', async () => {
+  for (const prefix of ['add', 'edit']) {
+    const dash = await licenceHarness().send(prefix, 'dash');
+    assert.deepEqual({
+      enable_playready: dash.enable_playready, enable_widevine: dash.enable_widevine,
+      playready_license_url: dash.playready_license_url, widevine_license_url: dash.widevine_license_url,
+      forward_client_ip: dash.forward_client_ip, license_headers: dash.license_headers,
+    }, {
+      enable_playready: true, enable_widevine: true,
+      playready_license_url: 'https://pr.example', widevine_license_url: 'https://wv.example',
+      forward_client_ip: true, license_headers: [{ name: 'X-Licence', value: 'secret' }],
+    }, `${prefix}: DASH lost a licence field`);
   }
 });
 
