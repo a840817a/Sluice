@@ -19,7 +19,8 @@ covers. The repository directory is still named `mpd` (the project's old name);
 
 ## Committing
 
-- Do not add `Co-Authored-By` or `Claude-Session` trailers to commit messages.
+- Do not add a `Co-Authored-By` trailer to commit messages. A
+  `Claude-Session` trailer is fine.
 
 ## Writing tests
 
