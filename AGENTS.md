@@ -17,6 +17,11 @@ covers. The repository directory is still named `mpd` (the project's old name);
   vulnerabilities; `go run golang.org/x/tools/cmd/deadcode@latest ./cmd/...`
   finds unreachable code. No other linter is set up.
 
+## Committing
+
+- Do not add a `Co-Authored-By` trailer to commit messages. A
+  `Claude-Session` trailer is fine.
+
 ## Writing tests
 
 - After a new test passes, break the code it protects and confirm the test
